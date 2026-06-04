@@ -620,7 +620,6 @@ def render_updates(updates: list[dict[str, Any]]) -> str:
   </div>
   <p><strong>When:</strong> <time class="relative-time" datetime="{tested_at}" title="{tested_at}">{tested_at}</time></p>
   {old_new}
-  <p>{escape(event.get('notes') or '')}</p>
 </article>
 """
         )
