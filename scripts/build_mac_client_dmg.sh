@@ -49,9 +49,9 @@ cat > "$OUTPUT_DIR/build/$APP_NAME/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.1</string>
+  <string>1.2</string>
   <key>CFBundleVersion</key>
-  <string>2</string>
+  <string>3</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSHighResolutionCapable</key>
@@ -74,6 +74,10 @@ Open "Pummelchen Installer.app".
 The installer runs in your user account only. It shows a progress window with
 clear install steps, the current release ID, how many mods/resource packs/shader
 packs are in the client pack, and where the log file is stored.
+
+Each install step and terminal success/failure status is reported to the
+Pummelchen VPS so support can see incomplete installs, direct startup failures,
+and successful setup timestamps in SQLite.
 
 On first install it downloads the current verified client pack from the VPS,
 which is about 1 GB. Later updates use the installed Pummelchen auto-updater and

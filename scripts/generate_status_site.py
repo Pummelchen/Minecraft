@@ -990,7 +990,7 @@ def render_page(
 
     <section id="install">
       <h2>Mac Client Install</h2>
-      <p class="note">For macOS Apple Silicon M2/M3 clients. The DMG is a small visual bootstrap installer; first run downloads the current verified client pack, about 1 GB, with a step counter and progress window. It installs a user-local Java 25 runtime when needed, syncs the matching mods and visual packs, installs NeoForge, adds the server entry, and enables automatic background updates from the VPS.</p>
+      <p class="note">For macOS Apple Silicon M2/M3 clients. The DMG is a small visual bootstrap installer; first run downloads the current verified client pack, about 1 GB, with a step counter and progress window. It reports each setup step, success timestamp, and failure log tail to the VPS, installs a user-local Java 25 runtime when needed, syncs the matching mods and visual packs, installs NeoForge, adds the server entry, and enables automatic background updates from the VPS.</p>
       <div class="actions">
         <a class="button" href="{escape(client_dmg_url)}">Download Small Mac Installer DMG</a>
       </div>
@@ -1003,13 +1003,13 @@ Pummelchen-Client-Installer.dmg</pre>
         </article>
         <article class="step">
           <h3>2. Visual Install</h3>
-          <p>The installer shows each step, the active release, how many mods/resource packs/shader packs are planned, and progress while it downloads, verifies, unpacks, installs Java 25, moves conflicting old mod jars aside, validates every installed file, and installs the Pummelchen background updater plus Client Doctor log uploader.</p>
+          <p>The installer shows and reports each step, the active release, how many mods/resource packs/shader packs are planned, and progress while it downloads, verifies, unpacks, installs Java 25, moves conflicting old mod jars aside, validates every installed file, and installs the Pummelchen background updater plus Client Doctor log uploader.</p>
           <pre>Managed install:
 Java, NeoForge, mods, resource packs, shader packs, auto-updater, Client Doctor</pre>
         </article>
         <article class="step">
           <h3>3. Ready</h3>
-          <p>When it finishes, Minecraft opens and the Pummelchen server entry is ready. Future server-side mod updates sync from the VPS without downloading the DMG again; for an immediate pre-play sync, open Pummelchen Minecraft from the Mac Applications folder. To send crash logs, open Pummelchen Send Logs.</p>
+          <p>When it finishes, Minecraft opens and the Pummelchen server entry is ready. A successful setup row is stored on the VPS with a timestamp. Future server-side mod updates sync from the VPS without downloading the DMG again; for an immediate pre-play sync, open Pummelchen Minecraft from the Mac Applications folder. To send crash logs, open Pummelchen Send Logs.</p>
           <pre>Ready to play:
 Pummelchen Server</pre>
         </article>

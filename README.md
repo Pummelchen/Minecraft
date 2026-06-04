@@ -48,7 +48,8 @@ build host before rebuilding a client package if
 - `scripts/minecraft_metrics_exporter.py` - localhost Prometheus exporter for
   Minecraft process/player/crash/update/release metrics on port `7792`.
 - `scripts/client_log_receiver.py` - localhost HTTP receiver for token-protected
-  macOS client diagnostic bundle uploads via Nginx `/client-logs/upload`.
+  macOS client diagnostic bundle uploads via Nginx `/client-logs/upload` plus
+  lightweight installer step events via `/client-logs/installer-event`.
 - `scripts/server_ops.py` - manages multi-version server metadata, richer mod
   metadata, and idle performance profiling.
 - `scripts/daily_update.py` - daily safe update pipeline: backs up tracker
@@ -64,15 +65,16 @@ build host before rebuilding a client package if
   checksums, and strict parity when package files are present.
 - `scripts/validate_project.sh` - automated quality gate for Python compile,
   shell syntax, schema migration, release/rollback fixture, manifest checks,
-  generated website, live stats, exporter, load-lab dry run, monitoring JSON,
-  and optional Nginx syntax.
+  generated website, live stats, exporter, installer-event receiver, load-lab
+  dry run, monitoring JSON, and optional Nginx syntax.
 - `scripts/deploy_project.sh` - validated deployment script for copying
   project-owned files to the VPS, installing/reloading services, smoke-testing,
   and optionally creating a deploy release.
 - `scripts/build_mac_client_dmg.sh` - builds the one-touch macOS Apple Silicon
   visual installer DMG. The small DMG resolves the active release pointer, shows
   install progress and planned mod/resource/shader counts, downloads and
-  verifies the matching client package, and installs the managed client tooling.
+  verifies the matching client package, reports setup telemetry to SQLite, and
+  installs the managed client tooling.
 - `client-installer/` - Swift/AppKit progress runner and bootstrap script used
   inside the Mac installer DMG.
 - `scripts/fetch_client_runtime_assets.sh` - downloads third-party runtime
@@ -227,6 +229,14 @@ Client diagnostic bundles are stored on the VPS under
 `/var/minecraft_mods/client_log_uploads/YYYY/MM/DD/` and indexed in SQLite table
 `client_log_uploads`. The upload endpoint is proxied by Nginx at
 `/client-logs/upload` to the localhost receiver on port `7791`.
+
+The DMG installer also reports lightweight setup events immediately to
+`/client-logs/installer-event`. The Swift app sends `app_started` before the
+bootstrap shell script runs, the bootstrap reports each visible step, and the
+managed installer reports Java/file-sync/NeoForge/updater phases. Success is
+recorded as a completed installer session with a timestamp in
+`client_installer_sessions`; failures include a redacted recent log excerpt in
+`client_installer_events` as soon as the error is observed.
 
 The stats area polls `/live-stats.json` every 30 seconds and updates the CPU
 usage, load average, RAM, disk, and compact history graphs directly in the

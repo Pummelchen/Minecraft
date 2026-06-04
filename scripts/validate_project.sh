@@ -4,8 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pummelchen-validate.XXXXXX")"
+BG_PIDS=()
 
 cleanup() {
+  for pid in "${BG_PIDS[@]}"; do
+    kill "$pid" >/dev/null 2>&1 || true
+    wait "$pid" >/dev/null 2>&1 || true
+  done
   rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
@@ -130,6 +135,94 @@ log "Live stats and exporter"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/live_stats_feed.py" --db "$DB" --server-dir "$SERVER" --output "$TMP_DIR/live-stats.json" --state "$TMP_DIR/live-state.json"
 grep -q "Active release" "$TMP_DIR/live-stats.json" || fail "live stats missing release data"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/minecraft_metrics_exporter.py" --db "$DB" --server-dir "$SERVER" --state "$TMP_DIR/metrics-state.json" --once | grep -q "pummelchen_minecraft_up"
+
+log "Installer event receiver"
+RECEIVER_PORT="$("$PYTHON_BIN" - <<'PY'
+import socket
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+)"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/client_log_receiver.py" \
+  --db "$DB" \
+  --upload-dir "$TMP_DIR/client-log-uploads" \
+  --token-file "$TMP_DIR/client-log-upload.token" \
+  --host 127.0.0.1 \
+  --port "$RECEIVER_PORT" \
+  > "$TMP_DIR/client-log-receiver.log" 2>&1 &
+BG_PIDS+=("$!")
+"$PYTHON_BIN" - "$RECEIVER_PORT" <<'PY'
+import sys
+import time
+import urllib.request
+
+port = sys.argv[1]
+url = f"http://127.0.0.1:{port}/health"
+for _ in range(50):
+    try:
+        with urllib.request.urlopen(url, timeout=0.5) as response:
+            if response.status == 200:
+                raise SystemExit(0)
+    except Exception:
+        time.sleep(0.1)
+raise SystemExit("receiver did not become healthy")
+PY
+"$PYTHON_BIN" - "$DB" "$RECEIVER_PORT" <<'PY'
+import sqlite3
+import sys
+import urllib.parse
+import urllib.request
+
+db_path, port = sys.argv[1], sys.argv[2]
+url = f"http://127.0.0.1:{port}/client-logs/installer-event"
+
+def post(event_type, status, message):
+    body = urllib.parse.urlencode(
+        {
+            "session_id": "qa-installer-session",
+            "client_id": "qa-client",
+            "event_type": event_type,
+            "severity": "info" if status != "failed" else "error",
+            "status": status,
+            "installer_version": "qa",
+            "release_id": "qa_release_1",
+            "minecraft_version": "26.1.2",
+            "step_current": "10" if status == "ok" else "1",
+            "step_total": "10",
+            "message": message,
+            "log_excerpt": "qa log line",
+        }
+    ).encode()
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded; charset=utf-8"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        if response.status != 200:
+            raise RuntimeError(response.read().decode())
+
+post("app_started", "running", "started")
+post("completed", "ok", "completed")
+
+with sqlite3.connect(db_path) as conn:
+    session = conn.execute(
+        "SELECT status, completed_at, event_count, release_id FROM client_installer_sessions WHERE session_id = ?",
+        ("qa-installer-session",),
+    ).fetchone()
+    assert session is not None, "installer session missing"
+    assert session[0] == "ok", session
+    assert session[1], session
+    assert session[2] == 2, session
+    assert session[3] == "qa_release_1", session
+    event_count = conn.execute(
+        "SELECT COUNT(*) FROM client_installer_events WHERE session_id = ?",
+        ("qa-installer-session",),
+    ).fetchone()[0]
+    assert event_count == 2, event_count
+PY
 
 log "Load-lab dry run"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/gameplay_load_lab.py" --db "$DB" --server-dir "$SERVER" run fresh_world_idle --dry-run

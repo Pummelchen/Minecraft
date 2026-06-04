@@ -419,6 +419,50 @@ CREATE TABLE IF NOT EXISTS load_lab_samples (
     mspt REAL
 );
 
+CREATE TABLE IF NOT EXISTS client_installer_sessions (
+    session_id TEXT PRIMARY KEY,
+    client_id TEXT,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    completed_at TEXT,
+    status TEXT NOT NULL,
+    installer_version TEXT,
+    app_version TEXT,
+    release_id TEXT,
+    minecraft_version TEXT,
+    os_summary TEXT,
+    arch TEXT,
+    remote_addr TEXT,
+    user_agent TEXT,
+    local_log_path TEXT,
+    latest_step INTEGER,
+    total_steps INTEGER,
+    event_count INTEGER NOT NULL DEFAULT 0,
+    latest_message TEXT,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS client_installer_events (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES client_installer_sessions(session_id) ON DELETE CASCADE,
+    received_at TEXT NOT NULL,
+    event_at TEXT,
+    event_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    status TEXT,
+    step_current INTEGER,
+    step_total INTEGER,
+    message TEXT,
+    detail TEXT,
+    release_id TEXT,
+    minecraft_version TEXT,
+    local_log_path TEXT,
+    log_excerpt TEXT,
+    authenticated INTEGER NOT NULL DEFAULT 0,
+    remote_addr TEXT,
+    user_agent TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_server_instances_key ON server_instances(server_key);
 CREATE INDEX IF NOT EXISTS idx_mod_metadata_group ON mod_metadata(group_tag);
 CREATE INDEX IF NOT EXISTS idx_mod_server_files_instance ON mod_server_files(server_instance_id);
@@ -439,6 +483,9 @@ CREATE INDEX IF NOT EXISTS idx_release_artifacts_release ON release_artifacts(re
 CREATE INDEX IF NOT EXISTS idx_release_events_release ON release_events(release_id, event_at);
 CREATE INDEX IF NOT EXISTS idx_load_lab_runs_scenario ON load_lab_runs(server_instance_id, scenario, started_at);
 CREATE INDEX IF NOT EXISTS idx_load_lab_samples_run ON load_lab_samples(run_id, elapsed_seconds);
+CREATE INDEX IF NOT EXISTS idx_client_installer_sessions_status ON client_installer_sessions(status, first_seen_at);
+CREATE INDEX IF NOT EXISTS idx_client_installer_events_session ON client_installer_events(session_id, received_at);
+CREATE INDEX IF NOT EXISTS idx_client_installer_events_type ON client_installer_events(event_type, received_at);
 
 CREATE VIEW IF NOT EXISTS v_mod_version_status AS
 SELECT

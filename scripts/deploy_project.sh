@@ -146,6 +146,7 @@ install -m 0644 systemd/pummelchen-minecraft.service /etc/systemd/system/pummelc
 systemctl daemon-reload
 systemctl enable --now pummelchen-live-stats.timer pummelchen-client-log-receiver.service pummelchen-minecraft-metrics.service
 systemctl enable pummelchen-minecraft.service
+systemctl restart pummelchen-client-log-receiver.service pummelchen-minecraft-metrics.service
 
 if [ -d /etc/prometheus ]; then
   install -m 0644 monitoring/prometheus.yml /etc/prometheus/prometheus.yml
