@@ -5,11 +5,26 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 OUTPUT_DIR="${1:-$ROOT_DIR/dist}"
 APP_NAME="Pummelchen Installer.app"
 DMG_NAME="Pummelchen-Client-Installer.dmg"
-PUBLIC_URL="${PUMMELCHEN_PUBLIC_URL:-http://91.99.176.243:7788}"
-CLIENT_ZIP_NAME="minecraft_26.1.2_client_macos_apple_silicon.zip"
+SWIFT_SOURCE="$ROOT_DIR/client-installer/ProgressInstaller.swift"
+BOOTSTRAP_SOURCE="$ROOT_DIR/client-installer/install-bootstrap.sh"
 
 command -v hdiutil >/dev/null 2>&1 || {
   echo "hdiutil is required; build this DMG on macOS." >&2
+  exit 1
+}
+
+command -v swiftc >/dev/null 2>&1 || {
+  echo "swiftc is required; install Xcode Command Line Tools." >&2
+  exit 1
+}
+
+[ -f "$SWIFT_SOURCE" ] || {
+  echo "Missing Swift installer source: $SWIFT_SOURCE" >&2
+  exit 1
+}
+
+[ -f "$BOOTSTRAP_SOURCE" ] || {
+  echo "Missing installer bootstrap script: $BOOTSTRAP_SOURCE" >&2
   exit 1
 }
 
@@ -34,150 +49,35 @@ cat > "$OUTPUT_DIR/build/$APP_NAME/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.0</string>
+  <string>1.1</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>2</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
-  <key>LSUIElement</key>
+  <key>NSHighResolutionCapable</key>
   <true/>
 </dict>
 </plist>
 PLIST
 
-cat > "$OUTPUT_DIR/build/$APP_NAME/Contents/MacOS/Pummelchen Installer" <<APP
-#!/bin/bash
-set -euo pipefail
+swiftc "$SWIFT_SOURCE" \
+  -o "$OUTPUT_DIR/build/$APP_NAME/Contents/MacOS/Pummelchen Installer" \
+  -framework AppKit
 
-BASE_URL="\${PUMMELCHEN_BASE_URL:-$PUBLIC_URL}"
-ZIP_NAME="$CLIENT_ZIP_NAME"
-MC_DIR="\${MINECRAFT_DIR:-\$HOME/Library/Application Support/minecraft}"
-SERVER_ADDRESS="91.99.176.243:25565"
-STAMP="\$(date +%Y%m%d-%H%M%S)"
-LOG_DIR="\$HOME/Library/Logs/Pummelchen"
-CACHE_DIR="\$HOME/Library/Caches/Pummelchen"
-WORK_DIR="\$(mktemp -d "\${TMPDIR:-/tmp}/pummelchen-installer.XXXXXX")"
-LOG_FILE="\$LOG_DIR/dmg-installer-\$STAMP.log"
+install -m 0755 "$BOOTSTRAP_SOURCE" "$OUTPUT_DIR/build/$APP_NAME/Contents/Resources/install-bootstrap.sh"
 
-mkdir -p "\$LOG_DIR" "\$CACHE_DIR"
-exec > >(tee -a "\$LOG_FILE") 2>&1
-
-cleanup() {
-  rm -rf "\$WORK_DIR"
-}
-trap cleanup EXIT
-
-dialog() {
-  if [ "\${PUMMELCHEN_SKIP_DIALOGS:-0}" = "1" ]; then
-    return 0
-  fi
-  /usr/bin/osascript -e "display dialog \$1 buttons {\\\"OK\\\"} default button \\\"OK\\\" with title \\\"Pummelchen Server\\\"" >/dev/null 2>&1 || true
-}
-
-fail() {
-  echo "PUMMELCHEN_DMG_INSTALL_FAILED: \$*"
-  echo "Log file: \$LOG_FILE"
-  dialog "\"Setup could not complete. The log is saved at:\\n\$LOG_FILE\""
-  exit 1
-}
-
-echo "Pummelchen DMG installer"
-echo "Base URL: \$BASE_URL"
-echo "Minecraft folder: \$MC_DIR"
-echo "Log file: \$LOG_FILE"
-
-[ "\$(uname -m)" = "arm64" ] || fail "This installer is for Apple Silicon Macs."
-command -v curl >/dev/null 2>&1 || fail "curl is missing."
-command -v unzip >/dev/null 2>&1 || fail "unzip is missing."
-command -v shasum >/dev/null 2>&1 || fail "shasum is missing."
-
-json_string_value() {
-  local key="\$1"
-  local path="\$2"
-  sed -nE "s/.*\\\"\$key\\\"[[:space:]]*:[[:space:]]*\\\"([^\\\"]*)\\\".*/\\1/p" "\$path" | head -n 1
-}
-
-RELEASE_POINTER_URL="\$BASE_URL/downloads/current-release.json"
-RELEASE_JSON="\$WORK_DIR/current-release.json"
-RELEASE_ID="legacy"
-ZIP_URL="\$BASE_URL/downloads/\$ZIP_NAME"
-EXPECTED_SHA=""
-
-echo "Resolving current tested release..."
-if curl --silent --show-error --fail --location --retry 3 --retry-delay 2 "\$RELEASE_POINTER_URL" -o "\$RELEASE_JSON"; then
-  RELEASE_ID="\$(json_string_value release_id "\$RELEASE_JSON" || true)"
-  POINTER_ZIP="\$(json_string_value client_zip_url "\$RELEASE_JSON" || true)"
-  POINTER_SHA="\$(json_string_value client_zip_sha256 "\$RELEASE_JSON" || true)"
-  if [ -n "\$POINTER_ZIP" ]; then
-    case "\$POINTER_ZIP" in
-      http://*|https://*) ZIP_URL="\$POINTER_ZIP" ;;
-      *) ZIP_URL="\${BASE_URL%/}/\${POINTER_ZIP#/}" ;;
-    esac
-  fi
-  if [ -n "\$POINTER_SHA" ]; then
-    EXPECTED_SHA="\$POINTER_SHA"
-  fi
-fi
-
-SHA_URL="\$BASE_URL/downloads/\$ZIP_NAME.sha256"
-SHA_PATH="\$CACHE_DIR/\${RELEASE_ID:-legacy}-\$ZIP_NAME.sha256"
-ZIP_PATH="\$CACHE_DIR/\${RELEASE_ID:-legacy}-\$ZIP_NAME"
-
-echo "Reading current client checksum..."
-if [ -z "\$EXPECTED_SHA" ]; then
-  curl --silent --show-error --fail --location --retry 3 --retry-delay 2 "\$SHA_URL" -o "\$SHA_PATH" || fail "Could not download checksum."
-  EXPECTED_SHA="\$(awk '{ print \$1; exit }' "\$SHA_PATH")"
-else
-  printf '%s  %s\n' "\$EXPECTED_SHA" "\$ZIP_NAME" > "\$SHA_PATH"
-fi
-[ -n "\$EXPECTED_SHA" ] || fail "Checksum file is empty."
-echo "Release: \${RELEASE_ID:-legacy}"
-echo "Client pack URL: \$ZIP_URL"
-
-if [ -f "\$ZIP_PATH" ]; then
-  CURRENT_SHA="\$(shasum -a 256 "\$ZIP_PATH" | awk '{ print \$1 }')"
-else
-  CURRENT_SHA=""
-fi
-
-if [ "\$CURRENT_SHA" != "\$EXPECTED_SHA" ]; then
-  echo "Downloading current client pack..."
-  rm -f "\$ZIP_PATH"
-  curl --silent --show-error --fail --location --retry 3 --retry-delay 2 "\$ZIP_URL" -o "\$ZIP_PATH" || fail "Could not download client pack."
-fi
-
-echo "\$EXPECTED_SHA  \$ZIP_PATH" | shasum -a 256 -c - || fail "Downloaded client pack checksum mismatch."
-
-echo "Unpacking client pack..."
-unzip -q "\$ZIP_PATH" -d "\$WORK_DIR" || fail "Could not unpack client pack."
-INSTALLER="\$WORK_DIR/client-package/Install Mods.command"
-[ -x "\$INSTALLER" ] || chmod +x "\$INSTALLER" || fail "Client installer is not executable."
-
-echo "Running managed client installer..."
-PUMMELCHEN_NONINTERACTIVE=1 \\
-PUMMELCHEN_REQUIRE_LOCAL_JAVA="\${PUMMELCHEN_REQUIRE_LOCAL_JAVA:-1}" \\
-PUMMELCHEN_OPEN_LAUNCHER="\${PUMMELCHEN_OPEN_LAUNCHER:-1}" \\
-PUMMELCHEN_LOG_FILE="\$LOG_FILE" \\
-"\$INSTALLER" "\$MC_DIR" || fail "Managed client installer failed."
-
-dialog "\"Ready to play Pummelchen Server.\\n\\nMinecraft Launcher is opening. Use the NeoForge 26.1.2 profile and join \$SERVER_ADDRESS.\""
-exit 0
-APP
-
-chmod +x "$OUTPUT_DIR/build/$APP_NAME/Contents/MacOS/Pummelchen Installer"
-
-cat > "$OUTPUT_DIR/build/README.txt" <<README
+cat > "$OUTPUT_DIR/build/README.txt" <<'README'
 Pummelchen Server Mac Installer
 
 Open "Pummelchen Installer.app".
 
-The installer runs in your user account only. It downloads the current client
-pack, verifies SHA256, installs a user-local Java 25 runtime if needed, syncs
-the Pummelchen mods/resource packs/shader packs, installs the NeoForge profile,
-adds Pummelchen Server to Minecraft's server list, installs the background
-auto-updater and Client Doctor log uploader, and opens Minecraft. Future pack
-changes sync from the VPS without downloading this DMG again. Crash reports can
-be uploaded with "Pummelchen Send Logs.command" in your Applications folder.
+The installer runs in your user account only. It shows a progress window with
+clear install steps, the current release ID, how many mods/resource packs/shader
+packs are in the client pack, and where the log file is stored.
+
+On first install it downloads the current verified client pack from the VPS,
+which is about 1 GB. Later updates use the installed Pummelchen auto-updater and
+sync only changed files from the VPS.
 
 Server: 91.99.176.243:25565
 README

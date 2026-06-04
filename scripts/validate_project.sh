@@ -38,7 +38,14 @@ mapfile -t PY_FILES < <(find "$ROOT_DIR/scripts" -name '*.py' -type f | sort)
 log "Shell syntax"
 while IFS= read -r path; do
   bash -n "$path"
-done < <(find "$ROOT_DIR/scripts" "$ROOT_DIR/client-package" -type f \( -name '*.sh' -o -name '*.command' \) | sort)
+done < <(find "$ROOT_DIR/scripts" "$ROOT_DIR/client-package" "$ROOT_DIR/client-installer" -type f \( -name '*.sh' -o -name '*.command' \) | sort)
+
+if [ "$(uname -s)" = "Darwin" ] && command -v swiftc >/dev/null 2>&1; then
+  log "Swift installer compile"
+  swiftc "$ROOT_DIR/client-installer/ProgressInstaller.swift" \
+    -o "$TMP_DIR/PummelchenProgressInstaller" \
+    -framework AppKit
+fi
 
 log "Tracked secret guard"
 if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then

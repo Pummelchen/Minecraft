@@ -990,20 +990,20 @@ def render_page(
 
     <section id="install">
       <h2>Mac Client Install</h2>
-      <p class="note">For macOS Apple Silicon M2/M3 clients. Use the installer once; it downloads the current verified client pack, installs a user-local Java 25 runtime when needed, syncs the matching mods and visual packs, installs NeoForge, adds the server entry, and enables automatic background updates from the VPS.</p>
+      <p class="note">For macOS Apple Silicon M2/M3 clients. The DMG is a small visual bootstrap installer; first run downloads the current verified client pack, about 1 GB, with a step counter and progress window. It installs a user-local Java 25 runtime when needed, syncs the matching mods and visual packs, installs NeoForge, adds the server entry, and enables automatic background updates from the VPS.</p>
       <div class="actions">
-        <a class="button" href="{escape(client_dmg_url)}">Download Mac Installer DMG</a>
+        <a class="button" href="{escape(client_dmg_url)}">Download Small Mac Installer DMG</a>
       </div>
       <div class="steps">
         <article class="step">
           <h3>1. Open DMG</h3>
-          <p>Download the DMG, open it, then open Pummelchen Installer.</p>
+          <p>Download the small DMG, open it, then open Pummelchen Installer.</p>
           <pre>Installer:
 Pummelchen-Client-Installer.dmg</pre>
         </article>
         <article class="step">
-          <h3>2. Automatic Updates</h3>
-          <p>The installer verifies the current server pack checksum, refreshes Java 25, moves conflicting old mod jars aside, validates every installed file, and installs the Pummelchen background updater plus Client Doctor log uploader.</p>
+          <h3>2. Visual Install</h3>
+          <p>The installer shows each step, the active release, how many mods/resource packs/shader packs are planned, and progress while it downloads, verifies, unpacks, installs Java 25, moves conflicting old mod jars aside, validates every installed file, and installs the Pummelchen background updater plus Client Doctor log uploader.</p>
           <pre>Managed install:
 Java, NeoForge, mods, resource packs, shader packs, auto-updater, Client Doctor</pre>
         </article>

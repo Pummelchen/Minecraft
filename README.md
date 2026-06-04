@@ -70,8 +70,11 @@ build host before rebuilding a client package if
   project-owned files to the VPS, installing/reloading services, smoke-testing,
   and optionally creating a deploy release.
 - `scripts/build_mac_client_dmg.sh` - builds the one-touch macOS Apple Silicon
-  installer DMG that resolves the active release pointer, downloads and verifies
-  the matching client package, and installs the managed client tooling.
+  visual installer DMG. The small DMG resolves the active release pointer, shows
+  install progress and planned mod/resource/shader counts, downloads and
+  verifies the matching client package, and installs the managed client tooling.
+- `client-installer/` - Swift/AppKit progress runner and bootstrap script used
+  inside the Mac installer DMG.
 - `scripts/fetch_client_runtime_assets.sh` - downloads third-party runtime
   binaries needed by the client package, such as the NeoForge installer JAR.
 - `scripts/update_next_batch.py` - one-off audited update for the 2026-06-03
@@ -200,12 +203,14 @@ supported client install is the DMG at:
 http://91.99.176.243:7788/downloads/Pummelchen-Client-Installer.dmg
 ```
 
-The DMG app downloads the current verified ZIP package, installs or updates a
-user-local Temurin Java 25 Apple Silicon runtime when needed, syncs mods,
-resource packs, and shader packs, installs the NeoForge client profile, adds the
-`Pummelchen Server` entry to `servers.dat`, verifies hashes, and opens the
-Minecraft Launcher when the client is ready. It also installs a user LaunchAgent
-for `/Users/<user>/Library/Application Support/Pummelchen/bin/pummelchen-auto-update.sh`.
+The DMG app is intentionally small. It opens a native progress window, resolves
+the current release, shows how many mods/resource packs/shader packs are in the
+pack, downloads the current verified ZIP package on first install, installs or
+updates a user-local Temurin Java 25 Apple Silicon runtime when needed, syncs
+mods, resource packs, and shader packs, installs the NeoForge client profile,
+adds the `Pummelchen Server` entry to `servers.dat`, verifies hashes, and opens
+the Minecraft Launcher when the client is ready. It also installs a user
+LaunchAgent for `/Users/<user>/Library/Application Support/Pummelchen/bin/pummelchen-auto-update.sh`.
 After the first install, clients resolve `/downloads/current-release.json` and
 sync from `/downloads/releases/<release-id>/client-sync-manifest.tsv`, so every
 sync run targets a specific tested release. The legacy

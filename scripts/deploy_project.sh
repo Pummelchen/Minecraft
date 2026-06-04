@@ -104,6 +104,7 @@ sync_project() {
     "$ROOT_DIR/systemd"
     "$ROOT_DIR/server-config"
     "$ROOT_DIR/site/assets"
+    "$ROOT_DIR/client-installer"
     "$ROOT_DIR/client-package/README.txt"
     "$ROOT_DIR/client-package/Install Mods.command"
     "$ROOT_DIR/client-package/tools"
