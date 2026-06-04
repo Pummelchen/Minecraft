@@ -25,6 +25,7 @@ DEFAULT_STATE = Path("/var/minecraft_mods/site/live-stats-history.json")
 DEFAULT_SERVER = Path("/var/minecraft_26.1.2")
 DEFAULT_HISTORY = 120
 DEFAULT_SERVER_KEY = "minecraft_26_1_2"
+CLIENT_ZIP_NAME = "minecraft_26.1.2_client_macos_apple_silicon.zip"
 
 
 def human_bytes(value: float) -> str:
@@ -134,6 +135,27 @@ def minecraft_live_values(server_dir: Path, db_path: Path, server_key: str) -> d
     }
 
 
+def client_pack_live_values(server_dir: Path) -> dict[str, str]:
+    zip_path = server_dir / CLIENT_ZIP_NAME
+    sha_path = server_dir / f"{CLIENT_ZIP_NAME}.sha256"
+    sha = ""
+    if sha_path.exists():
+        try:
+            sha = sha_path.read_text(encoding="utf-8", errors="replace").split()[0]
+        except (IndexError, OSError):
+            sha = ""
+    size_text = "Missing"
+    try:
+        if zip_path.exists():
+            size_text = human_bytes(zip_path.stat().st_size)
+    except OSError:
+        size_text = "Missing"
+    return {
+        "Client pack": size_text,
+        "Client pack SHA256": sha or "Missing",
+    }
+
+
 def build_payload(
     server_dir: Path,
     state: dict[str, Any],
@@ -182,6 +204,7 @@ def build_payload(
                 f"{human_bytes(disk.used)} / {human_bytes(disk.total)} "
                 f"({percent(disk.used, disk.total)}); {human_bytes(disk.free)} free"
             ),
+            **client_pack_live_values(server_dir),
             **minecraft_live_values(server_dir, db_path, server_key),
         },
         "metrics": sample,

@@ -261,8 +261,8 @@ recorded as a completed installer session with a timestamp in
 `client_installer_events` as soon as the error is observed.
 
 The stats area polls `/live-stats.json` every 30 seconds and updates the CPU
-usage, load average, RAM, disk, and compact history graphs directly in the
-browser without a page reload.
+usage, load average, RAM, disk, client package metadata, and compact history
+graphs directly in the browser without a page reload.
 
 ## Releases And Rollback
 
@@ -389,7 +389,7 @@ represented in the project:
   drop off the public page automatically.
 - Live stats: `/etc/systemd/system/pummelchen-live-stats.timer` refreshes the
   public `live-stats.json` feed every 30 seconds so the page can redraw CPU,
-  load, RAM, and disk graphs while it is open.
+  load, RAM, disk, and client package metadata while it is open.
 - Watchlist/compatibility management: skipped mods such as Create: Steam 'n'
   Rails remain in SQLite and are rechecked by the updater when compatible builds
   appear.
