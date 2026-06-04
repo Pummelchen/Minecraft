@@ -141,6 +141,8 @@ if command -v nginx >/dev/null 2>&1; then
   log "Nginx syntax"
   NGINX_MAIN="$TMP_DIR/nginx.conf"
   {
+    printf 'pid "%s/nginx.pid";\n' "$TMP_DIR"
+    printf 'error_log "%s/nginx-error.log";\n' "$TMP_DIR"
     printf 'events {}\n'
     printf 'http { include "%s/nginx/pummelchen-server.conf"; }\n' "$ROOT_DIR"
   } > "$NGINX_MAIN"
