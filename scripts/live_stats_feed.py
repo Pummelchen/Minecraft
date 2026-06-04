@@ -8,14 +8,23 @@ import datetime as dt
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
+import minecraft_metrics_exporter as mc_metrics
+
+
+DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
 DEFAULT_OUTPUT = Path("/var/minecraft_mods/site/public/live-stats.json")
 DEFAULT_STATE = Path("/var/minecraft_mods/site/live-stats-history.json")
 DEFAULT_SERVER = Path("/var/minecraft_26.1.2")
 DEFAULT_HISTORY = 120
+DEFAULT_SERVER_KEY = "minecraft_26_1_2"
 
 
 def human_bytes(value: float) -> str:
@@ -95,7 +104,43 @@ def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def build_payload(server_dir: Path, state: dict[str, Any], history_limit: int) -> tuple[dict[str, Any], dict[str, Any]]:
+def active_release_text(db_path: Path, server_key: str) -> str:
+    release = mc_metrics.active_release(db_path, server_key)
+    if not release:
+        return "No active release"
+    return release.get("release_id") or "No active release"
+
+
+def minecraft_live_values(server_dir: Path, db_path: Path, server_key: str) -> dict[str, str]:
+    pid = mc_metrics.find_minecraft_pid(server_dir)
+    rss_text = "Offline"
+    if pid is not None:
+        try:
+            rss = mc_metrics.read_proc_stat(pid)["rss_bytes"]
+            rss_text = human_bytes(rss)
+        except Exception:
+            rss_text = "Unknown"
+    players = "Offline"
+    try:
+        status = mc_metrics.minecraft_status("127.0.0.1", 25565, timeout=1.0)
+        player_data = status.get("players") or {}
+        players = f"{int(player_data.get('online') or 0)} / {int(player_data.get('max') or 0)}"
+    except Exception:
+        pass
+    return {
+        "Active release": active_release_text(db_path, server_key),
+        "Minecraft players": players,
+        "Minecraft RSS": rss_text,
+    }
+
+
+def build_payload(
+    server_dir: Path,
+    state: dict[str, Any],
+    history_limit: int,
+    db_path: Path,
+    server_key: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     now = dt.datetime.now(dt.UTC)
     cpu_count = os.cpu_count() or 1
     current_cpu = read_cpu_times()
@@ -137,6 +182,7 @@ def build_payload(server_dir: Path, state: dict[str, Any], history_limit: int) -
                 f"{human_bytes(disk.used)} / {human_bytes(disk.total)} "
                 f"({percent(disk.used, disk.total)}); {human_bytes(disk.free)} free"
             ),
+            **minecraft_live_values(server_dir, db_path, server_key),
         },
         "metrics": sample,
         "history": history,
@@ -150,9 +196,11 @@ def build_payload(server_dir: Path, state: dict[str, Any], history_limit: int) -
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE)
     parser.add_argument("--server-dir", type=Path, default=DEFAULT_SERVER)
+    parser.add_argument("--server-key", default=DEFAULT_SERVER_KEY)
     parser.add_argument("--history-limit", type=int, default=DEFAULT_HISTORY)
     return parser
 
@@ -160,7 +208,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     state = read_json(args.state)
-    payload, next_state = build_payload(args.server_dir, state, max(2, args.history_limit))
+    payload, next_state = build_payload(args.server_dir, state, max(2, args.history_limit), args.db, args.server_key)
     write_json_atomic(args.state, next_state)
     write_json_atomic(args.output, payload)
     return 0

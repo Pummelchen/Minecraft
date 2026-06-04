@@ -340,6 +340,85 @@ CREATE TABLE IF NOT EXISTS profiling_queue (
     UNIQUE(mod_id, server_instance_id)
 );
 
+CREATE TABLE IF NOT EXISTS pack_releases (
+    release_id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    activated_at TEXT,
+    server_instance_id INTEGER REFERENCES server_instances(id) ON DELETE SET NULL,
+    server_key TEXT NOT NULL,
+    minecraft_version TEXT,
+    loader_version TEXT,
+    server_dir TEXT NOT NULL,
+    release_dir TEXT NOT NULL,
+    status TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 0,
+    previous_release_id TEXT REFERENCES pack_releases(release_id) ON DELETE SET NULL,
+    git_commit TEXT,
+    server_manifest_sha256 TEXT,
+    client_manifest_sha256 TEXT,
+    db_snapshot_sha256 TEXT,
+    client_zip_sha256 TEXT,
+    mrpack_sha256 TEXT,
+    changelog_path TEXT,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS release_artifacts (
+    id INTEGER PRIMARY KEY,
+    release_id TEXT NOT NULL REFERENCES pack_releases(release_id) ON DELETE CASCADE,
+    artifact_role TEXT NOT NULL,
+    relative_path TEXT NOT NULL,
+    source_path TEXT,
+    size_bytes INTEGER,
+    sha256 TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(release_id, artifact_role, relative_path)
+);
+
+CREATE TABLE IF NOT EXISTS release_events (
+    id INTEGER PRIMARY KEY,
+    release_id TEXT REFERENCES pack_releases(release_id) ON DELETE SET NULL,
+    event_at TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    actor TEXT,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS load_lab_runs (
+    id INTEGER PRIMARY KEY,
+    server_instance_id INTEGER REFERENCES server_instances(id) ON DELETE SET NULL,
+    release_id TEXT REFERENCES pack_releases(release_id) ON DELETE SET NULL,
+    run_label TEXT NOT NULL UNIQUE,
+    scenario TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    status TEXT NOT NULL,
+    duration_seconds REAL,
+    sample_count INTEGER NOT NULL DEFAULT 0,
+    peak_rss_mb REAL,
+    avg_cpu_pct REAL,
+    max_region_files INTEGER,
+    error_count INTEGER,
+    severe_error_count INTEGER,
+    log_path TEXT,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS load_lab_samples (
+    id INTEGER PRIMARY KEY,
+    run_id INTEGER NOT NULL REFERENCES load_lab_runs(id) ON DELETE CASCADE,
+    sampled_at TEXT NOT NULL,
+    elapsed_seconds REAL NOT NULL,
+    rss_mb REAL,
+    cpu_pct REAL,
+    load_1m REAL,
+    region_files INTEGER,
+    players_online INTEGER,
+    tps REAL,
+    mspt REAL
+);
+
 CREATE INDEX IF NOT EXISTS idx_server_instances_key ON server_instances(server_key);
 CREATE INDEX IF NOT EXISTS idx_mod_metadata_group ON mod_metadata(group_tag);
 CREATE INDEX IF NOT EXISTS idx_mod_server_files_instance ON mod_server_files(server_instance_id);
@@ -354,6 +433,12 @@ CREATE INDEX IF NOT EXISTS idx_update_events_run ON update_events(update_run_id)
 CREATE INDEX IF NOT EXISTS idx_update_events_visible ON update_events(visible_on_site, tested_at);
 CREATE INDEX IF NOT EXISTS idx_mod_risk_scores_score ON mod_risk_scores(server_instance_id, risk_score);
 CREATE INDEX IF NOT EXISTS idx_profiling_queue_priority ON profiling_queue(server_instance_id, status, priority);
+CREATE INDEX IF NOT EXISTS idx_pack_releases_active ON pack_releases(server_key, active, created_at);
+CREATE INDEX IF NOT EXISTS idx_pack_releases_status ON pack_releases(server_key, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_release_artifacts_release ON release_artifacts(release_id, artifact_role);
+CREATE INDEX IF NOT EXISTS idx_release_events_release ON release_events(release_id, event_at);
+CREATE INDEX IF NOT EXISTS idx_load_lab_runs_scenario ON load_lab_runs(server_instance_id, scenario, started_at);
+CREATE INDEX IF NOT EXISTS idx_load_lab_samples_run ON load_lab_samples(run_id, elapsed_seconds);
 
 CREATE VIEW IF NOT EXISTS v_mod_version_status AS
 SELECT

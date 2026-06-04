@@ -20,6 +20,12 @@ scrape_configs:
       - targets:
           - 127.0.0.1:9115
 
+  - job_name: pummelchen_minecraft
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - 127.0.0.1:7792
+
   - job_name: pummelchen_http
     metrics_path: /probe
     params:

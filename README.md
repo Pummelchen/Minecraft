@@ -45,15 +45,33 @@ build host before rebuilding a client package if
   status/install page from SQLite and current VPS stats.
 - `scripts/live_stats_feed.py` - writes `site/public/live-stats.json` every 30
   seconds for live VPS graphs on the status page.
+- `scripts/minecraft_metrics_exporter.py` - localhost Prometheus exporter for
+  Minecraft process/player/crash/update/release metrics on port `7792`.
 - `scripts/client_log_receiver.py` - localhost HTTP receiver for token-protected
   macOS client diagnostic bundle uploads via Nginx `/client-logs/upload`.
 - `scripts/server_ops.py` - manages multi-version server metadata, richer mod
   metadata, and idle performance profiling.
 - `scripts/daily_update.py` - daily safe update pipeline: backs up tracker
   state, scans compatible releases, boot-tests candidates, applies only passing
-  updates, rebuilds client ZIP/MRPack artifacts, and logs visible update events.
+  updates, rebuilds client ZIP/MRPack artifacts, creates an immutable release
+  when updates were applied, and logs visible update events.
+- `scripts/release_manager.py` - creates, validates, activates, publishes, and
+  rolls back immutable pack releases containing server files, client manifests,
+  package artifacts, DB snapshot, changelog, and checksums.
+- `scripts/gameplay_load_lab.py` - repeatable gameplay/load scenarios for fresh
+  worlds, chunk-generation proxy tests, and manual join windows.
+- `scripts/check_client_manifest.py` - validates client package manifest syntax,
+  checksums, and strict parity when package files are present.
+- `scripts/validate_project.sh` - automated quality gate for Python compile,
+  shell syntax, schema migration, release/rollback fixture, manifest checks,
+  generated website, live stats, exporter, load-lab dry run, monitoring JSON,
+  and optional Nginx syntax.
+- `scripts/deploy_project.sh` - validated deployment script for copying
+  project-owned files to the VPS, installing/reloading services, smoke-testing,
+  and optionally creating a deploy release.
 - `scripts/build_mac_client_dmg.sh` - builds the one-touch macOS Apple Silicon
-  installer DMG that downloads and verifies the current client package.
+  installer DMG that resolves the active release pointer, downloads and verifies
+  the matching client package, and installs the managed client tooling.
 - `scripts/fetch_client_runtime_assets.sh` - downloads third-party runtime
   binaries needed by the client package, such as the NeoForge installer JAR.
 - `scripts/update_next_batch.py` - one-off audited update for the 2026-06-03
@@ -72,11 +90,17 @@ build host before rebuilding a client package if
 - `nginx/pummelchen-server.conf` - project-owned Nginx site config for port
   `7788`.
 - `monitoring/` - project-owned Prometheus scrape config and exporter defaults.
+- `monitoring/grafana/` - Grafana datasource/dashboard provisioning for the
+  Pummelchen operator cockpit.
 - `cron/pummelchen-daily-update` - noon UTC updater cron definition.
 - `systemd/pummelchen-live-stats.*` - 30-second systemd timer/service that
   refreshes the live stats JSON feed.
 - `systemd/pummelchen-client-log-receiver.service` - upload receiver service for
   client diagnostic bundles.
+- `systemd/pummelchen-minecraft-metrics.service` - Prometheus exporter service
+  for Minecraft-specific metrics.
+- `systemd/pummelchen-minecraft.service` - managed Minecraft server service for
+  boot-time start and explicit operator start/stop/restart.
 - `server-config/user_jvm_args.txt` - tracked JVM args for the active server.
 - `site/public/index.html` - generated static status page staging copy.
 
@@ -182,9 +206,11 @@ resource packs, and shader packs, installs the NeoForge client profile, adds the
 `Pummelchen Server` entry to `servers.dat`, verifies hashes, and opens the
 Minecraft Launcher when the client is ready. It also installs a user LaunchAgent
 for `/Users/<user>/Library/Application Support/Pummelchen/bin/pummelchen-auto-update.sh`.
-After the first install, clients use `/downloads/client-sync-manifest.tsv` and
-the per-file `/downloads/client-files/...` URLs to pull only changed mods,
-resource packs, and shader packs from the VPS. The installer also creates
+After the first install, clients resolve `/downloads/current-release.json` and
+sync from `/downloads/releases/<release-id>/client-sync-manifest.tsv`, so every
+sync run targets a specific tested release. The legacy
+`/downloads/client-sync-manifest.tsv` path remains as a compatibility fallback.
+The installer also creates
 `~/Applications/Pummelchen Minecraft.command`, which runs an immediate sync and
 then opens Minecraft for a deterministic pre-play update.
 It also creates `~/Applications/Pummelchen Send Logs.command`, which redacts and
@@ -200,6 +226,83 @@ Client diagnostic bundles are stored on the VPS under
 The stats area polls `/live-stats.json` every 30 seconds and updates the CPU
 usage, load average, RAM, disk, and compact history graphs directly in the
 browser without a page reload.
+
+## Releases And Rollback
+
+Pack releases live under `/var/minecraft_mods/releases/<release-id>`. A release
+contains:
+
+- server mod/datapack files,
+- client package files and sync manifest,
+- ZIP/MRPack/DMG artifacts when present,
+- SQLite DB snapshot,
+- checksums, metadata, and changelog,
+- tested/active status in SQLite.
+
+Useful commands:
+
+```bash
+systemctl start pummelchen-minecraft.service
+systemctl stop pummelchen-minecraft.service
+systemctl restart pummelchen-minecraft.service
+python3 /var/minecraft_mods/scripts/release_manager.py list
+python3 /var/minecraft_mods/scripts/release_manager.py validate <release-id>
+python3 /var/minecraft_mods/scripts/release_manager.py rollback
+python3 /var/minecraft_mods/scripts/release_manager.py rollback --release-id <release-id> --restore-db
+```
+
+The daily noon UTC updater creates and activates a release only when at least
+one update was applied successfully. Clients then see the new release pointer on
+their next launch or background sync.
+
+## Quality Gate And Deploy
+
+Run the full local gate before pushing:
+
+```bash
+bash scripts/validate_project.sh
+```
+
+Deploy from the local checkout:
+
+```bash
+bash scripts/deploy_project.sh --host root@91.99.176.243 --create-release
+```
+
+The deploy script runs the same gate locally, syncs project-owned files,
+installs systemd/Nginx/Prometheus/Grafana config, regenerates the status page,
+smoke-tests HTTP and the metrics exporter, and checks SQLite integrity.
+
+GitHub Actions runs `scripts/validate_project.sh` on pushes and pull requests.
+
+## Observability
+
+Prometheus scrapes:
+
+- node exporter for host CPU, RAM, disk, disk IO, and network,
+- blackbox exporter for HTTP/TCP health,
+- `pummelchen-minecraft-metrics` on `127.0.0.1:7792` for Minecraft players,
+  process RSS/CPU, JVM heap where `jcmd` can read it, chunk-generation proxy,
+  TCP connections, crash report counters, update counters, and active release
+  labels.
+
+Grafana provisioning is stored in `monitoring/grafana/`. The website remains the
+simple user-facing view; Grafana is the operator cockpit.
+
+## Gameplay Load Lab
+
+The load lab supports dry-run validation plus real scenarios:
+
+```bash
+python3 scripts/gameplay_load_lab.py scenarios
+python3 scripts/gameplay_load_lab.py run fresh_world_idle --remove-lab-world
+python3 scripts/gameplay_load_lab.py run chunk_spiral --remove-lab-world
+python3 scripts/gameplay_load_lab.py run manual_join_window --duration 900
+```
+
+Runs are stored in SQLite tables `load_lab_runs` and `load_lab_samples`. Real
+scenarios use a temporary `level-name` and restore `server.properties` when the
+test ends.
 
 ## Automation And Stability
 

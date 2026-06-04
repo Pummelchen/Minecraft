@@ -91,15 +91,48 @@ command -v curl >/dev/null 2>&1 || fail "curl is missing."
 command -v unzip >/dev/null 2>&1 || fail "unzip is missing."
 command -v shasum >/dev/null 2>&1 || fail "shasum is missing."
 
-SHA_URL="\$BASE_URL/downloads/\$ZIP_NAME.sha256"
+json_string_value() {
+  local key="\$1"
+  local path="\$2"
+  sed -nE "s/.*\\\"\$key\\\"[[:space:]]*:[[:space:]]*\\\"([^\\\"]*)\\\".*/\\1/p" "\$path" | head -n 1
+}
+
+RELEASE_POINTER_URL="\$BASE_URL/downloads/current-release.json"
+RELEASE_JSON="\$WORK_DIR/current-release.json"
+RELEASE_ID="legacy"
 ZIP_URL="\$BASE_URL/downloads/\$ZIP_NAME"
-SHA_PATH="\$CACHE_DIR/\$ZIP_NAME.sha256"
-ZIP_PATH="\$CACHE_DIR/\$ZIP_NAME"
+EXPECTED_SHA=""
+
+echo "Resolving current tested release..."
+if curl --silent --show-error --fail --location --retry 3 --retry-delay 2 "\$RELEASE_POINTER_URL" -o "\$RELEASE_JSON"; then
+  RELEASE_ID="\$(json_string_value release_id "\$RELEASE_JSON" || true)"
+  POINTER_ZIP="\$(json_string_value client_zip_url "\$RELEASE_JSON" || true)"
+  POINTER_SHA="\$(json_string_value client_zip_sha256 "\$RELEASE_JSON" || true)"
+  if [ -n "\$POINTER_ZIP" ]; then
+    case "\$POINTER_ZIP" in
+      http://*|https://*) ZIP_URL="\$POINTER_ZIP" ;;
+      *) ZIP_URL="\${BASE_URL%/}/\${POINTER_ZIP#/}" ;;
+    esac
+  fi
+  if [ -n "\$POINTER_SHA" ]; then
+    EXPECTED_SHA="\$POINTER_SHA"
+  fi
+fi
+
+SHA_URL="\$BASE_URL/downloads/\$ZIP_NAME.sha256"
+SHA_PATH="\$CACHE_DIR/\${RELEASE_ID:-legacy}-\$ZIP_NAME.sha256"
+ZIP_PATH="\$CACHE_DIR/\${RELEASE_ID:-legacy}-\$ZIP_NAME"
 
 echo "Reading current client checksum..."
-curl --silent --show-error --fail --location --retry 3 --retry-delay 2 "\$SHA_URL" -o "\$SHA_PATH" || fail "Could not download checksum."
-EXPECTED_SHA="\$(awk '{ print \$1; exit }' "\$SHA_PATH")"
+if [ -z "\$EXPECTED_SHA" ]; then
+  curl --silent --show-error --fail --location --retry 3 --retry-delay 2 "\$SHA_URL" -o "\$SHA_PATH" || fail "Could not download checksum."
+  EXPECTED_SHA="\$(awk '{ print \$1; exit }' "\$SHA_PATH")"
+else
+  printf '%s  %s\n' "\$EXPECTED_SHA" "\$ZIP_NAME" > "\$SHA_PATH"
+fi
 [ -n "\$EXPECTED_SHA" ] || fail "Checksum file is empty."
+echo "Release: \${RELEASE_ID:-legacy}"
+echo "Client pack URL: \$ZIP_URL"
 
 if [ -f "\$ZIP_PATH" ]; then
   CURRENT_SHA="\$(shasum -a 256 "\$ZIP_PATH" | awk '{ print \$1 }')"

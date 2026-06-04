@@ -26,6 +26,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import process_url_batch as processor
+import release_manager
 import server_ops
 from moddb import connect, init_db, slugify, source_kind, utc_now
 
@@ -34,6 +35,8 @@ DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
 DEFAULT_SERVER_DIR = Path("/var/minecraft_26.1.2")
 DEFAULT_SERVER_KEY = "minecraft_26_1_2"
 DEFAULT_PUBLIC_URL = "http://91.99.176.243:7788"
+DEFAULT_RELEASE_ROOT = Path("/var/minecraft_mods/releases")
+DEFAULT_PUBLIC_DOWNLOADS = Path("/var/minecraft_mods/site/public/downloads")
 CLIENT_ZIP_NAME = "minecraft_26.1.2_client_macos_apple_silicon.zip"
 MRPACK_NAME = "pummelchen-server-26.1.2.mrpack"
 COMPATIBLE_GAME_VERSIONS = ("26.1.2", "26.1.1", "26.1")
@@ -680,6 +683,8 @@ def sync_globals(server_dir: Path) -> None:
 
 def scan_and_apply(args: argparse.Namespace) -> int:
     sync_globals(args.server_dir)
+    label = ""
+    stats = {"scanned": 0, "candidates": 0, "applied": 0, "failed": 0, "skipped": 0}
     with connect(args.db) as conn:
         init_db(conn)
         server_id = server_ops.ensure_server_instance(
@@ -695,7 +700,6 @@ def scan_and_apply(args: argparse.Namespace) -> int:
         backup_root = args.backup_dir or (args.db.parent.parent / "backups")
         backup_id = create_backup_snapshot(conn, server_id, args.server_dir, label, backup_root)
         run_id = start_update_run(conn, server_id, label, args.trigger, backup_id)
-        stats = {"scanned": 0, "candidates": 0, "applied": 0, "failed": 0, "skipped": 0}
         rows = conn.execute(
             """
             SELECT m.*
@@ -761,7 +765,32 @@ def scan_and_apply(args: argparse.Namespace) -> int:
         except Exception as exc:
             finish_update_run(conn, run_id, "error", stats, f"{type(exc).__name__}: {exc}")
             raise
+    if stats["applied"] > 0 and not args.dry_run and not args.no_create_release:
+        create_tested_release(args, label, stats)
     return 0
+
+
+def create_tested_release(args: argparse.Namespace, label: str, stats: dict[str, int]) -> None:
+    release_args = argparse.Namespace(
+        db=args.db,
+        server_dir=args.server_dir,
+        server_key=args.server_key,
+        release_root=args.release_root,
+        public_downloads=args.public_downloads,
+        actor="daily_update",
+        command="create",
+        release_id=None,
+        label=label,
+        status="tested",
+        minecraft_version=None,
+        notes=(
+            f"Daily updater release after {stats['applied']} applied update(s), "
+            f"{stats['failed']} failed candidate(s), {stats['skipped']} skipped."
+        ),
+        changelog=None,
+        activate=True,
+    )
+    release_manager.create_release(release_args)
 
 
 def rebuild(args: argparse.Namespace) -> int:
@@ -787,6 +816,9 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--dry-run", action="store_true")
     scan.add_argument("--limit", type=int, default=0, help="Max mods to scan")
     scan.add_argument("--apply-limit", type=int, default=0, help="Max updates to apply")
+    scan.add_argument("--release-root", type=Path, default=DEFAULT_RELEASE_ROOT)
+    scan.add_argument("--public-downloads", type=Path, default=DEFAULT_PUBLIC_DOWNLOADS)
+    scan.add_argument("--no-create-release", action="store_true")
 
     sub.add_parser("rebuild-client", help="Rebuild zip, sha256, and mrpack from current client-package")
     return parser

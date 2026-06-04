@@ -344,6 +344,21 @@ def fetch_updates(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str, A
     ]
 
 
+def fetch_active_release(conn: sqlite3.Connection) -> dict[str, Any]:
+    if not table_exists(conn, "pack_releases"):
+        return {}
+    row = conn.execute(
+        """
+        SELECT release_id, status, minecraft_version, loader_version, activated_at
+        FROM pack_releases
+        WHERE active = 1
+        ORDER BY activated_at DESC, created_at DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    return dict(row) if row else {}
+
+
 def version_text(files: list[dict[str, Any]]) -> str:
     if not files:
         return "Tracked runtime entry"
@@ -442,6 +457,7 @@ def clean_update_title(value: Any) -> str:
 
 def render_stat_cards(stats: dict[str, str]) -> str:
     preferred = [
+        "Active release", "Minecraft players", "Minecraft RSS",
         "OS", "Kernel", "Uptime", "CPU", "CPU cores", "System Java",
         "Minecraft server Java", "Minecraft",
         "NeoForge", "Client pack", "Client pack SHA256", "Generated",
@@ -514,6 +530,10 @@ ZIP_URL="$BASE_URL/downloads/{CLIENT_ZIP_NAME}"
 MC_DIR="${{MINECRAFT_DIR:-$HOME/Library/Application Support/minecraft}}"
 WORK_DIR="$(mktemp -d "${{TMPDIR:-/tmp}}/pummelchen-client.XXXXXX")"
 ZIP_PATH="$WORK_DIR/{CLIENT_ZIP_NAME}"
+SHA_PATH="$WORK_DIR/{CLIENT_ZIP_NAME}.sha256"
+RELEASE_JSON="$WORK_DIR/current-release.json"
+EXPECTED_SHA=""
+RELEASE_ID="legacy"
 
 cleanup() {{
   rm -rf "$WORK_DIR"
@@ -534,7 +554,41 @@ if ! command -v unzip >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v shasum >/dev/null 2>&1; then
+  echo "shasum is missing. macOS should include it by default."
+  exit 1
+fi
+
+json_string_value() {{
+  local key="$1"
+  local path="$2"
+  sed -nE "s/.*\\\"$key\\\"[[:space:]]*:[[:space:]]*\\\"([^\\\"]*)\\\".*/\\1/p" "$path" | head -n 1
+}}
+
+if curl -fL "$BASE_URL/downloads/current-release.json" -o "$RELEASE_JSON"; then
+  RELEASE_ID="$(json_string_value release_id "$RELEASE_JSON" || true)"
+  POINTER_ZIP="$(json_string_value client_zip_url "$RELEASE_JSON" || true)"
+  POINTER_SHA="$(json_string_value client_zip_sha256 "$RELEASE_JSON" || true)"
+  if [ -n "$POINTER_ZIP" ]; then
+    case "$POINTER_ZIP" in
+      http://*|https://*) ZIP_URL="$POINTER_ZIP" ;;
+      *) ZIP_URL="${{BASE_URL%/}}/${{POINTER_ZIP#/}}" ;;
+    esac
+  fi
+  if [ -n "$POINTER_SHA" ]; then
+    EXPECTED_SHA="$POINTER_SHA"
+    printf '%s  %s\n' "$EXPECTED_SHA" "{CLIENT_ZIP_NAME}" > "$SHA_PATH"
+  fi
+fi
+
+if [ -z "$EXPECTED_SHA" ]; then
+  curl -fL "$BASE_URL/downloads/{CLIENT_ZIP_NAME}.sha256" -o "$SHA_PATH"
+  EXPECTED_SHA="$(awk '{{ print $1; exit }}' "$SHA_PATH")"
+fi
+
+echo "Release: $RELEASE_ID"
 curl -fL "$ZIP_URL" -o "$ZIP_PATH"
+echo "$EXPECTED_SHA  $ZIP_PATH" | shasum -a 256 -c -
 unzip -q "$ZIP_PATH" -d "$WORK_DIR"
 chmod +x "$WORK_DIR/client-package/Install Mods.command"
 "$WORK_DIR/client-package/Install Mods.command" "$MC_DIR"
@@ -1221,11 +1275,18 @@ def write_site(db_path: Path, output_dir: Path, server_dir: Path, public_url: st
     with connect(db_path) as conn:
         mods = fetch_mods(conn)
         updates = fetch_updates(conn)
+        active_release = fetch_active_release(conn)
 
     server_mods = [mod for mod in mods if is_server_mod(mod)]
     client_mods = [mod for mod in mods if is_client_included(mod) and not is_server_mod(mod)]
 
     stats = collect_stats(server_dir)
+    if active_release:
+        stats["Active release"] = str(active_release.get("release_id") or "")
+    else:
+        stats["Active release"] = "No active release"
+    stats["Minecraft players"] = "Waiting for live feed"
+    stats["Minecraft RSS"] = "Waiting for live feed"
     html_text = render_page(stats=stats, server_mods=server_mods, client_mods=client_mods, public_url=public_url, updates=updates)
     (output_dir / "index.html").write_text(html_text, encoding="utf-8")
     installer = downloads / INSTALLER_NAME

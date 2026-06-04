@@ -1,0 +1,615 @@
+#!/usr/bin/env python3
+"""Create, validate, activate, and roll back immutable Pummelchen pack releases."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Iterable, Sequence
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from moddb import connect, init_db, utc_now
+
+
+DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
+DEFAULT_SERVER_DIR = Path("/var/minecraft_26.1.2")
+DEFAULT_RELEASE_ROOT = Path("/var/minecraft_mods/releases")
+DEFAULT_PUBLIC_DOWNLOADS = Path("/var/minecraft_mods/site/public/downloads")
+DEFAULT_SERVER_KEY = "minecraft_26_1_2"
+CLIENT_ZIP_NAME = "minecraft_26.1.2_client_macos_apple_silicon.zip"
+MRPACK_NAME = "pummelchen-server-26.1.2.mrpack"
+DMG_NAME = "Pummelchen-Client-Installer.dmg"
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def hardlink_or_copy(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists() or dst.is_symlink():
+        dst.unlink()
+    try:
+        os.link(src, dst)
+    except OSError:
+        shutil.copy2(src, dst)
+
+
+def copy_tree_with_links(src: Path, dst: Path) -> None:
+    if dst.exists():
+        shutil.rmtree(dst)
+    dst.mkdir(parents=True, exist_ok=True)
+    if not src.exists():
+        return
+    for path in sorted(src.rglob("*")):
+        rel = path.relative_to(src)
+        target = dst / rel
+        if path.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+        elif path.is_file():
+            hardlink_or_copy(path, target)
+
+
+def release_id(label: str | None = None) -> str:
+    base = dt.datetime.now(dt.UTC).strftime("release_%Y%m%d_%H%M%S")
+    if label:
+        clean = re.sub(r"[^A-Za-z0-9_.-]+", "-", label).strip("-")
+        if clean:
+            base = f"{base}_{clean[:40]}"
+    return base
+
+
+def git_commit() -> str:
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL, timeout=5).strip()
+    except Exception:
+        return ""
+
+
+def detect_neoforge(server_dir: Path) -> str:
+    root = server_dir / "libraries" / "net" / "neoforged" / "neoforge"
+    if not root.exists():
+        return ""
+    versions = sorted(path.name for path in root.iterdir() if path.is_dir())
+    return versions[-1] if versions else ""
+
+
+def infer_minecraft(loader_version: str) -> str:
+    parts = loader_version.split(".")
+    if len(parts) >= 3:
+        return ".".join(parts[:3])
+    return "26.1.2"
+
+
+def iter_files(folder: Path, patterns: Sequence[str]) -> list[Path]:
+    if not folder.exists():
+        return []
+    files: list[Path] = []
+    for pattern in patterns:
+        files.extend(path for path in folder.glob(pattern) if path.is_file())
+    return sorted(set(files), key=lambda path: path.name.lower())
+
+
+def write_manifest(rows: Iterable[tuple[str, Path, Path]], output: Path) -> str:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", encoding="utf-8") as handle:
+        handle.write("role\trelative_path\tsize_bytes\tsha256\n")
+        for role, root, path in rows:
+            rel = path.relative_to(root)
+            handle.write(f"{role}\t{rel.as_posix()}\t{path.stat().st_size}\tsha256:{sha256_file(path)}\n")
+    return sha256_file(output)
+
+
+def backup_sqlite(db_path: Path, output: Path) -> str:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    source = sqlite3.connect(db_path)
+    try:
+        target = sqlite3.connect(output)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+    finally:
+        source.close()
+    return sha256_file(output)
+
+
+def current_release(conn: sqlite3.Connection, server_key: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM pack_releases WHERE server_key = ? AND active = 1 ORDER BY activated_at DESC LIMIT 1",
+        (server_key,),
+    ).fetchone()
+
+
+def release_row(conn: sqlite3.Connection, rel_id: str) -> sqlite3.Row:
+    row = conn.execute("SELECT * FROM pack_releases WHERE release_id = ?", (rel_id,)).fetchone()
+    if not row:
+        raise SystemExit(f"release not found: {rel_id}")
+    return row
+
+
+def insert_artifact(
+    conn: sqlite3.Connection,
+    rel_id: str,
+    role: str,
+    release_dir: Path,
+    path: Path,
+    source_path: Path | None = None,
+) -> None:
+    rel = path.relative_to(release_dir).as_posix()
+    conn.execute(
+        """
+        INSERT INTO release_artifacts(
+            release_id, artifact_role, relative_path, source_path, size_bytes,
+            sha256, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(release_id, artifact_role, relative_path) DO UPDATE SET
+            source_path = excluded.source_path,
+            size_bytes = excluded.size_bytes,
+            sha256 = excluded.sha256,
+            created_at = excluded.created_at
+        """,
+        (
+            rel_id,
+            role,
+            rel,
+            str(source_path or ""),
+            path.stat().st_size,
+            sha256_file(path),
+            utc_now(),
+        ),
+    )
+
+
+def ensure_release_schema(db_path: Path) -> None:
+    with connect(db_path) as conn:
+        init_db(conn)
+
+
+def build_public_release(release_dir: Path, release_id_value: str) -> None:
+    client_package = release_dir / "client-package"
+    public = release_dir / "public"
+    client_files = public / "client-files"
+    if public.exists():
+        shutil.rmtree(public)
+    public.mkdir(parents=True, exist_ok=True)
+    rows = ["# Pummelchen release client sync manifest v1", "# section\tname\tsize\tsha256\turl_path"]
+    for section in ("mods", "resourcepacks", "shaderpacks"):
+        source_dir = client_package / section
+        if not source_dir.exists():
+            continue
+        for src in sorted(source_dir.iterdir(), key=lambda path: path.name.lower()):
+            if not src.is_file() or src.name == "upload-token.txt":
+                continue
+            target = client_files / section / src.name
+            hardlink_or_copy(src, target)
+            file_hash = sha256_file(src)
+            url_path = f"downloads/releases/{release_id_value}/client-files/{section}/{src.name}"
+            rows.append(f"{section}\t{src.name}\t{src.stat().st_size}\tsha256:{file_hash}\t{url_path}")
+    (public / "client-sync-manifest.tsv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    for src_name, public_name in (
+        (CLIENT_ZIP_NAME, CLIENT_ZIP_NAME),
+        (f"{CLIENT_ZIP_NAME}.sha256", f"{CLIENT_ZIP_NAME}.sha256"),
+        (MRPACK_NAME, MRPACK_NAME),
+        (DMG_NAME, DMG_NAME),
+        (f"{DMG_NAME}.sha256", f"{DMG_NAME}.sha256"),
+    ):
+        src = release_dir / "artifacts" / src_name
+        if src.exists():
+            hardlink_or_copy(src, public / public_name)
+
+
+def publish_release(
+    conn: sqlite3.Connection,
+    rel_id: str,
+    *,
+    public_downloads: Path,
+) -> dict[str, Any]:
+    row = release_row(conn, rel_id)
+    release_dir = Path(row["release_dir"])
+    build_public_release(release_dir, rel_id)
+    releases_dir = public_downloads / "releases"
+    releases_dir.mkdir(parents=True, exist_ok=True)
+    public_link = releases_dir / rel_id
+    if public_link.exists() or public_link.is_symlink():
+        if public_link.is_dir() and not public_link.is_symlink():
+            shutil.rmtree(public_link)
+        else:
+            public_link.unlink()
+    try:
+        public_link.symlink_to(release_dir / "public", target_is_directory=True)
+    except OSError:
+        shutil.copytree(release_dir / "public", public_link)
+
+    payload = {
+        "release_id": rel_id,
+        "created_at": row["created_at"],
+        "activated_at": row["activated_at"],
+        "status": row["status"],
+        "minecraft_version": row["minecraft_version"],
+        "loader_version": row["loader_version"],
+        "server_key": row["server_key"],
+        "manifest_url": f"/downloads/releases/{rel_id}/client-sync-manifest.tsv",
+        "client_zip_url": f"/downloads/releases/{rel_id}/{CLIENT_ZIP_NAME}",
+        "client_zip_sha256": row["client_zip_sha256"],
+        "mrpack_url": f"/downloads/releases/{rel_id}/{MRPACK_NAME}",
+        "mrpack_sha256": row["mrpack_sha256"],
+        "notes": row["notes"] or "",
+    }
+    write_json_atomic(public_downloads / "current-release.json", payload)
+    (public_downloads / "current-release.txt").write_text(rel_id + "\n", encoding="utf-8")
+    return payload
+
+
+def create_release(args: argparse.Namespace) -> int:
+    ensure_release_schema(args.db)
+    rel_id = args.release_id or release_id(args.label)
+    release_dir = args.release_root / rel_id
+    if release_dir.exists():
+        raise SystemExit(f"release directory already exists: {release_dir}")
+    release_dir.mkdir(parents=True)
+
+    loader_version = detect_neoforge(args.server_dir)
+    minecraft_version = args.minecraft_version or infer_minecraft(loader_version)
+    changelog = args.changelog or f"# {rel_id}\n\nStatus: {args.status}\n\n{args.notes or 'No changelog notes provided.'}\n"
+    (release_dir / "CHANGELOG.md").write_text(changelog.rstrip() + "\n", encoding="utf-8")
+
+    copy_tree_with_links(args.server_dir / "mods", release_dir / "server-files" / "mods")
+    copy_tree_with_links(args.server_dir / "server-datapacks", release_dir / "server-files" / "server-datapacks")
+    copy_tree_with_links(args.server_dir / "client-package", release_dir / "client-package")
+
+    server_manifest_rows: list[tuple[str, Path, Path]] = []
+    for role, root, patterns in (
+        ("server_mod", release_dir / "server-files" / "mods", ("*.jar", "*.zip")),
+        ("server_datapack", release_dir / "server-files" / "server-datapacks", ("*.jar", "*.zip")),
+    ):
+        for path in iter_files(root, patterns):
+            server_manifest_rows.append((role, root, path))
+    server_manifest_sha = write_manifest(server_manifest_rows, release_dir / "manifests" / "server-files.tsv")
+
+    client_manifest_rows: list[tuple[str, Path, Path]] = []
+    for section in ("mods", "resourcepacks", "shaderpacks", "tools"):
+        root = release_dir / "client-package" / section
+        patterns = ("*",) if section == "tools" else ("*.jar", "*.zip")
+        for path in iter_files(root, patterns):
+            client_manifest_rows.append((f"client_{section}", root, path))
+    client_manifest_sha = write_manifest(client_manifest_rows, release_dir / "manifests" / "client-package.tsv")
+
+    artifacts = release_dir / "artifacts"
+    artifacts.mkdir(exist_ok=True)
+    artifact_sources = [
+        (args.server_dir / CLIENT_ZIP_NAME, CLIENT_ZIP_NAME),
+        (args.server_dir / f"{CLIENT_ZIP_NAME}.sha256", f"{CLIENT_ZIP_NAME}.sha256"),
+        (args.server_dir / MRPACK_NAME, MRPACK_NAME),
+        (args.server_dir / DMG_NAME, DMG_NAME),
+        (args.server_dir / f"{DMG_NAME}.sha256", f"{DMG_NAME}.sha256"),
+    ]
+    for src, name in artifact_sources:
+        if src.exists():
+            hardlink_or_copy(src, artifacts / name)
+
+    client_zip_sha = sha256_file(artifacts / CLIENT_ZIP_NAME) if (artifacts / CLIENT_ZIP_NAME).exists() else ""
+    mrpack_sha = sha256_file(artifacts / MRPACK_NAME) if (artifacts / MRPACK_NAME).exists() else ""
+    db_sha = ""
+
+    with connect(args.db) as conn:
+        init_db(conn)
+        previous = current_release(conn, args.server_key)
+        conn.execute(
+            """
+            INSERT INTO pack_releases(
+                release_id, created_at, server_key, minecraft_version,
+                loader_version, server_dir, release_dir, status, active,
+                previous_release_id, git_commit, server_manifest_sha256,
+                client_manifest_sha256, db_snapshot_sha256, client_zip_sha256,
+                mrpack_sha256, changelog_path, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                rel_id,
+                utc_now(),
+                args.server_key,
+                minecraft_version,
+                loader_version,
+                str(args.server_dir),
+                str(release_dir),
+                args.status,
+                previous["release_id"] if previous else None,
+                git_commit(),
+                server_manifest_sha,
+                client_manifest_sha,
+                db_sha,
+                client_zip_sha,
+                mrpack_sha,
+                str(release_dir / "CHANGELOG.md"),
+                args.notes or "",
+            ),
+        )
+        for path in [
+            release_dir / "CHANGELOG.md",
+            release_dir / "metadata.json",
+            release_dir / "manifests" / "server-files.tsv",
+            release_dir / "manifests" / "client-package.tsv",
+            *(path for path in artifacts.iterdir() if path.is_file()),
+        ]:
+            if path.exists() and path.name != "metadata.json":
+                insert_artifact(conn, rel_id, "release_file", release_dir, path)
+        conn.execute(
+            "INSERT INTO release_events(release_id, event_at, event_type, status, actor, notes) VALUES (?, ?, 'create', ?, ?, ?)",
+            (rel_id, utc_now(), args.status, args.actor, args.notes or ""),
+        )
+        conn.commit()
+
+        db_sha = backup_sqlite(args.db, release_dir / "db" / "minecraft_mods.sqlite")
+        conn.execute(
+            "UPDATE pack_releases SET db_snapshot_sha256 = ? WHERE release_id = ?",
+            (db_sha, rel_id),
+        )
+        insert_artifact(conn, rel_id, "release_file", release_dir, release_dir / "db" / "minecraft_mods.sqlite")
+        conn.commit()
+
+    metadata = {
+        "release_id": rel_id,
+        "created_at": utc_now(),
+        "server_key": args.server_key,
+        "minecraft_version": minecraft_version,
+        "loader_version": loader_version,
+        "status": args.status,
+        "server_manifest_sha256": server_manifest_sha,
+        "client_manifest_sha256": client_manifest_sha,
+        "db_snapshot_sha256": db_sha,
+        "client_zip_sha256": client_zip_sha,
+        "mrpack_sha256": mrpack_sha,
+        "notes": args.notes or "",
+    }
+    write_json_atomic(release_dir / "metadata.json", metadata)
+    with connect(args.db) as conn:
+        init_db(conn)
+        insert_artifact(conn, rel_id, "release_file", release_dir, release_dir / "metadata.json")
+        conn.commit()
+    build_public_release(release_dir, rel_id)
+
+    if args.activate:
+        activate_release(args, rel_id)
+    print(f"release_id={rel_id}")
+    print(f"release_dir={release_dir}")
+    return 0
+
+
+def validate_release(args: argparse.Namespace, rel_id: str | None = None) -> int:
+    rel_id = rel_id or args.release_id
+    with connect(args.db) as conn:
+        init_db(conn)
+        row = release_row(conn, rel_id)
+        problems: list[str] = []
+        release_dir = Path(row["release_dir"])
+        if not release_dir.exists():
+            problems.append(f"missing release_dir: {release_dir}")
+        for column, rel_path in (
+            ("server_manifest_sha256", "manifests/server-files.tsv"),
+            ("client_manifest_sha256", "manifests/client-package.tsv"),
+            ("db_snapshot_sha256", "db/minecraft_mods.sqlite"),
+        ):
+            path = release_dir / rel_path
+            if not path.exists():
+                problems.append(f"missing {rel_path}")
+            elif row[column] and sha256_file(path) != row[column]:
+                problems.append(f"checksum mismatch: {rel_path}")
+        for artifact_name, column in ((CLIENT_ZIP_NAME, "client_zip_sha256"), (MRPACK_NAME, "mrpack_sha256")):
+            expected = row[column] or ""
+            path = release_dir / "artifacts" / artifact_name
+            if expected and (not path.exists() or sha256_file(path) != expected):
+                problems.append(f"artifact checksum mismatch: {artifact_name}")
+        for artifact in conn.execute("SELECT relative_path, sha256 FROM release_artifacts WHERE release_id = ?", (rel_id,)):
+            path = release_dir / artifact["relative_path"]
+            if not path.exists():
+                problems.append(f"missing artifact: {artifact['relative_path']}")
+            elif artifact["sha256"] and sha256_file(path) != artifact["sha256"]:
+                problems.append(f"artifact drift: {artifact['relative_path']}")
+    if problems:
+        for problem in problems:
+            print(f"ERROR {problem}")
+        return 1
+    print(f"release_valid={rel_id}")
+    return 0
+
+
+def activate_release(args: argparse.Namespace, rel_id: str | None = None) -> int:
+    rel_id = rel_id or args.release_id
+    if validate_release(args, rel_id) != 0:
+        return 1
+    with connect(args.db) as conn:
+        init_db(conn)
+        row = release_row(conn, rel_id)
+        conn.execute("UPDATE pack_releases SET active = 0 WHERE server_key = ?", (row["server_key"],))
+        conn.execute(
+            "UPDATE pack_releases SET active = 1, activated_at = ? WHERE release_id = ?",
+            (utc_now(), rel_id),
+        )
+        conn.execute(
+            "INSERT INTO release_events(release_id, event_at, event_type, status, actor, notes) VALUES (?, ?, 'activate', 'ok', ?, ?)",
+            (rel_id, utc_now(), getattr(args, "actor", "release_manager"), getattr(args, "notes", "") or ""),
+        )
+        conn.commit()
+        payload = publish_release(conn, rel_id, public_downloads=args.public_downloads)
+    print(json.dumps(payload, sort_keys=True))
+    return 0
+
+
+def sync_directory_from_release(src: Path, dst: Path, patterns: Sequence[str]) -> None:
+    dst.mkdir(parents=True, exist_ok=True)
+    wanted = {path.name for path in iter_files(src, patterns)}
+    for existing in iter_files(dst, patterns):
+        if existing.name not in wanted:
+            existing.unlink()
+    for source in iter_files(src, patterns):
+        hardlink_or_copy(source, dst / source.name)
+
+
+def rollback_release(args: argparse.Namespace) -> int:
+    with connect(args.db) as conn:
+        init_db(conn)
+        if args.release_id:
+            target = release_row(conn, args.release_id)
+        else:
+            active = current_release(conn, args.server_key)
+            if not active or not active["previous_release_id"]:
+                raise SystemExit("no previous release recorded")
+            target = release_row(conn, active["previous_release_id"])
+    rel_id = target["release_id"]
+    if validate_release(args, rel_id) != 0:
+        return 1
+    release_dir = Path(target["release_dir"])
+    sync_directory_from_release(release_dir / "server-files" / "mods", args.server_dir / "mods", ("*.jar", "*.zip"))
+    sync_directory_from_release(
+        release_dir / "server-files" / "server-datapacks",
+        args.server_dir / "server-datapacks",
+        ("*.jar", "*.zip"),
+    )
+    if (args.server_dir / "client-package").exists():
+        shutil.rmtree(args.server_dir / "client-package")
+    copy_tree_with_links(release_dir / "client-package", args.server_dir / "client-package")
+    for name in (CLIENT_ZIP_NAME, f"{CLIENT_ZIP_NAME}.sha256", MRPACK_NAME, DMG_NAME, f"{DMG_NAME}.sha256"):
+        src = release_dir / "artifacts" / name
+        if src.exists():
+            hardlink_or_copy(src, args.server_dir / name)
+    if args.restore_db:
+        backup = args.db.with_suffix(args.db.suffix + f".rollback-backup-{dt.datetime.now(dt.UTC).strftime('%Y%m%d%H%M%S')}")
+        shutil.copy2(args.db, backup)
+        shutil.copy2(release_dir / "db" / "minecraft_mods.sqlite", args.db)
+        print(f"db_backup={backup}")
+    result = activate_release(args, rel_id)
+    print(f"rolled_back_to={rel_id}")
+    return result
+
+
+def list_releases(args: argparse.Namespace) -> int:
+    with connect(args.db) as conn:
+        init_db(conn)
+        rows = conn.execute(
+            """
+            SELECT release_id, created_at, activated_at, status, active,
+                   client_zip_sha256, notes
+            FROM pack_releases
+            WHERE server_key = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (args.server_key, args.limit),
+        ).fetchall()
+    for row in rows:
+        active = "*" if row["active"] else " "
+        print(f"{active} {row['release_id']} {row['status']} created={row['created_at']} activated={row['activated_at'] or '-'} zip={row['client_zip_sha256'][:12]}")
+    return 0
+
+
+def show_release(args: argparse.Namespace) -> int:
+    with connect(args.db) as conn:
+        init_db(conn)
+        row = release_row(conn, args.release_id)
+        print(json.dumps(dict(row), indent=2, sort_keys=True))
+    return 0
+
+
+def current_json(args: argparse.Namespace) -> int:
+    with connect(args.db) as conn:
+        init_db(conn)
+        row = current_release(conn, args.server_key)
+        if not row:
+            return 1
+        payload = publish_release(conn, row["release_id"], public_downloads=args.public_downloads)
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument("--server-dir", type=Path, default=DEFAULT_SERVER_DIR)
+    parser.add_argument("--server-key", default=DEFAULT_SERVER_KEY)
+    parser.add_argument("--release-root", type=Path, default=DEFAULT_RELEASE_ROOT)
+    parser.add_argument("--public-downloads", type=Path, default=DEFAULT_PUBLIC_DOWNLOADS)
+    parser.add_argument("--actor", default="release_manager")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("init")
+
+    create = sub.add_parser("create")
+    create.add_argument("--release-id")
+    create.add_argument("--label")
+    create.add_argument("--status", default="tested", choices=["draft", "tested", "failed", "rolled-back"])
+    create.add_argument("--minecraft-version")
+    create.add_argument("--notes", default="")
+    create.add_argument("--changelog")
+    create.add_argument("--activate", action="store_true")
+
+    validate = sub.add_parser("validate")
+    validate.add_argument("release_id")
+
+    activate = sub.add_parser("activate")
+    activate.add_argument("release_id")
+    activate.add_argument("--notes", default="")
+
+    rollback = sub.add_parser("rollback")
+    rollback.add_argument("--release-id")
+    rollback.add_argument("--restore-db", action="store_true")
+    rollback.add_argument("--notes", default="")
+
+    list_parser = sub.add_parser("list")
+    list_parser.add_argument("--limit", type=int, default=20)
+
+    show = sub.add_parser("show")
+    show.add_argument("release_id")
+
+    sub.add_parser("current-json")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.command == "init":
+        ensure_release_schema(args.db)
+        print("schema=ok")
+        return 0
+    if args.command == "create":
+        return create_release(args)
+    if args.command == "validate":
+        return validate_release(args)
+    if args.command == "activate":
+        return activate_release(args)
+    if args.command == "rollback":
+        return rollback_release(args)
+    if args.command == "list":
+        return list_releases(args)
+    if args.command == "show":
+        return show_release(args)
+    if args.command == "current-json":
+        return current_json(args)
+    raise SystemExit(f"unknown command {args.command}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

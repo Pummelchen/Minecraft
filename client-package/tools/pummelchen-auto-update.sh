@@ -26,7 +26,9 @@ PUMMELCHEN_HOME="${PUMMELCHEN_HOME:-$HOME/Library/Application Support/Pummelchen
 LOG_DIR="${PUMMELCHEN_LOG_DIR:-$HOME/Library/Logs/Pummelchen}"
 CACHE_DIR="${PUMMELCHEN_CACHE_DIR:-$HOME/Library/Caches/Pummelchen}"
 STATE_DIR="$MC_DIR/.pummelchen"
-MANIFEST_URL="${PUMMELCHEN_SYNC_MANIFEST_URL:-${BASE_URL%/}/downloads/client-sync-manifest.tsv}"
+RELEASE_POINTER_URL="${PUMMELCHEN_RELEASE_POINTER_URL:-${BASE_URL%/}/downloads/current-release.json}"
+MANIFEST_URL="${PUMMELCHEN_SYNC_MANIFEST_URL:-}"
+TARGET_RELEASE_ID="${PUMMELCHEN_RELEASE_ID:-}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 LOG_FILE="${PUMMELCHEN_LOG_FILE:-$LOG_DIR/auto-update-$STAMP.log}"
 LOCK_DIR="$PUMMELCHEN_HOME/update.lock"
@@ -59,6 +61,7 @@ status=$status
 message=$message
 base_url=$BASE_URL
 manifest_url=$MANIFEST_URL
+release_id=${TARGET_RELEASE_ID:-legacy}
 log_file=$LOG_FILE
 EOF
 }
@@ -76,6 +79,51 @@ download_url() {
   local output="$2"
   curl --silent --show-error --fail --location --retry 3 --retry-delay 2 \
     --connect-timeout 10 --max-time 600 "$url" -o "$output"
+}
+
+json_string_value() {
+  local key="$1"
+  local path="$2"
+  awk -v key="$key" '
+    BEGIN {
+      RS = ""
+      FS = "\n"
+    }
+    {
+      pattern = "\"" key "\"[[:space:]]*:[[:space:]]*\""
+      start = match($0, pattern)
+      if (!start) exit 1
+      value = substr($0, start + RLENGTH)
+      end = index(value, "\"")
+      if (!end) exit 1
+      print substr(value, 1, end - 1)
+    }
+  ' "$path"
+}
+
+resolve_release_manifest() {
+  local release_json="$1"
+  if [ -n "$MANIFEST_URL" ]; then
+    return 0
+  fi
+  if [ -n "$TARGET_RELEASE_ID" ]; then
+    MANIFEST_URL="${BASE_URL%/}/downloads/releases/$TARGET_RELEASE_ID/client-sync-manifest.tsv"
+    return 0
+  fi
+  if download_url "$RELEASE_POINTER_URL" "$release_json"; then
+    TARGET_RELEASE_ID="$(json_string_value release_id "$release_json" 2>/dev/null || true)"
+    local pointer_manifest
+    pointer_manifest="$(json_string_value manifest_url "$release_json" 2>/dev/null || true)"
+    if [ -n "$pointer_manifest" ]; then
+      case "$pointer_manifest" in
+        http://*|https://*) MANIFEST_URL="$pointer_manifest" ;;
+        *) MANIFEST_URL="${BASE_URL%/}/${pointer_manifest#/}" ;;
+      esac
+      return 0
+    fi
+  fi
+  TARGET_RELEASE_ID="legacy"
+  MANIFEST_URL="${BASE_URL%/}/downloads/client-sync-manifest.tsv"
 }
 
 verify_hash() {
@@ -233,12 +281,16 @@ LOCK_HELD=1
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pummelchen-auto-update.XXXXXX")"
 RAW_MANIFEST="$WORK_DIR/client-sync-manifest.raw.tsv"
 WANTED_MANIFEST="$WORK_DIR/client-sync-manifest.tsv"
+RELEASE_JSON="$WORK_DIR/current-release.json"
 CURRENT_KEYS="$WORK_DIR/current.keys"
 PREVIOUS_KEYS="$WORK_DIR/previous.keys"
 WANTED_MODS="$WORK_DIR/wanted-mods.txt"
 DOWNLOAD_DIR="$WORK_DIR/downloads"
 
+resolve_release_manifest "$RELEASE_JSON"
+
 log "Pummelchen auto-update"
+log "Release: ${TARGET_RELEASE_ID:-legacy}"
 log "Manifest: $MANIFEST_URL"
 log "Minecraft folder: $MC_DIR"
 
