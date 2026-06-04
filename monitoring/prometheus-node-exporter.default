@@ -1,0 +1,2 @@
+# Command-line arguments for the Prometheus node exporter.
+ARGS="--web.listen-address=127.0.0.1:9100"

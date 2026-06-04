@@ -1,0 +1,12 @@
+[Unit]
+Description=Update Pummelchen live stats JSON every 30 seconds
+
+[Timer]
+OnBootSec=10s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Persistent=true
+Unit=pummelchen-live-stats.service
+
+[Install]
+WantedBy=timers.target

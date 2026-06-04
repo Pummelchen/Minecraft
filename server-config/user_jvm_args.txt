@@ -1,0 +1,3 @@
+-Xms2G
+-Xmx4G
+--enable-native-access=spark

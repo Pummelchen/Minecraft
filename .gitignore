@@ -1,0 +1,36 @@
+# Runtime secrets
+client-package/tools/upload-token.txt
+*.token
+secrets/
+
+# Live SQLite databases and local DB backups
+data/*.sqlite
+data/*.sqlite-*
+data/*.db
+data/*.db-*
+data/*.bak*
+
+# Generated packages and build output
+dist/
+dist2/
+*.dmg
+*.zip
+*.jar
+*.mrpack
+*.sha256
+
+# Generated status-site output
+site/public/
+!site/assets/
+!site/assets/**
+
+# Logs, caches, bytecode, and temporary files
+*.log
+*.tmp
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Local editor/tooling
+.idea/
+.vscode/

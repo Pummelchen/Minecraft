@@ -1,0 +1,963 @@
+#!/usr/bin/env python3
+"""SQLite manager for the Minecraft mod tracker.
+
+SQLite is the source of truth for install/test history. The Google Sheet import
+and export commands remain only for legacy migration and review workflows.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import datetime as dt
+import hashlib
+import re
+import sqlite3
+from pathlib import Path
+from typing import Iterable, Sequence
+from urllib.parse import urlparse
+
+
+HEADERS = [
+    "Mod",
+    "Installation",
+    "Type",
+    "Tested",
+    "Notes 1",
+    "Notes 2",
+    "URL",
+    "Target MC",
+    "Server Status",
+    "Server File",
+    "Client Package",
+    "Last Tested",
+    "Resolved Source",
+    "Migration Notes",
+]
+
+SHEET_VIEW_HEADERS = [
+    "Mod",
+    "Category",
+    "Installation",
+    "Type",
+    "Tested",
+    "Target MC",
+    "Server Status",
+    "Server File",
+    "Client Package",
+    "Last Tested",
+    "Resolved Source",
+    "URL",
+    "DB Notes",
+]
+
+DB_SCHEMA = """
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS schema_info (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS imports (
+    id INTEGER PRIMARY KEY,
+    imported_at TEXT NOT NULL,
+    source_file TEXT NOT NULL,
+    spreadsheet_id TEXT,
+    sheet_name TEXT NOT NULL,
+    source_range TEXT,
+    row_count INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mods (
+    id INTEGER PRIMARY KEY,
+    import_id INTEGER NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
+    original_sheet_row INTEGER NOT NULL,
+    category TEXT,
+    name TEXT NOT NULL,
+    canonical_key TEXT NOT NULL,
+    installation TEXT,
+    entry_type TEXT,
+    tested TEXT,
+    target_mc TEXT,
+    server_status TEXT,
+    client_package TEXT,
+    last_tested TEXT,
+    active_status TEXT NOT NULL,
+    status_rank INTEGER NOT NULL,
+    primary_url TEXT,
+    is_duplicate INTEGER NOT NULL DEFAULT 0,
+    duplicate_of_id INTEGER REFERENCES mods(id),
+    row_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mod_notes (
+    mod_id INTEGER PRIMARY KEY REFERENCES mods(id) ON DELETE CASCADE,
+    notes_1 TEXT,
+    notes_2 TEXT,
+    migration_notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS source_urls (
+    id INTEGER PRIMARY KEY,
+    mod_id INTEGER NOT NULL REFERENCES mods(id) ON DELETE CASCADE,
+    source_kind TEXT NOT NULL,
+    url TEXT NOT NULL,
+    host TEXT,
+    project_slug TEXT,
+    resolved_source TEXT,
+    file_id TEXT,
+    release_channel TEXT,
+    is_primary INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS mod_files (
+    id INTEGER PRIMARY KEY,
+    mod_id INTEGER NOT NULL REFERENCES mods(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    path_hint TEXT,
+    installed_on_server INTEGER NOT NULL DEFAULT 0,
+    included_in_client INTEGER NOT NULL DEFAULT 0,
+    status TEXT
+);
+
+CREATE TABLE IF NOT EXISTS test_runs (
+    id INTEGER PRIMARY KEY,
+    mod_id INTEGER NOT NULL REFERENCES mods(id) ON DELETE CASCADE,
+    tested_at TEXT,
+    test_label TEXT,
+    status TEXT,
+    error_count INTEGER,
+    log_path TEXT,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sheet_rows (
+    id INTEGER PRIMARY KEY,
+    mod_id INTEGER NOT NULL REFERENCES mods(id) ON DELETE CASCADE,
+    spreadsheet_id TEXT,
+    sheet_name TEXT NOT NULL,
+    row_number INTEGER NOT NULL,
+    row_hash TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_mods_key ON mods(canonical_key);
+CREATE INDEX IF NOT EXISTS idx_mods_status ON mods(active_status);
+CREATE INDEX IF NOT EXISTS idx_mods_duplicate ON mods(duplicate_of_id);
+CREATE INDEX IF NOT EXISTS idx_source_urls_mod ON source_urls(mod_id);
+CREATE INDEX IF NOT EXISTS idx_files_mod ON mod_files(mod_id);
+CREATE INDEX IF NOT EXISTS idx_tests_mod ON test_runs(mod_id);
+
+CREATE VIEW IF NOT EXISTS v_mod_clean AS
+SELECT
+    m.id AS db_id,
+    m.category,
+    m.name,
+    m.installation,
+    m.entry_type,
+    m.tested,
+    n.notes_1,
+    n.notes_2,
+    m.primary_url,
+    m.target_mc,
+    m.server_status,
+    GROUP_CONCAT(f.file_name, '; ') AS files,
+    m.client_package,
+    m.active_status,
+    m.original_sheet_row
+FROM mods m
+LEFT JOIN mod_notes n ON n.mod_id = m.id
+LEFT JOIN mod_files f ON f.mod_id = m.id
+WHERE m.duplicate_of_id IS NULL
+GROUP BY m.id;
+"""
+
+EXTENDED_DB_SCHEMA = """
+CREATE TABLE IF NOT EXISTS server_instances (
+    id INTEGER PRIMARY KEY,
+    server_key TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    minecraft_version TEXT NOT NULL,
+    loader TEXT NOT NULL,
+    loader_version TEXT,
+    java_version TEXT,
+    server_dir TEXT NOT NULL,
+    client_package_path TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mod_metadata (
+    mod_id INTEGER PRIMARY KEY REFERENCES mods(id) ON DELETE CASCADE,
+    group_tag TEXT,
+    side TEXT,
+    summary TEXT,
+    gameplay_tags TEXT,
+    risk_flags TEXT,
+    dependency_notes TEXT,
+    performance_notes TEXT,
+    metadata_source TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mod_server_files (
+    id INTEGER PRIMARY KEY,
+    server_instance_id INTEGER NOT NULL REFERENCES server_instances(id) ON DELETE CASCADE,
+    mod_id INTEGER NOT NULL REFERENCES mods(id) ON DELETE CASCADE,
+    mod_file_id INTEGER REFERENCES mod_files(id) ON DELETE SET NULL,
+    file_name TEXT NOT NULL,
+    role TEXT NOT NULL,
+    source_url TEXT,
+    compatibility_status TEXT NOT NULL,
+    installed_on_server INTEGER NOT NULL DEFAULT 0,
+    included_in_client INTEGER NOT NULL DEFAULT 0,
+    selected INTEGER NOT NULL DEFAULT 1,
+    file_sha256 TEXT,
+    file_size_bytes INTEGER,
+    release_channel TEXT,
+    file_id TEXT,
+    last_synced TEXT NOT NULL,
+    notes TEXT,
+    UNIQUE(server_instance_id, mod_id, file_name, role)
+);
+
+CREATE TABLE IF NOT EXISTS performance_runs (
+    id INTEGER PRIMARY KEY,
+    server_instance_id INTEGER NOT NULL REFERENCES server_instances(id) ON DELETE CASCADE,
+    run_label TEXT NOT NULL,
+    run_type TEXT NOT NULL,
+    mod_id INTEGER REFERENCES mods(id) ON DELETE SET NULL,
+    started_at TEXT NOT NULL,
+    duration_seconds REAL,
+    idle_seconds REAL,
+    status TEXT NOT NULL,
+    done_seen INTEGER NOT NULL DEFAULT 0,
+    sample_count INTEGER NOT NULL DEFAULT 0,
+    avg_rss_mb REAL,
+    peak_rss_mb REAL,
+    avg_cpu_pct REAL,
+    peak_cpu_pct REAL,
+    avg_load_1m REAL,
+    error_count INTEGER,
+    severe_error_count INTEGER,
+    log_path TEXT,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mod_performance_profiles (
+    id INTEGER PRIMARY KEY,
+    mod_id INTEGER NOT NULL REFERENCES mods(id) ON DELETE CASCADE,
+    server_instance_id INTEGER NOT NULL REFERENCES server_instances(id) ON DELETE CASCADE,
+    baseline_run_id INTEGER REFERENCES performance_runs(id) ON DELETE SET NULL,
+    comparison_run_id INTEGER REFERENCES performance_runs(id) ON DELETE SET NULL,
+    measured_at TEXT NOT NULL,
+    method TEXT NOT NULL,
+    memory_delta_mb REAL,
+    cpu_delta_pct REAL,
+    status TEXT NOT NULL,
+    confidence TEXT,
+    notes TEXT,
+    UNIQUE(mod_id, server_instance_id, method)
+);
+
+CREATE TABLE IF NOT EXISTS backup_snapshots (
+    id INTEGER PRIMARY KEY,
+    server_instance_id INTEGER REFERENCES server_instances(id) ON DELETE SET NULL,
+    label TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    db_backup_path TEXT,
+    server_manifest_path TEXT,
+    client_manifest_path TEXT,
+    client_zip_path TEXT,
+    client_zip_sha256 TEXT,
+    server_dir TEXT,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS update_runs (
+    id INTEGER PRIMARY KEY,
+    server_instance_id INTEGER REFERENCES server_instances(id) ON DELETE SET NULL,
+    run_label TEXT NOT NULL UNIQUE,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    status TEXT NOT NULL,
+    trigger_type TEXT NOT NULL,
+    scanned_mods INTEGER NOT NULL DEFAULT 0,
+    candidates INTEGER NOT NULL DEFAULT 0,
+    applied INTEGER NOT NULL DEFAULT 0,
+    failed INTEGER NOT NULL DEFAULT 0,
+    skipped INTEGER NOT NULL DEFAULT 0,
+    backup_snapshot_id INTEGER REFERENCES backup_snapshots(id) ON DELETE SET NULL,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS update_events (
+    id INTEGER PRIMARY KEY,
+    update_run_id INTEGER NOT NULL REFERENCES update_runs(id) ON DELETE CASCADE,
+    mod_id INTEGER REFERENCES mods(id) ON DELETE SET NULL,
+    event_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    old_file_name TEXT,
+    new_file_name TEXT,
+    old_file_id TEXT,
+    new_file_id TEXT,
+    source_kind TEXT,
+    source_url TEXT,
+    release_channel TEXT,
+    tested_at TEXT,
+    test_label TEXT,
+    log_path TEXT,
+    client_package_sha256 TEXT,
+    visible_on_site INTEGER NOT NULL DEFAULT 0,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mod_risk_scores (
+    mod_id INTEGER NOT NULL REFERENCES mods(id) ON DELETE CASCADE,
+    server_instance_id INTEGER NOT NULL REFERENCES server_instances(id) ON DELETE CASCADE,
+    risk_score INTEGER NOT NULL,
+    risk_level TEXT NOT NULL,
+    factors TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(mod_id, server_instance_id)
+);
+
+CREATE TABLE IF NOT EXISTS profiling_queue (
+    id INTEGER PRIMARY KEY,
+    mod_id INTEGER NOT NULL REFERENCES mods(id) ON DELETE CASCADE,
+    server_instance_id INTEGER NOT NULL REFERENCES server_instances(id) ON DELETE CASCADE,
+    priority INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    requested_at TEXT NOT NULL,
+    last_profiled_at TEXT,
+    runs_completed INTEGER NOT NULL DEFAULT 0,
+    notes TEXT,
+    UNIQUE(mod_id, server_instance_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_server_instances_key ON server_instances(server_key);
+CREATE INDEX IF NOT EXISTS idx_mod_metadata_group ON mod_metadata(group_tag);
+CREATE INDEX IF NOT EXISTS idx_mod_server_files_instance ON mod_server_files(server_instance_id);
+CREATE INDEX IF NOT EXISTS idx_mod_server_files_mod ON mod_server_files(mod_id);
+CREATE INDEX IF NOT EXISTS idx_performance_runs_instance ON performance_runs(server_instance_id, run_type);
+CREATE INDEX IF NOT EXISTS idx_performance_runs_mod ON performance_runs(mod_id);
+CREATE INDEX IF NOT EXISTS idx_mod_performance_profiles_instance ON mod_performance_profiles(server_instance_id);
+CREATE INDEX IF NOT EXISTS idx_mod_performance_profiles_mod ON mod_performance_profiles(mod_id);
+CREATE INDEX IF NOT EXISTS idx_backup_snapshots_instance ON backup_snapshots(server_instance_id);
+CREATE INDEX IF NOT EXISTS idx_update_runs_instance ON update_runs(server_instance_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_update_events_run ON update_events(update_run_id);
+CREATE INDEX IF NOT EXISTS idx_update_events_visible ON update_events(visible_on_site, tested_at);
+CREATE INDEX IF NOT EXISTS idx_mod_risk_scores_score ON mod_risk_scores(server_instance_id, risk_score);
+CREATE INDEX IF NOT EXISTS idx_profiling_queue_priority ON profiling_queue(server_instance_id, status, priority);
+
+CREATE VIEW IF NOT EXISTS v_mod_version_status AS
+SELECT
+    si.server_key,
+    si.display_name AS server_name,
+    si.minecraft_version,
+    si.loader,
+    si.loader_version,
+    m.id AS mod_id,
+    m.name,
+    m.canonical_key,
+    mm.group_tag,
+    mm.side,
+    msf.file_name,
+    msf.compatibility_status,
+    msf.installed_on_server,
+    msf.included_in_client,
+    msf.file_sha256,
+    msf.file_size_bytes,
+    msf.last_synced
+FROM mod_server_files msf
+JOIN server_instances si ON si.id = msf.server_instance_id
+JOIN mods m ON m.id = msf.mod_id
+LEFT JOIN mod_metadata mm ON mm.mod_id = m.id;
+"""
+
+
+def utc_now() -> str:
+    return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
+
+
+def clean_cell(value: str | None) -> str:
+    if value is None:
+        return ""
+    return str(value).replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def normalize_row(row: Sequence[str]) -> list[str]:
+    cells = [clean_cell(v) for v in row]
+    if len(cells) < len(HEADERS):
+        cells.extend([""] * (len(HEADERS) - len(cells)))
+    return cells[: len(HEADERS)]
+
+
+def slugify(value: str) -> str:
+    value = value.strip().lower()
+    value = value.replace("&", " and ")
+    value = re.sub(r"[^a-z0-9]+", "-", value)
+    return value.strip("-") or "unknown"
+
+
+def row_hash(cells: Sequence[str]) -> str:
+    payload = "\x1f".join(cells).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def is_blank_row(cells: Sequence[str]) -> bool:
+    return not any(clean_cell(c) for c in cells)
+
+
+def is_section_row(cells: Sequence[str]) -> bool:
+    return bool(clean_cell(cells[0])) and not any(clean_cell(c) for c in cells[1:])
+
+
+def status_rank(tested: str, server_status: str, client_package: str) -> tuple[str, int]:
+    text = " ".join([tested, server_status, client_package]).lower()
+    if "crash" in text or "failed" in text or "rejected" in text or "log error" in text:
+        return "failed", 30
+    if "skip" in text or "no compatible" in text or "not included" in text:
+        return "skipped", 20
+    if (
+        tested.lower() == "ok"
+        or server_status.lower() == "ok"
+        or "runtime ok" in text
+        or server_status.lower().startswith("client-only: included")
+        or server_status.lower().startswith("client dependency: included")
+        or client_package.lower() == "included"
+        or server_status.lower() == "installed"
+    ):
+        return "ok", 40
+    return "unknown", 10
+
+
+def source_kind(url: str) -> tuple[str, str, str]:
+    if not url:
+        return "unknown", "", ""
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    path = parsed.path
+    kind = "other"
+    slug = ""
+    if "curseforge.com" in host:
+        kind = "curseforge"
+        match = re.search(r"/minecraft/(?:mc-mods|texture-packs|data-packs|shaders)/([^/]+)", path)
+        slug = match.group(1) if match else ""
+    elif "modrinth.com" in host:
+        kind = "modrinth"
+        match = re.search(r"/(?:mod|datapack)/([^/]+)", path)
+        slug = match.group(1) if match else ""
+    elif "mojang.com" in host or "piston-meta" in host:
+        kind = "mojang"
+    elif "neoforged.net" in host:
+        kind = "neoforge"
+    return kind, host, slug
+
+
+def release_channel(resolved_source: str) -> str:
+    lower = resolved_source.lower()
+    if "beta" in lower:
+        return "beta"
+    if "alpha" in lower:
+        return "alpha"
+    if "stable" in lower or "release file" in lower:
+        return "stable"
+    return ""
+
+
+def extract_file_id(resolved_source: str) -> str:
+    match = re.search(r"(?:file|release file|resource-pack file)\s+([A-Za-z0-9_-]+)", resolved_source)
+    return match.group(1) if match else ""
+
+
+def split_file_names(server_file: str) -> list[str]:
+    if not server_file:
+        return []
+    lower = server_file.lower()
+    if lower in {"not installed", "not installed on server"}:
+        return []
+    if lower.startswith("moved to "):
+        server_file = server_file.removeprefix("Moved to ").strip()
+    parts = [p.strip() for p in server_file.split(";") if p.strip()]
+    return [Path(p).name for p in parts]
+
+
+def test_label_from_notes(notes: str) -> str:
+    patterns = [
+        r"Boot test\s+([A-Za-z0-9_.-]+)",
+        r"validation\s+([A-Za-z0-9_.-]+)",
+        r"test\s+([A-Za-z0-9_.-]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, notes)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def error_count_from_notes(notes: str) -> int | None:
+    match = re.search(r"ERROR_LINES=(\d+)", notes)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def connect(db_path: Path) -> sqlite3.Connection:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def init_db(conn: sqlite3.Connection) -> None:
+    conn.executescript(DB_SCHEMA)
+    conn.executescript(EXTENDED_DB_SCHEMA)
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_info(version, applied_at) VALUES (?, ?)",
+        (1, utc_now()),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_info(version, applied_at) VALUES (?, ?)",
+        (2, utc_now()),
+    )
+    conn.commit()
+
+
+def reset_imported_data(conn: sqlite3.Connection) -> None:
+    for table in [
+        "sheet_rows",
+        "test_runs",
+        "mod_files",
+        "source_urls",
+        "mod_notes",
+        "mods",
+        "imports",
+    ]:
+        conn.execute(f"DELETE FROM {table}")
+    conn.commit()
+
+
+def import_csv(
+    conn: sqlite3.Connection,
+    csv_path: Path,
+    spreadsheet_id: str,
+    sheet_name: str,
+    source_range: str,
+    reset: bool,
+) -> int:
+    init_db(conn)
+    if reset:
+        reset_imported_data(conn)
+
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = [normalize_row(row) for row in csv.reader(handle)]
+
+    if not rows:
+        raise ValueError(f"{csv_path} is empty")
+    if rows[0] != HEADERS:
+        raise ValueError(f"unexpected CSV header: {rows[0]!r}")
+
+    now = utc_now()
+    cur = conn.execute(
+        """
+        INSERT INTO imports(imported_at, source_file, spreadsheet_id, sheet_name, source_range, row_count)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (now, str(csv_path), spreadsheet_id, sheet_name, source_range, len(rows)),
+    )
+    import_id = int(cur.lastrowid)
+
+    current_category = ""
+    for row_number, cells in enumerate(rows[1:], start=2):
+        if is_blank_row(cells):
+            continue
+        if is_section_row(cells):
+            current_category = cells[0]
+            continue
+
+        name = cells[0]
+        if not name:
+            continue
+
+        active_status, rank = status_rank(cells[3], cells[8], cells[10])
+        kind, host, project_slug = source_kind(cells[6])
+        canonical_key = slugify(project_slug or name)
+        hash_value = row_hash(cells)
+
+        cur = conn.execute(
+            """
+            INSERT INTO mods(
+                import_id, original_sheet_row, category, name, canonical_key, installation,
+                entry_type, tested, target_mc, server_status, client_package,
+                last_tested, active_status, status_rank, primary_url, row_hash, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                import_id,
+                row_number,
+                current_category,
+                name,
+                canonical_key,
+                cells[1],
+                cells[2],
+                cells[3],
+                cells[7],
+                cells[8],
+                cells[10],
+                cells[11],
+                active_status,
+                rank,
+                cells[6],
+                hash_value,
+                now,
+                now,
+            ),
+        )
+        mod_id = int(cur.lastrowid)
+
+        conn.execute(
+            "INSERT INTO mod_notes(mod_id, notes_1, notes_2, migration_notes) VALUES (?, ?, ?, ?)",
+            (mod_id, cells[4], cells[5], cells[13]),
+        )
+        conn.execute(
+            """
+            INSERT INTO source_urls(
+                mod_id, source_kind, url, host, project_slug, resolved_source,
+                file_id, release_channel, is_primary
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+            """,
+            (
+                mod_id,
+                kind,
+                cells[6],
+                host,
+                project_slug,
+                cells[12],
+                extract_file_id(cells[12]),
+                release_channel(cells[12]),
+            ),
+        )
+        for file_name in split_file_names(cells[9]):
+            conn.execute(
+                """
+                INSERT INTO mod_files(
+                    mod_id, role, file_name, path_hint, installed_on_server,
+                    included_in_client, status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    mod_id,
+                    "server_file",
+                    file_name,
+                    cells[9],
+                    int(cells[8].lower() == "ok" or cells[8].lower().startswith("runtime")),
+                    int(cells[10].lower() == "included"),
+                    cells[8],
+                ),
+            )
+        label = test_label_from_notes(cells[13])
+        if cells[11] or label or cells[13]:
+            conn.execute(
+                """
+                INSERT INTO test_runs(mod_id, tested_at, test_label, status, error_count, log_path, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    mod_id,
+                    cells[11],
+                    label,
+                    cells[8] or cells[3],
+                    error_count_from_notes(cells[13]),
+                    "",
+                    cells[13],
+                ),
+            )
+        conn.execute(
+            """
+            INSERT INTO sheet_rows(mod_id, spreadsheet_id, sheet_name, row_number, row_hash)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (mod_id, spreadsheet_id, sheet_name, row_number, hash_value),
+        )
+
+    mark_duplicates(conn)
+    conn.commit()
+    return import_id
+
+
+def mark_duplicates(conn: sqlite3.Connection) -> None:
+    groups = conn.execute(
+        """
+        SELECT canonical_key, COALESCE(NULLIF(primary_url, ''), canonical_key) AS url_key,
+               COUNT(*) AS count
+        FROM mods
+        GROUP BY canonical_key, url_key
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    for group in groups:
+        mods = conn.execute(
+            """
+            SELECT id
+            FROM mods
+            WHERE canonical_key = ?
+              AND COALESCE(NULLIF(primary_url, ''), canonical_key) = ?
+            ORDER BY status_rank DESC, original_sheet_row ASC, id ASC
+            """,
+            (group["canonical_key"], group["url_key"]),
+        ).fetchall()
+        canonical_id = int(mods[0]["id"])
+        for row in mods[1:]:
+            conn.execute(
+                "UPDATE mods SET is_duplicate = 1, duplicate_of_id = ? WHERE id = ?",
+                (canonical_id, int(row["id"])),
+            )
+
+
+def duplicate_note(conn: sqlite3.Connection, mod_id: int) -> str:
+    rows = conn.execute(
+        "SELECT original_sheet_row FROM mods WHERE duplicate_of_id = ? ORDER BY original_sheet_row",
+        (mod_id,),
+    ).fetchall()
+    if not rows:
+        return ""
+    row_numbers = ", ".join(str(r["original_sheet_row"]) for r in rows)
+    return f" Duplicate rows collapsed into this clean view: original sheet rows {row_numbers}."
+
+
+def clean_rows(conn: sqlite3.Connection) -> list[list[str]]:
+    rows = conn.execute(
+        """
+        SELECT m.*, n.notes_1, n.notes_2, n.migration_notes,
+               su.resolved_source
+        FROM mods m
+        LEFT JOIN mod_notes n ON n.mod_id = m.id
+        LEFT JOIN source_urls su ON su.mod_id = m.id AND su.is_primary = 1
+        WHERE m.duplicate_of_id IS NULL
+        ORDER BY
+            CASE m.category
+                WHEN 'Core Game' THEN 0
+                WHEN 'Online Resources' THEN 1
+                WHEN 'Core Game Mods' THEN 2
+                WHEN 'Server Optimizer' THEN 3
+                WHEN 'World Mods - Fix' THEN 4
+                WHEN 'World Mods' THEN 5
+                ELSE 9
+            END,
+            COALESCE(m.category, ''),
+            LOWER(m.name)
+        """
+    ).fetchall()
+    output = [HEADERS]
+    for row in rows:
+        note = row["migration_notes"] or ""
+        note = (note + duplicate_note(conn, int(row["id"]))).strip()
+        output.append(
+            [
+                row["name"],
+                row["installation"] or "",
+                row["entry_type"] or "",
+                row["tested"] or "",
+                row["notes_1"] or "",
+                row["notes_2"] or "",
+                row["primary_url"] or "",
+                row["target_mc"] or "",
+                row["server_status"] or "",
+                original_server_file(conn, int(row["id"])),
+                row["client_package"] or "",
+                row["last_tested"] or "",
+                row["resolved_source"] or "",
+                note,
+            ]
+        )
+    return output
+
+
+def original_server_file(conn: sqlite3.Connection, mod_id: int) -> str:
+    row = conn.execute(
+        "SELECT path_hint FROM mod_files WHERE mod_id = ? ORDER BY id LIMIT 1",
+        (mod_id,),
+    ).fetchone()
+    if row:
+        return row["path_hint"]
+    mod = conn.execute("SELECT server_status FROM mods WHERE id = ?", (mod_id,)).fetchone()
+    if mod and mod["server_status"].lower().startswith("client"):
+        return ""
+    return ""
+
+
+def export_clean_csv(conn: sqlite3.Connection, output_path: Path) -> int:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = clean_rows(conn)
+    with output_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerows(rows)
+    return len(rows)
+
+
+def first_sentence(value: str, limit: int = 220) -> str:
+    text = " ".join((value or "").split())
+    if not text:
+        return ""
+    match = re.search(r"(?<=[.!?])\s+", text)
+    if match:
+        text = text[: match.start()].strip()
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "..."
+    return text
+
+
+def sheet_view_rows(conn: sqlite3.Connection) -> list[list[str]]:
+    rows = conn.execute(
+        """
+        SELECT m.*, n.migration_notes, su.resolved_source
+        FROM mods m
+        LEFT JOIN mod_notes n ON n.mod_id = m.id
+        LEFT JOIN source_urls su ON su.mod_id = m.id AND su.is_primary = 1
+        WHERE m.duplicate_of_id IS NULL
+        ORDER BY
+            CASE m.active_status
+                WHEN 'ok' THEN 0
+                WHEN 'failed' THEN 1
+                WHEN 'skipped' THEN 2
+                ELSE 3
+            END,
+            LOWER(COALESCE(m.category, '')),
+            LOWER(m.name)
+        """
+    ).fetchall()
+    output = [SHEET_VIEW_HEADERS]
+    for row in rows:
+        duplicate = duplicate_note(conn, int(row["id"])).strip()
+        note = first_sentence(row["migration_notes"])
+        if duplicate:
+            note = f"{note} {duplicate}".strip()
+        output.append(
+            [
+                row["name"],
+                row["category"] or "",
+                row["installation"] or "",
+                row["entry_type"] or "",
+                row["tested"] or "",
+                row["target_mc"] or "",
+                row["server_status"] or "",
+                original_server_file(conn, int(row["id"])),
+                row["client_package"] or "",
+                row["last_tested"] or "",
+                row["resolved_source"] or "",
+                row["primary_url"] or "",
+                note,
+            ]
+        )
+    return output
+
+
+def export_sheet_view_csv(conn: sqlite3.Connection, output_path: Path) -> int:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = sheet_view_rows(conn)
+    with output_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerows(rows)
+    return len(rows)
+
+
+def print_summary(conn: sqlite3.Connection) -> None:
+    total = conn.execute("SELECT COUNT(*) AS c FROM mods").fetchone()["c"]
+    canonical = conn.execute("SELECT COUNT(*) AS c FROM mods WHERE duplicate_of_id IS NULL").fetchone()["c"]
+    duplicates = total - canonical
+    print(f"records={total}")
+    print(f"canonical_records={canonical}")
+    print(f"duplicates_collapsed={duplicates}")
+    for row in conn.execute(
+        "SELECT active_status, COUNT(*) AS c FROM mods GROUP BY active_status ORDER BY active_status"
+    ):
+        print(f"status.{row['active_status']}={row['c']}")
+    included = conn.execute(
+        "SELECT COUNT(*) AS c FROM mods WHERE LOWER(client_package) = 'included'"
+    ).fetchone()["c"]
+    print(f"client_included={included}")
+
+
+def run_sql(conn: sqlite3.Connection, sql: str) -> None:
+    for row in conn.execute(sql):
+        print(dict(row))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--db", type=Path, default=Path("data/minecraft_mods.sqlite"))
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("init", help="Create or migrate the database schema")
+
+    import_parser = sub.add_parser("import-sheet-csv", help="Import a Google Sheet grid CSV")
+    import_parser.add_argument("csv_path", type=Path)
+    import_parser.add_argument("--spreadsheet-id", default="1OIJFcikV6d6qKxFDnT34eEFCFOVFXUqRCIcWHMDq1Wo")
+    import_parser.add_argument("--sheet-name", default="Minecraft")
+    import_parser.add_argument("--source-range", default="A1:N400")
+    import_parser.add_argument("--reset", action="store_true")
+
+    export_parser = sub.add_parser("export-clean-csv", help="Export the deduplicated sheet view")
+    export_parser.add_argument("output_path", type=Path)
+
+    sheet_export_parser = sub.add_parser(
+        "export-google-sheet-csv",
+        help="Export a compact canonical table intended to replace the Google Sheet tab",
+    )
+    sheet_export_parser.add_argument("output_path", type=Path)
+
+    sub.add_parser("summary", help="Print database summary counts")
+
+    sql_parser = sub.add_parser("sql", help="Run a read-only SQL query")
+    sql_parser.add_argument("query")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    conn = connect(args.db)
+    try:
+        if args.command == "init":
+            init_db(conn)
+        elif args.command == "import-sheet-csv":
+            import_id = import_csv(
+                conn,
+                args.csv_path,
+                args.spreadsheet_id,
+                args.sheet_name,
+                args.source_range,
+                args.reset,
+            )
+            print(f"import_id={import_id}")
+        elif args.command == "export-clean-csv":
+            count = export_clean_csv(conn, args.output_path)
+            print(f"rows_written={count}")
+        elif args.command == "export-google-sheet-csv":
+            count = export_sheet_view_csv(conn, args.output_path)
+            print(f"rows_written={count}")
+        elif args.command == "summary":
+            print_summary(conn)
+        elif args.command == "sql":
+            if not args.query.lstrip().lower().startswith("select"):
+                raise ValueError("sql command only allows SELECT queries")
+            run_sql(conn, args.query)
+        else:
+            parser.error(f"unknown command: {args.command}")
+    finally:
+        conn.close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
