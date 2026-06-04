@@ -140,11 +140,13 @@ log "Monitoring JSON"
 if command -v nginx >/dev/null 2>&1; then
   log "Nginx syntax"
   NGINX_MAIN="$TMP_DIR/nginx.conf"
+  NGINX_SITE="$TMP_DIR/pummelchen-server.conf"
+  sed "s#/var/log/nginx/#$TMP_DIR/#g" "$ROOT_DIR/nginx/pummelchen-server.conf" > "$NGINX_SITE"
   {
     printf 'pid "%s/nginx.pid";\n' "$TMP_DIR"
     printf 'error_log "%s/nginx-error.log";\n' "$TMP_DIR"
     printf 'events {}\n'
-    printf 'http { include "%s/nginx/pummelchen-server.conf"; }\n' "$ROOT_DIR"
+    printf 'http { include "%s"; }\n' "$NGINX_SITE"
   } > "$NGINX_MAIN"
   nginx -t -c "$NGINX_MAIN" -p "$TMP_DIR" >/dev/null
 fi
