@@ -45,6 +45,7 @@ SERVER_DISABLED_FILE_MARKERS = {
     "automated_harvest": "server watchdog crash in automated_harvest HarvestTicker",
     "automotives": "missing mandatory Create 6.0.0+ dependency",
     "better_snowy_biome": "server watchdog crash from scheduled fillbiome functions",
+    "dynamictrees": "dedicated-server tick crash loading a client renderer class",
     "guns++": "server watchdog crash from startup/load forceload function",
     "incendium": "server watchdog crash from startup/load forceload function",
     "mine_treasure": "server watchdog crash from startup/load forceload function",
@@ -55,6 +56,7 @@ CLIENT_EXCLUDED_FILE_MARKERS = {
     "automated_harvest": "server watchdog crash in automated_harvest HarvestTicker",
     "automotives": "missing mandatory Create 6.0.0+ dependency",
     "better_snowy_biome": "server watchdog crash from scheduled fillbiome functions",
+    "dynamictrees": "dedicated-server tick crash loading a client renderer class",
     "guns++": "server watchdog crash from startup/load forceload function",
     "incendium": "server watchdog crash from startup/load forceload function",
     "mine_treasure": "server watchdog crash from startup/load forceload function",
@@ -713,16 +715,59 @@ def apply_server_update(
     file_info: dict[str, Any],
     downloaded: Path,
     server_dir: Path,
+    db_path: Path,
     timeout: int,
 ) -> bool:
     mod_id = int(mod["id"])
     old_files = selected_file_names(conn, mod_id)
     label = f"daily_update_{mod['canonical_key']}_{dt.datetime.now(dt.UTC).strftime('%Y%m%d_%H%M%S')}"
+    server_section = server_section_for(mod, project, file_info)
+    server_datapack = server_section == "server-datapacks"
+    if not server_datapack:
+        try:
+            isolated_ok, isolated_status, isolated_severe, isolated_log_path = processor.run_isolated_acceptance_test(
+                label,
+                [downloaded],
+                db_path,
+                timeout,
+            )
+        except Exception as exc:
+            isolated_ok = False
+            isolated_status = "exception"
+            isolated_severe = [f"{type(exc).__name__}: {exc}"]
+            isolated_log_path = ""
+        if not isolated_ok:
+            log_event(
+                conn,
+                run_id,
+                mod_id,
+                event_type="server_update",
+                status="failed",
+                old_file="; ".join(old_files),
+                new_file=downloaded.name,
+                new_file_id=str(file_info.get("id") or ""),
+                source_kind="modrinth" if file_info.get("_source") == "modrinth" else "curseforge",
+                source_url=processor.stable_project_url(project),
+                release=release_channel(file_info),
+                test_label=f"{label}_isolated",
+                log_path=isolated_log_path,
+                visible=False,
+                notes="Rejected before live install by isolated acceptance lab: "
+                + (" | ".join(isolated_severe[:3]) if isolated_severe else f"status={isolated_status}"),
+            )
+            processor.insert_test_run(
+                conn,
+                mod_id,
+                f"{label}_isolated",
+                isolated_status,
+                len(isolated_severe),
+                isolated_log_path,
+                "Rejected before live install by isolated acceptance lab.",
+            )
+            return False
     rollback_dir = server_dir / "mods.rollback" / label
     rollback_dir.mkdir(parents=True, exist_ok=True)
     moved = move_existing_server_files(server_dir, old_files, rollback_dir)
-    server_section = server_section_for(mod, project, file_info)
-    server_datapack = server_section == "server-datapacks"
     target = server_dir / server_section / downloaded.name
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(downloaded, target)
@@ -925,7 +970,17 @@ def scan_and_apply(args: argparse.Namespace) -> int:
                     for row in conn.execute("SELECT installed_on_server FROM mod_files WHERE mod_id = ?", (int(mod["id"]),))
                 ) or mod["active_status"] == "skipped"
                 if server_side:
-                    ok = apply_server_update(conn, run_id, mod, project, file_info, downloaded, args.server_dir, args.timeout)
+                    ok = apply_server_update(
+                        conn,
+                        run_id,
+                        mod,
+                        project,
+                        file_info,
+                        downloaded,
+                        args.server_dir,
+                        args.db,
+                        args.timeout,
+                    )
                 else:
                     ok = apply_client_only(conn, run_id, mod, project, file_info, downloaded, args.server_dir)
                 if ok:

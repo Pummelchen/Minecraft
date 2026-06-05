@@ -40,7 +40,8 @@ build host before rebuilding a client package if
 - `scripts/import_url_batch.py` - imports pasted URL batches into SQLite work
   queue tables and inserts pending tracker rows for unseen projects.
 - `scripts/process_url_batch.py` - resolves queued URL-batch projects, downloads
-  compatible files, runs server boot tests, and updates tracker status.
+  compatible files, runs isolated acceptance tests before touching live server
+  files, then runs full-pack boot tests and updates tracker status.
 - `scripts/generate_status_site.py` - generates the static Pummelchen Server
   status/install page from SQLite and current VPS stats.
 - `scripts/live_stats_feed.py` - writes `site/public/live-stats.json` every 30
@@ -61,6 +62,9 @@ build host before rebuilding a client package if
   package artifacts, DB snapshot, changelog, and checksums.
 - `scripts/gameplay_load_lab.py` - repeatable gameplay/load scenarios for fresh
   worlds, chunk-generation proxy tests, and manual join windows.
+- `scripts/mod_acceptance_lab.py` - isolated pre-live mod acceptance lab. It
+  creates throwaway NeoForge servers, tests one mod plus its required dependency
+  closure, and then tests deterministic bundles of 25 active mods.
 - `scripts/check_client_manifest.py` - validates client package manifest syntax,
   checksums, and strict parity when package files are present.
 - `scripts/check_client_mod_dependencies.py` - scans NeoForge mod metadata,
@@ -78,8 +82,8 @@ build host before rebuilding a client package if
 - `scripts/validate_project.sh` - automated quality gate for Python compile,
   shell syntax, schema migration, release/rollback fixture, manifest checks,
   resource-pack metadata repair, client dependency validation, generated
-  website, live stats, exporter, installer-event receiver, load-lab dry run,
-  monitoring JSON, and optional Nginx syntax.
+  website, live stats, exporter, installer-event receiver, acceptance-lab
+  planning, load-lab dry run, monitoring JSON, and optional Nginx syntax.
 - `scripts/deploy_project.sh` - validated deployment script for copying
   project-owned files to the VPS, installing/reloading services, smoke-testing,
   and optionally creating a deploy release.
@@ -348,6 +352,27 @@ Grafana provisioning is stored in `monitoring/grafana/`. The website remains the
 simple user-facing view; Grafana is the operator cockpit.
 
 ## Gameplay Load Lab
+
+New mods and updates should pass the acceptance lab before they are installed in
+the live pack. The lab uses the filesystem `mods/` directory as the source of
+truth, parses NeoForge TOML metadata to include required dependencies, boots a
+temporary server on a non-live port, and writes results to
+`mod_acceptance_runs` and `mod_acceptance_items`.
+
+```bash
+python3 scripts/mod_acceptance_lab.py init
+python3 scripts/mod_acceptance_lab.py plan
+python3 scripts/mod_acceptance_lab.py run-singles --limit 10
+python3 scripts/mod_acceptance_lab.py run-bundles --bundle-size 25 --limit 1
+python3 scripts/mod_acceptance_lab.py run-files --include-active-deps /path/to/candidate.jar
+```
+
+The acceptance order is:
+
+1. Candidate jar plus required dependency closure in an isolated throwaway server.
+2. Full-pack boot test after the candidate passes isolation.
+3. Bundle tests in groups of 25 active mods.
+4. Gameplay/load lab scenarios for player-facing survival checks.
 
 The load lab supports dry-run validation plus real scenarios:
 

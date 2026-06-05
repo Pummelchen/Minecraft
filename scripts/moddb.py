@@ -419,6 +419,43 @@ CREATE TABLE IF NOT EXISTS load_lab_samples (
     mspt REAL
 );
 
+CREATE TABLE IF NOT EXISTS mod_acceptance_runs (
+    id INTEGER PRIMARY KEY,
+    server_instance_id INTEGER REFERENCES server_instances(id) ON DELETE SET NULL,
+    run_label TEXT NOT NULL UNIQUE,
+    run_type TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    status TEXT NOT NULL,
+    bundle_size INTEGER,
+    target_count INTEGER NOT NULL DEFAULT 0,
+    passed_count INTEGER NOT NULL DEFAULT 0,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    blocked_count INTEGER NOT NULL DEFAULT 0,
+    lab_root TEXT,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mod_acceptance_items (
+    id INTEGER PRIMARY KEY,
+    acceptance_run_id INTEGER NOT NULL REFERENCES mod_acceptance_runs(id) ON DELETE CASCADE,
+    mod_id INTEGER REFERENCES mods(id) ON DELETE SET NULL,
+    ordinal INTEGER NOT NULL,
+    bundle_index INTEGER,
+    stage TEXT NOT NULL,
+    status TEXT NOT NULL,
+    target_file_names TEXT NOT NULL,
+    included_file_names TEXT,
+    missing_dependencies TEXT,
+    log_path TEXT,
+    boot_seconds REAL,
+    idle_seconds REAL,
+    error_count INTEGER,
+    severe_error_count INTEGER,
+    notes TEXT,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS client_installer_sessions (
     session_id TEXT PRIMARY KEY,
     client_id TEXT,
@@ -483,6 +520,9 @@ CREATE INDEX IF NOT EXISTS idx_release_artifacts_release ON release_artifacts(re
 CREATE INDEX IF NOT EXISTS idx_release_events_release ON release_events(release_id, event_at);
 CREATE INDEX IF NOT EXISTS idx_load_lab_runs_scenario ON load_lab_runs(server_instance_id, scenario, started_at);
 CREATE INDEX IF NOT EXISTS idx_load_lab_samples_run ON load_lab_samples(run_id, elapsed_seconds);
+CREATE INDEX IF NOT EXISTS idx_mod_acceptance_runs_instance ON mod_acceptance_runs(server_instance_id, run_type, started_at);
+CREATE INDEX IF NOT EXISTS idx_mod_acceptance_items_run ON mod_acceptance_items(acceptance_run_id, stage, ordinal);
+CREATE INDEX IF NOT EXISTS idx_mod_acceptance_items_mod ON mod_acceptance_items(mod_id, stage, created_at);
 CREATE INDEX IF NOT EXISTS idx_client_installer_sessions_status ON client_installer_sessions(status, first_seen_at);
 CREATE INDEX IF NOT EXISTS idx_client_installer_events_session ON client_installer_events(session_id, received_at);
 CREATE INDEX IF NOT EXISTS idx_client_installer_events_type ON client_installer_events(event_type, received_at);

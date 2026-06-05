@@ -135,6 +135,7 @@ bash scripts/validate_project.sh
 python3 scripts/moddb.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" init
 python3 scripts/release_manager.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" init
 python3 scripts/gameplay_load_lab.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" init
+python3 scripts/mod_acceptance_lab.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" init
 
 PROPERTIES_OUTPUT="server_properties_changed=0"
 if [ -f "$PROJECT_DIR/server-config/server.properties.override" ]; then
@@ -211,6 +212,8 @@ CLIENT_EXCLUDED_FILES="$(find "$SERVER_DIR/client-package/mods" -maxdepth 1 -typ
   -iname '*automated*harvest*.jar' -o \
   -iname '*automotives*.jar' -o \
   -iname '*better*snowy*biome*.jar' -o \
+  -iname '*dynamictrees*.jar' -o \
+  -iname '*dynamic*trees*.jar' -o \
   -iname '*structory*towers*.jar' -o \
   -iname 'Incendium_*.jar' -o \
   -iname 'guns++*.jar' -o \

@@ -7,10 +7,12 @@ TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pummelchen-validate.XXXXXX")"
 BG_PIDS=()
 
 cleanup() {
-  for pid in "${BG_PIDS[@]}"; do
-    kill "$pid" >/dev/null 2>&1 || true
-    wait "$pid" >/dev/null 2>&1 || true
-  done
+  if [ "${#BG_PIDS[@]}" -gt 0 ]; then
+    for pid in "${BG_PIDS[@]}"; do
+      kill "$pid" >/dev/null 2>&1 || true
+      wait "$pid" >/dev/null 2>&1 || true
+    done
+  fi
   rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
@@ -37,7 +39,10 @@ sha256_value() {
 }
 
 log "Python compile"
-mapfile -t PY_FILES < <(find "$ROOT_DIR/scripts" -name '*.py' -type f | sort)
+PY_FILES=()
+while IFS= read -r path; do
+  PY_FILES+=("$path")
+done < <(find "$ROOT_DIR/scripts" -name '*.py' -type f | sort)
 "$PYTHON_BIN" -m py_compile "${PY_FILES[@]}"
 
 log "Shell syntax"
@@ -90,6 +95,7 @@ log "Database migrations"
 DB="$TMP_DIR/minecraft_mods.sqlite"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/moddb.py" --db "$DB" init
 "$PYTHON_BIN" "$ROOT_DIR/scripts/gameplay_load_lab.py" --db "$DB" init
+"$PYTHON_BIN" "$ROOT_DIR/scripts/mod_acceptance_lab.py" --db "$DB" init
 
 log "Release-manager fixture"
 SERVER="$TMP_DIR/server"
@@ -160,6 +166,7 @@ for name in [
     "automated_harvest-26.1.2.jar",
     "automotives-1.0.0-neoforge.jar",
     "better-snowy-biome-2.5.1-26.1.jar",
+    "dynamictrees-neoforge-26.1.2-1.8.0-BETA01.jar",
     "Structory_Towers_26.1_v1.0.16.jar",
 ]:
     with zipfile.ZipFile(mods / name, "w") as archive:
@@ -168,6 +175,7 @@ PY
 cp "$EXCLUSION_SERVER/client-package/mods/animalgarden-commonraven-1.0.1-neoforge-26.1.2.10.jar" "$EXCLUSION_SERVER/mods/"
 cp "$EXCLUSION_SERVER/client-package/mods/automotives-1.0.0-neoforge.jar" "$EXCLUSION_SERVER/mods/"
 cp "$EXCLUSION_SERVER/client-package/mods/better-snowy-biome-2.5.1-26.1.jar" "$EXCLUSION_SERVER/mods/"
+cp "$EXCLUSION_SERVER/client-package/mods/dynamictrees-neoforge-26.1.2-1.8.0-BETA01.jar" "$EXCLUSION_SERVER/mods/"
 "$PYTHON_BIN" - "$EXCLUSION_SERVER/mods/ruins-26.1.2.2NF.jar" "$EXCLUSION_SERVER/client-package/mods/ruins-26.1.2.2NF.jar" <<'PY'
 from pathlib import Path
 import sys
@@ -197,6 +205,8 @@ PY
 [ ! -e "$EXCLUSION_SERVER/client-package/mods/animalgarden-commonraven-1.0.1-neoforge-26.1.2.10.jar" ] || fail "client exclusion left Common Raven jar active"
 [ ! -e "$EXCLUSION_SERVER/client-package/mods/automotives-1.0.0-neoforge.jar" ] || fail "client exclusion left Create Automotives jar active"
 [ ! -e "$EXCLUSION_SERVER/client-package/mods/better-snowy-biome-2.5.1-26.1.jar" ] || fail "client exclusion left Better Snowy Biomes jar active"
+[ ! -e "$EXCLUSION_SERVER/mods/dynamictrees-neoforge-26.1.2-1.8.0-BETA01.jar" ] || fail "server safety left Dynamic Trees jar active"
+[ ! -e "$EXCLUSION_SERVER/client-package/mods/dynamictrees-neoforge-26.1.2-1.8.0-BETA01.jar" ] || fail "client exclusion left Dynamic Trees jar active"
 [ ! -e "$EXCLUSION_SERVER/mods/ruins-26.1.2.2NF.jar" ] || fail "server safety left Ruins jar active"
 [ ! -e "$EXCLUSION_SERVER/client-package/mods/ruins-26.1.2.2NF.jar" ] || fail "client exclusion left Ruins jar active"
 [ ! -e "$EXCLUSION_SERVER/client-package/mods/automated_harvest-26.1.2.jar" ] || fail "client exclusion left automated harvest jar active"
@@ -210,6 +220,8 @@ PY
 [ -f "$EXCLUSION_SERVER/client-package/pummelchen-server-disabled/mods/automated_harvest-26.1.2.jar" ] || fail "client exclusion did not quarantine automated harvest"
 [ -f "$EXCLUSION_SERVER/client-package/pummelchen-server-disabled/mods/automotives-1.0.0-neoforge.jar" ] || fail "client exclusion did not quarantine Create Automotives"
 [ -f "$EXCLUSION_SERVER/client-package/pummelchen-server-disabled/mods/better-snowy-biome-2.5.1-26.1.jar" ] || fail "client exclusion did not quarantine Better Snowy Biomes"
+[ -f "$EXCLUSION_SERVER/mods.failed/pummelchen-server-disabled/mods/dynamictrees-neoforge-26.1.2-1.8.0-BETA01.jar" ] || fail "server safety did not quarantine Dynamic Trees"
+[ -f "$EXCLUSION_SERVER/client-package/pummelchen-server-disabled/mods/dynamictrees-neoforge-26.1.2-1.8.0-BETA01.jar" ] || fail "client exclusion did not quarantine Dynamic Trees"
 [ -f "$EXCLUSION_SERVER/client-package/pummelchen-server-disabled/mods/Structory_Towers_26.1_v1.0.16.jar" ] || fail "client exclusion did not quarantine Structory Towers"
 "$PYTHON_BIN" - "$EXCLUSION_SERVER/minecraft_26.1.2_client_macos_apple_silicon.zip" <<'PY'
 from pathlib import Path
@@ -226,11 +238,56 @@ for bad in [
     "automated_harvest",
     "automotives",
     "better-snowy-biome",
+    "dynamictrees",
     "Structory_Towers",
     "ruins-26.1.2.2NF",
 ]:
     assert not any(bad in name for name in names), f"client zip leaked {bad}"
 PY
+
+log "Mod acceptance lab planning fixture"
+ACCEPTANCE_SERVER="$TMP_DIR/acceptance-server"
+mkdir -p "$ACCEPTANCE_SERVER/mods"
+"$PYTHON_BIN" - "$ACCEPTANCE_SERVER/mods" <<'PY'
+import sys
+import zipfile
+from pathlib import Path
+
+mods = Path(sys.argv[1])
+fixtures = {
+    "pummelchen-lib-1.0.0.jar": """
+modLoader="javafml"
+loaderVersion="[1,)"
+license="MIT"
+[[mods]]
+modId="pummellib"
+version="1.0.0"
+displayName="Pummel Lib"
+""",
+    "pummelchen-dependent-1.0.0.jar": """
+modLoader="javafml"
+loaderVersion="[1,)"
+license="MIT"
+[[mods]]
+modId="pummeldependent"
+version="1.0.0"
+displayName="Pummel Dependent"
+[[dependencies.pummeldependent]]
+modId="pummellib"
+mandatory=true
+versionRange="[1,)"
+ordering="NONE"
+side="BOTH"
+""",
+}
+for name, toml in fixtures.items():
+    with zipfile.ZipFile(mods / name, "w") as archive:
+        archive.writestr("META-INF/neoforge.mods.toml", toml)
+PY
+"$PYTHON_BIN" "$ROOT_DIR/scripts/mod_acceptance_lab.py" --db "$DB" --server-dir "$ACCEPTANCE_SERVER" --bundle-size 1 plan \
+  | grep -q 'active_server_jars=2' || fail "mod acceptance lab plan did not scan fixture jars"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/mod_acceptance_lab.py" --db "$DB" --server-dir "$ACCEPTANCE_SERVER" run-singles --dry-run --limit 1 \
+  | grep -q 'active_server_jars=1' || fail "mod acceptance lab dry-run did not select fixture jar"
 
 log "Rollback fixture"
 printf 'mod-b\n' > "$SERVER/mods/mod-b.jar"

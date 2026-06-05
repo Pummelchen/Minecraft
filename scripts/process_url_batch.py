@@ -50,6 +50,16 @@ KNOWN_IGNORED_ERROR_PATTERNS = (
     "Caused by: com.google.gson.stream.MalformedJsonException",
     "com.google.gson.JsonSyntaxException: java.io.EOFException",
     "Caused by: java.io.EOFException",
+    "Multi-version packs cannot support minimum version of less than 15",
+    "Pack declares support for version newer than 81, but is missing mandatory fields min_format and max_format",
+    "Error reading pack metadata, attempting fallback type",
+    "Error reading optional pack metadata for mod/",
+    "ResourceMetadata$2.getSection",
+    "ResourcePackLoader.readMeta",
+    "ResourcePackLoader.readWithOptionalMeta",
+    "ResourcePackLoader.packFinder",
+    "ResourcePackLoader.lambda$buildPackFinder",
+    "PackRepository.discoverAvailable",
     "Couldn't parse data file 'stoneholm:",
     "Couldn't parse data file 'berezka_api:",
     "[Berezka API]",
@@ -638,6 +648,51 @@ def run_server_test(label: str, timeout: int) -> tuple[bool, str, int, list[str]
     return ok, status, error_count, severe, log_path
 
 
+def run_isolated_acceptance_test(label: str, files: Sequence[Path], db_path: Path, timeout: int) -> tuple[bool, str, list[str], str]:
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = DOWNLOAD_DIR / f"{label}.isolated-output.txt"
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve().parent / "mod_acceptance_lab.py"),
+        "--db",
+        str(db_path),
+        "--server-dir",
+        str(SERVER_DIR),
+        "run-files",
+        "--run-label",
+        f"{label}_isolated",
+        "--boot-timeout",
+        str(timeout),
+        "--idle-seconds",
+        "45",
+        "--include-active-deps",
+        *[str(path) for path in files],
+    ]
+    proc = subprocess.run(
+        command,
+        cwd=Path(__file__).resolve().parent.parent,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout + 180,
+        check=False,
+    )
+    output_path.write_text(proc.stdout, encoding="utf-8")
+    status_match = re.search(r"^status=(.+)$", proc.stdout, re.MULTILINE)
+    log_match = re.search(r"^log_path=(.+)$", proc.stdout, re.MULTILINE)
+    status = status_match.group(1).strip() if status_match else f"exit_{proc.returncode}"
+    log_path = log_match.group(1).strip() if log_match else str(output_path)
+    severe: list[str] = []
+    if "--- severe errors ---" in proc.stdout:
+        severe = [
+            line
+            for line in proc.stdout.split("--- severe errors ---", 1)[1].splitlines()
+            if line.strip()
+        ][:20]
+    ok = proc.returncode == 0 and status == "passed"
+    return ok, status, severe, log_path
+
+
 def required_dependency_ids(file_info: dict[str, Any]) -> list[int]:
     return [
         int(dep["modId"])
@@ -696,6 +751,7 @@ def process_item(
     conn: sqlite3.Connection,
     item: sqlite3.Row,
     *,
+    db_path: Path,
     timeout: int,
     test_enabled: bool,
 ) -> str:
@@ -807,6 +863,33 @@ def process_item(
             return f"candidate {slug}: {file_info['fileName']}"
 
         label = f"{RUN_PREFIX}_{int(item['ordinal']):03d}_{slugify(slug)}"
+        isolated_files = [dep_path for *_rest, dep_path in dependencies] + [file_path]
+        isolated_ok, isolated_status, isolated_severe, isolated_log_path = run_isolated_acceptance_test(
+            label,
+            isolated_files,
+            db_path,
+            timeout,
+        )
+        if not isolated_ok:
+            severe_summary = " | ".join(isolated_severe[:3]) if isolated_severe else f"status={isolated_status}"
+            note = f"{file_note} Rejected before live install by isolated acceptance lab {label}_isolated: {severe_summary}"
+            set_mod_state(
+                conn,
+                mod_id=mod_id,
+                project=project,
+                file_info=file_info,
+                status="Failed",
+                server_status="Rejected: isolated acceptance error",
+                client_package="Not included",
+                installed_server=False,
+                included_client=False,
+                files=[file_path.name],
+                note=note,
+            )
+            insert_test_run(conn, mod_id, f"{label}_isolated", isolated_status, len(isolated_severe), isolated_log_path, note)
+            update_batch_item(conn, int(item["batch_item_id"]), "failed", note)
+            return f"failed {slug}: isolated acceptance {severe_summary}"
+
         installed_paths: list[Path] = []
         installed_infos: list[tuple[int, dict[str, Any], dict[str, Any], Path]] = []
         for dep_mod_id, dep_project, dep_file, dep_path in dependencies:
@@ -843,7 +926,7 @@ def process_item(
                 )
                 insert_test_run(conn, dep_mod_id, label, test_status, error_count, log_path, dep_note)
             client_path = install_to(main_target, CLIENT_MODS_DIR)
-            note = f"{file_note} Boot test {label} reached Done with no severe filtered errors."
+            note = f"{file_note} Isolated acceptance lab passed, then boot test {label} reached Done with no severe filtered errors."
             set_mod_state(
                 conn,
                 mod_id=mod_id,
@@ -863,7 +946,7 @@ def process_item(
 
         failed_paths = [move_to_failed(path, label) for path in installed_paths]
         severe_summary = " | ".join(severe[:3]) if severe else f"status={test_status}"
-        note = f"{file_note} Rejected after boot test {label}: {severe_summary}"
+        note = f"{file_note} Isolated acceptance lab passed, but rejected after full-pack boot test {label}: {severe_summary}"
         set_mod_state(
             conn,
             mod_id=mod_id,
@@ -949,7 +1032,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"items={len(items)}")
         package_changed = False
         for index, item in enumerate(items, start=1):
-            result = process_item(conn, item, timeout=args.timeout, test_enabled=not args.metadata_only)
+            result = process_item(
+                conn,
+                item,
+                db_path=args.db,
+                timeout=args.timeout,
+                test_enabled=not args.metadata_only,
+            )
             conn.commit()
             print(f"{index}/{len(items)} {result}", flush=True)
             if result.startswith("ok-"):
