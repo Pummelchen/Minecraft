@@ -456,6 +456,31 @@ CREATE TABLE IF NOT EXISTS mod_acceptance_items (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS headless_client_runs (
+    id INTEGER PRIMARY KEY,
+    server_instance_id INTEGER REFERENCES server_instances(id) ON DELETE SET NULL,
+    release_id TEXT REFERENCES pack_releases(release_id) ON DELETE SET NULL,
+    run_label TEXT NOT NULL UNIQUE,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    status TEXT NOT NULL,
+    minecraft_version TEXT NOT NULL,
+    loader TEXT NOT NULL,
+    server_host TEXT NOT NULL,
+    server_port INTEGER NOT NULL,
+    duration_seconds REAL,
+    requested_duration_seconds INTEGER,
+    game_dir TEXT NOT NULL,
+    run_dir TEXT NOT NULL,
+    display TEXT,
+    renderer_summary TEXT,
+    hmc_log_path TEXT,
+    minecraft_log_path TEXT,
+    crash_report_count INTEGER NOT NULL DEFAULT 0,
+    fatal_log_count INTEGER NOT NULL DEFAULT 0,
+    notes TEXT
+);
+
 CREATE TABLE IF NOT EXISTS client_installer_sessions (
     session_id TEXT PRIMARY KEY,
     client_id TEXT,
@@ -523,6 +548,8 @@ CREATE INDEX IF NOT EXISTS idx_load_lab_samples_run ON load_lab_samples(run_id, 
 CREATE INDEX IF NOT EXISTS idx_mod_acceptance_runs_instance ON mod_acceptance_runs(server_instance_id, run_type, started_at);
 CREATE INDEX IF NOT EXISTS idx_mod_acceptance_items_run ON mod_acceptance_items(acceptance_run_id, stage, ordinal);
 CREATE INDEX IF NOT EXISTS idx_mod_acceptance_items_mod ON mod_acceptance_items(mod_id, stage, created_at);
+CREATE INDEX IF NOT EXISTS idx_headless_client_runs_status ON headless_client_runs(status, started_at);
+CREATE INDEX IF NOT EXISTS idx_headless_client_runs_release ON headless_client_runs(release_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_client_installer_sessions_status ON client_installer_sessions(status, first_seen_at);
 CREATE INDEX IF NOT EXISTS idx_client_installer_events_session ON client_installer_events(session_id, received_at);
 CREATE INDEX IF NOT EXISTS idx_client_installer_events_type ON client_installer_events(event_type, received_at);

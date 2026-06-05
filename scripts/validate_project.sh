@@ -96,6 +96,7 @@ DB="$TMP_DIR/minecraft_mods.sqlite"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/moddb.py" --db "$DB" init
 "$PYTHON_BIN" "$ROOT_DIR/scripts/gameplay_load_lab.py" --db "$DB" init
 "$PYTHON_BIN" "$ROOT_DIR/scripts/mod_acceptance_lab.py" --db "$DB" init
+"$PYTHON_BIN" "$ROOT_DIR/scripts/headless_client_lab.py" --db "$DB" init
 
 log "Release-manager fixture"
 SERVER="$TMP_DIR/server"
@@ -288,6 +289,23 @@ PY
   | grep -q 'active_server_jars=2' || fail "mod acceptance lab plan did not scan fixture jars"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/mod_acceptance_lab.py" --db "$DB" --server-dir "$ACCEPTANCE_SERVER" run-singles --dry-run --limit 1 \
   | grep -q 'active_server_jars=1' || fail "mod acceptance lab dry-run did not select fixture jar"
+
+log "Headless client lab fixture"
+HEADLESS_SERVER="$TMP_DIR/headless-server"
+HEADLESS_BASE="$TMP_DIR/headless-client"
+mkdir -p "$HEADLESS_SERVER/client-package/mods" "$HEADLESS_SERVER/client-package/resourcepacks" \
+  "$HEADLESS_SERVER/client-package/shaderpacks"
+printf 'mod\n' > "$HEADLESS_SERVER/client-package/mods/headless-fixture.jar"
+printf 'resource\n' > "$HEADLESS_SERVER/client-package/resourcepacks/headless-resource.zip"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/headless_client_lab.py" --db "$DB" --server-dir "$HEADLESS_SERVER" --base-dir "$HEADLESS_BASE" setup --dry-run \
+  | grep -q 'would_download=' || fail "headless client setup dry-run did not report download"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/headless_client_lab.py" --db "$DB" --server-dir "$HEADLESS_SERVER" --base-dir "$HEADLESS_BASE" sync >/tmp/headless-sync.$$
+grep -q 'mods=1' /tmp/headless-sync.$$ || fail "headless client sync did not copy mod fixture"
+grep -q 'resourcepacks=1' /tmp/headless-sync.$$ || fail "headless client sync did not copy resource fixture"
+rm -f /tmp/headless-sync.$$
+[ -f "$HEADLESS_BASE/game/options.txt" ] || fail "headless client sync did not seed options.txt"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/headless_client_lab.py" --db "$DB" --server-dir "$HEADLESS_SERVER" --base-dir "$HEADLESS_BASE" run --dry-run \
+  | grep -q 'launch=launch neoforge:26.1.2 -specifics' || fail "headless client dry-run did not print launch command"
 
 log "Rollback fixture"
 printf 'mod-b\n' > "$SERVER/mods/mod-b.jar"

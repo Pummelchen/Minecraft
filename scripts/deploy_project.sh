@@ -136,6 +136,7 @@ python3 scripts/moddb.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" init
 python3 scripts/release_manager.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" init
 python3 scripts/gameplay_load_lab.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" init
 python3 scripts/mod_acceptance_lab.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" init
+python3 scripts/headless_client_lab.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" init
 
 PROPERTIES_OUTPUT="server_properties_changed=0"
 if [ -f "$PROJECT_DIR/server-config/server.properties.override" ]; then

@@ -65,6 +65,10 @@ build host before rebuilding a client package if
 - `scripts/mod_acceptance_lab.py` - isolated pre-live mod acceptance lab. It
   creates throwaway NeoForge servers, tests one mod plus its required dependency
   closure, and then tests deterministic bundles of 25 active mods.
+- `scripts/headless_client_lab.py` - VPS real-client smoke lab. It syncs the
+  active client package, launches HeadlessMC/HMC-Specifics under Xvfb or an
+  existing X display, joins the server, walks, captures renderer/log evidence,
+  and records runs in SQLite.
 - `scripts/check_client_manifest.py` - validates client package manifest syntax,
   checksums, and strict parity when package files are present.
 - `scripts/check_client_mod_dependencies.py` - scans NeoForge mod metadata,
@@ -83,7 +87,8 @@ build host before rebuilding a client package if
   shell syntax, schema migration, release/rollback fixture, manifest checks,
   resource-pack metadata repair, client dependency validation, generated
   website, live stats, exporter, installer-event receiver, acceptance-lab
-  planning, load-lab dry run, monitoring JSON, and optional Nginx syntax.
+  planning, headless-client dry-run/sync checks, load-lab dry run, monitoring
+  JSON, and optional Nginx syntax.
 - `scripts/deploy_project.sh` - validated deployment script for copying
   project-owned files to the VPS, installing/reloading services, smoke-testing,
   and optionally creating a deploy release.
@@ -372,7 +377,42 @@ The acceptance order is:
 1. Candidate jar plus required dependency closure in an isolated throwaway server.
 2. Full-pack boot test after the candidate passes isolation.
 3. Bundle tests in groups of 25 active mods.
-4. Gameplay/load lab scenarios for player-facing survival checks.
+4. Headless real-client join/walk smoke test for the active client release.
+5. Gameplay/load lab scenarios for player-facing survival checks.
+
+## Headless Client Lab
+
+The headless client lab follows the HeadlessMC/HMC-Specifics path from the
+research note: it is a real Minecraft Java client under Xvfb or an existing
+GPU-backed `DISPLAY`, not a protocol bot. Xvfb/Mesa is enough for boot, join,
+movement, and obvious shader compile crashes; GPU-backed Xorg is still required
+for driver-faithful shader validation.
+
+One-time VPS setup:
+
+```bash
+apt install -y xvfb mesa-utils libgl1-mesa-dri libglx-mesa0 x11-utils
+python3 scripts/headless_client_lab.py setup
+python3 scripts/headless_client_lab.py sync
+python3 scripts/headless_client_lab.py login-command
+```
+
+The login command opens the HeadlessMC console. Run `login`, complete the
+Microsoft device-code login from another browser with a dedicated paid test
+account, then run `account`. Do not put account passwords or tokens into shell
+commands or git.
+
+After the account is ready:
+
+```bash
+python3 scripts/headless_client_lab.py run --duration 600
+```
+
+Runs are stored in `headless_client_runs` with the active release id, renderer
+summary, HeadlessMC log, Minecraft `latest.log`, crash-report count, fatal-log
+count, and pass/fail notes. The lab always syncs from
+`/var/minecraft_26.1.2/client-package`, so it tests the same client pack that
+Mac users install.
 
 The load lab supports dry-run validation plus real scenarios:
 
