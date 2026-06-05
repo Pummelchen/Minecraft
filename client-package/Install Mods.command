@@ -270,21 +270,29 @@ remove_previous_managed_files() {
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     if [ -e "$dst/$name" ]; then
-      rm -f "$dst/$name"
+      rm -rf "$dst/$name"
     fi
   done < <(previous_manifest_names "$section")
 }
 
-move_conflicting_mods() {
-  local dst="$1"
-  local current_list="$STATE_DIR/current-mods-$STAMP.txt"
-  manifest_names "mods" > "$current_list"
-  local backup_dir="$MC_DIR/mods.before-pummelchen-$STAMP"
+move_unmanaged_section() {
+  local section="$1"
+  local dst="$2"
+  local current_list="$STATE_DIR/current-$section-$STAMP.txt"
+  manifest_names "$section" > "$current_list"
+  local backup_dir="$MC_DIR/$section.before-pummelchen-$STAMP"
   local moved=0
   shopt -s nullglob
-  for path in "$dst"/*.jar; do
+  for path in "$dst"/*; do
     local name
     name="$(basename "$path")"
+    [ "$name" = ".DS_Store" ] && continue
+    if [ "$section" = "mods" ]; then
+      case "$name" in
+        *.jar|*.zip) ;;
+        *) continue ;;
+      esac
+    fi
     if ! grep -Fxq "$name" "$current_list"; then
       mkdir -p "$backup_dir"
       mv "$path" "$backup_dir/$name"
@@ -293,7 +301,7 @@ move_conflicting_mods() {
   done
   shopt -u nullglob
   if [ "$moved" -gt 0 ]; then
-    echo "Moved $moved non-Pummelchen mod jar(s) to: $backup_dir"
+    echo "Moved $moved non-Pummelchen $section item(s) to: $backup_dir"
   fi
 }
 
@@ -304,10 +312,80 @@ sync_section() {
   [ -d "$src" ] || return 0
   mkdir -p "$dst"
   remove_previous_managed_files "$section" "$dst"
-  if [ "$section" = "mods" ]; then
-    move_conflicting_mods "$dst"
-  fi
+  move_unmanaged_section "$section" "$dst"
   copy_dir_contents "$src" "$dst"
+}
+
+set_options_line() {
+  local path="$1"
+  local key="$2"
+  local value="$3"
+  mkdir -p "$(dirname "$path")"
+  [ -f "$path" ] || : > "$path"
+  local tmp="$path.pummelchen.tmp"
+  awk -v key="$key" -v value="$value" '
+    BEGIN { replaced = 0 }
+    index($0, key ":") == 1 {
+      print key ":" value
+      replaced = 1
+      next
+    }
+    { print }
+    END {
+      if (!replaced) print key ":" value
+    }
+  ' "$path" > "$tmp" && mv "$tmp" "$path"
+}
+
+set_property_line() {
+  local path="$1"
+  local key="$2"
+  local value="$3"
+  [ -f "$path" ] || return 0
+  local tmp="$path.pummelchen.tmp"
+  awk -v key="$key" -v value="$value" '
+    BEGIN { replaced = 0 }
+    index($0, key "=") == 1 {
+      print key "=" value
+      replaced = 1
+      next
+    }
+    { print }
+    END {
+      if (!replaced) print key "=" value
+    }
+  ' "$path" > "$tmp" && mv "$tmp" "$path"
+}
+
+set_json_boolean_value() {
+  local path="$1"
+  local key="$2"
+  local value="$3"
+  [ -f "$path" ] || return 0
+  command -v perl >/dev/null 2>&1 || return 0
+  perl -0pi -e "s/(\\\"$key\\\"\\s*:\\s*\\{\\s*\\\"value\\\"\\s*:\\s*)(true|false)/\${1}$value/s" "$path" || true
+}
+
+apply_pummelchen_client_defaults() {
+  set_property_line "$MC_DIR/config/neoforge-client.toml" "showLoadWarnings" "false"
+  set_property_line "$MC_DIR/config/forge-client.toml" "showLoadWarnings" "false"
+  set_property_line "$MC_DIR/config/yuushya-client.toml" "showCheckScreen" "false"
+  set_json_boolean_value "$MC_DIR/config/underground_village/common.json" "enableInGameMessage" "false"
+  set_json_boolean_value "$MC_DIR/config/mtsconfigclient.json" "showTutorial" "false"
+  echo "Applied Pummelchen client defaults for quieter first launch."
+}
+
+reset_client_visual_state() {
+  local options="$MC_DIR/options.txt"
+  if [ -f "$options" ]; then
+    cp "$options" "$options.before-pummelchen-$STAMP"
+  fi
+  set_options_line "$options" "resourcePacks" '["vanilla"]'
+  set_options_line "$options" "incompatibleResourcePacks" '[]'
+  set_property_line "$MC_DIR/optionsshaders.txt" "shaderPack" ""
+  set_property_line "$MC_DIR/config/iris.properties" "shaderPack" ""
+  set_property_line "$MC_DIR/iris.properties" "shaderPack" ""
+  echo "Reset active resource packs to vanilla and disabled active shader selection."
 }
 
 verify_section() {
@@ -365,6 +443,56 @@ install_neoforge_profile() {
     return 0
   fi
   fail "NeoForge client profile install failed."
+}
+
+configure_neoforge_profile() {
+  local java_bin="$1"
+  local profiles="$MC_DIR/launcher_profiles.json"
+  [ -f "$profiles" ] || fail "Minecraft launcher profile file is missing: $profiles"
+  command -v osascript >/dev/null 2>&1 || fail "osascript is missing; cannot configure Minecraft launcher profile."
+
+  echo "Configuring NeoForge launcher profile..."
+  if PROFILE_PATH="$profiles" PROFILE_JAVA_BIN="$java_bin" /usr/bin/osascript -l JavaScript <<'JXA'
+ObjC.import('Foundation');
+
+function getenv(name) {
+  var value = $.NSProcessInfo.processInfo.environment.objectForKey(name);
+  if (!value) {
+    throw new Error('Missing environment variable: ' + name);
+  }
+  return ObjC.unwrap(value);
+}
+
+var profilePath = getenv('PROFILE_PATH');
+var javaBin = getenv('PROFILE_JAVA_BIN');
+var error = $();
+var raw = $.NSString.stringWithContentsOfFileEncodingError(profilePath, $.NSUTF8StringEncoding, error);
+if (!raw) {
+  throw new Error('Could not read launcher profile file: ' + profilePath);
+}
+
+var data = JSON.parse(ObjC.unwrap(raw));
+data.profiles = data.profiles || {};
+var profile = data.profiles.NeoForge || {};
+profile.name = 'NeoForge';
+profile.type = 'custom';
+profile.lastVersionId = 'neoforge-26.1.2.71';
+profile.javaDir = javaBin;
+profile.javaArgs = profile.javaArgs || '-Xmx8G -XX:+UnlockExperimentalVMOptions -XX:+UseG1GC -XX:G1NewSizePercent=20 -XX:G1ReservePercent=20 -XX:MaxGCPauseMillis=50 -XX:G1HeapRegionSize=32M';
+profile.lastUsed = (new Date()).toISOString();
+data.profiles.NeoForge = profile;
+
+var output = $.NSString.alloc.initWithUTF8String(JSON.stringify(data, null, 2) + '\n');
+var ok = output.writeToFileAtomicallyEncodingError(profilePath, true, $.NSUTF8StringEncoding, error);
+if (!ok) {
+  throw new Error('Could not write launcher profile file: ' + profilePath);
+}
+JXA
+  then
+    echo "NeoForge launcher profile configured."
+    return 0
+  fi
+  fail "Could not configure NeoForge launcher profile."
 }
 
 add_server_entry() {
@@ -543,6 +671,8 @@ emit_event "inner_phase" "info" "running" "Syncing mods, resource packs, and sha
 sync_section "mods"
 sync_section "resourcepacks"
 sync_section "shaderpacks"
+reset_client_visual_state
+apply_pummelchen_client_defaults
 
 echo "Verifying installed files..."
 emit_event "inner_phase" "info" "running" "Verifying installed client files." 0
@@ -552,6 +682,7 @@ verify_section "shaderpacks"
 
 emit_event "inner_phase" "info" "running" "Installing NeoForge launcher profile." 0
 install_neoforge_profile "$JAVA_BIN"
+configure_neoforge_profile "$JAVA_BIN"
 emit_event "inner_phase" "info" "running" "Adding Pummelchen server entry." 0
 add_server_entry "$JAVA_BIN"
 emit_event "inner_phase" "info" "running" "Installing background updater and log uploader." 0

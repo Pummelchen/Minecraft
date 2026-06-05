@@ -288,11 +288,17 @@ python3 /var/minecraft_mods/scripts/release_manager.py list
 python3 /var/minecraft_mods/scripts/release_manager.py validate <release-id>
 python3 /var/minecraft_mods/scripts/release_manager.py rollback
 python3 /var/minecraft_mods/scripts/release_manager.py rollback --release-id <release-id> --restore-db
+python3 /var/minecraft_mods/scripts/release_manager.py prune --keep 2
 ```
 
 The daily noon UTC updater creates and activates a release only when at least
 one update was applied successfully. Clients then see the new release pointer on
 their next launch or background sync.
+
+Release pruning keeps the active release plus the requested number of inactive
+rollback releases, removes older generated release directories and public
+download links, and records a `prune` event in SQLite. This prevents repeated
+client ZIP/MRPack builds from filling the VPS disk during heavy test cycles.
 
 ## Quality Gate And Deploy
 

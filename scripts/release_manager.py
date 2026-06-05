@@ -73,6 +73,17 @@ def copy_tree_with_links(src: Path, dst: Path) -> None:
             hardlink_or_copy(path, target)
 
 
+def normalize_public_permissions(root: Path) -> None:
+    if not root.exists():
+        return
+    root.chmod(0o755)
+    for path in sorted(root.rglob("*")):
+        if path.is_dir():
+            path.chmod(0o755)
+        elif path.is_file():
+            path.chmod(0o644)
+
+
 def release_id(label: str | None = None) -> str:
     base = dt.datetime.now(dt.UTC).strftime("release_%Y%m%d_%H%M%S")
     if label:
@@ -220,6 +231,7 @@ def build_public_release(release_dir: Path, release_id_value: str) -> None:
         src = release_dir / "artifacts" / src_name
         if src.exists():
             hardlink_or_copy(src, public / public_name)
+    normalize_public_permissions(public)
 
 
 def publish_release(
@@ -233,6 +245,8 @@ def publish_release(
     build_public_release(release_dir, rel_id)
     releases_dir = public_downloads / "releases"
     releases_dir.mkdir(parents=True, exist_ok=True)
+    public_downloads.chmod(0o755)
+    releases_dir.chmod(0o755)
     public_link = releases_dir / rel_id
     if public_link.exists() or public_link.is_symlink():
         if public_link.is_dir() and not public_link.is_symlink():
@@ -243,6 +257,7 @@ def publish_release(
         public_link.symlink_to(release_dir / "public", target_is_directory=True)
     except OSError:
         shutil.copytree(release_dir / "public", public_link)
+        normalize_public_permissions(public_link)
 
     payload = {
         "release_id": rel_id,
@@ -261,6 +276,8 @@ def publish_release(
     }
     write_json_atomic(public_downloads / "current-release.json", payload)
     (public_downloads / "current-release.txt").write_text(rel_id + "\n", encoding="utf-8")
+    (public_downloads / "current-release.json").chmod(0o644)
+    (public_downloads / "current-release.txt").chmod(0o644)
     return payload
 
 
@@ -545,6 +562,121 @@ def current_json(args: argparse.Namespace) -> int:
     return 0
 
 
+def safe_remove_release_dir(path: Path, release_root: Path, *, dry_run: bool) -> bool:
+    if not path.exists():
+        return False
+    release_root_resolved = release_root.resolve()
+    path_resolved = path.resolve()
+    try:
+        path_resolved.relative_to(release_root_resolved)
+    except ValueError as exc:
+        raise SystemExit(f"refusing to prune release outside release root: {path}") from exc
+    if path.name.startswith("release_") or path.name.startswith("qa_release_"):
+        if not dry_run:
+            shutil.rmtree(path)
+        return True
+    raise SystemExit(f"refusing unexpected release directory name: {path}")
+
+
+def remove_public_release_link(public_downloads: Path, rel_id: str, *, dry_run: bool) -> bool:
+    public_path = public_downloads / "releases" / rel_id
+    if not public_path.exists() and not public_path.is_symlink():
+        return False
+    if dry_run:
+        return True
+    if public_path.is_dir() and not public_path.is_symlink():
+        shutil.rmtree(public_path)
+    else:
+        public_path.unlink()
+    return True
+
+
+def retained_release_ids(conn: sqlite3.Connection, server_key: str, keep: int) -> set[str]:
+    active = current_release(conn, server_key)
+    if not active:
+        return set()
+    retained = {active["release_id"]}
+    previous_id = active["previous_release_id"]
+    while previous_id and len(retained) - 1 < keep:
+        row = conn.execute(
+            "SELECT release_id, previous_release_id FROM pack_releases WHERE release_id = ?",
+            (previous_id,),
+        ).fetchone()
+        if not row or row["release_id"] in retained:
+            break
+        retained.add(row["release_id"])
+        previous_id = row["previous_release_id"]
+
+    if len(retained) - 1 < keep:
+        rows = conn.execute(
+            """
+            SELECT release_id
+            FROM pack_releases
+            WHERE server_key = ? AND active = 0 AND status != 'pruned'
+            ORDER BY created_at DESC
+            """,
+            (server_key,),
+        ).fetchall()
+        for row in rows:
+            if len(retained) - 1 >= keep:
+                break
+            retained.add(row["release_id"])
+    return retained
+
+
+def prune_releases(args: argparse.Namespace) -> int:
+    if args.keep < 0:
+        raise SystemExit("--keep must be >= 0")
+    with connect(args.db) as conn:
+        init_db(conn)
+        keep_ids = retained_release_ids(conn, args.server_key, args.keep)
+        rows = conn.execute(
+            """
+            SELECT release_id, release_dir, status, active
+            FROM pack_releases
+            WHERE server_key = ?
+            ORDER BY created_at ASC
+            """,
+            (args.server_key,),
+        ).fetchall()
+        pruned = 0
+        for row in rows:
+            rel_id = row["release_id"]
+            if row["active"] or rel_id in keep_ids:
+                continue
+            release_removed = safe_remove_release_dir(Path(row["release_dir"]), args.release_root, dry_run=args.dry_run)
+            public_removed = remove_public_release_link(args.public_downloads, rel_id, dry_run=args.dry_run)
+            if release_removed or public_removed or row["status"] != "pruned":
+                pruned += 1
+                print(
+                    f"pruned_release={rel_id}\t"
+                    f"release_dir_removed={int(release_removed)}\t"
+                    f"public_removed={int(public_removed)}"
+                )
+                if not args.dry_run:
+                    conn.execute(
+                        "UPDATE pack_releases SET status = 'pruned' WHERE release_id = ?",
+                        (rel_id,),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO release_events(release_id, event_at, event_type, status, actor, notes)
+                        VALUES (?, ?, 'prune', 'ok', ?, ?)
+                        """,
+                        (
+                            rel_id,
+                            utc_now(),
+                            getattr(args, "actor", "release_manager"),
+                            f"Pruned by retention policy; kept active plus {args.keep} rollback release(s).",
+                        ),
+                    )
+        if not args.dry_run:
+            conn.commit()
+    print(f"pruned_count={pruned}")
+    print(f"retained_count={len(keep_ids)}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
@@ -585,6 +717,10 @@ def build_parser() -> argparse.ArgumentParser:
     show.add_argument("release_id")
 
     sub.add_parser("current-json")
+
+    prune = sub.add_parser("prune")
+    prune.add_argument("--keep", type=int, default=2, help="Inactive rollback releases to retain in addition to active")
+    prune.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -608,6 +744,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return show_release(args)
     if args.command == "current-json":
         return current_json(args)
+    if args.command == "prune":
+        return prune_releases(args)
     raise SystemExit(f"unknown command {args.command}")
 
 

@@ -246,7 +246,8 @@ def latest_crash_reports(crash_dir: Path, started_at: float) -> list[Path]:
     reports: list[Path] = []
     for path in crash_dir.glob("crash-*.txt"):
         try:
-            if path.stat().st_mtime >= started_at:
+            stat = path.stat()
+            if stat.st_mtime >= started_at and stat.st_size > 0:
                 reports.append(path)
         except FileNotFoundError:
             continue

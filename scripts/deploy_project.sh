@@ -136,6 +136,47 @@ python3 scripts/moddb.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" init
 python3 scripts/release_manager.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" init
 python3 scripts/gameplay_load_lab.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" init
 
+PROPERTIES_OUTPUT="server_properties_changed=0"
+if [ -f "$PROJECT_DIR/server-config/server.properties.override" ]; then
+  PROPERTIES_OUTPUT="$(python3 - "$SERVER_DIR/server.properties" "$PROJECT_DIR/server-config/server.properties.override" <<'PY'
+from pathlib import Path
+import sys
+
+target = Path(sys.argv[1])
+override = Path(sys.argv[2])
+updates = {}
+for raw in override.read_text(encoding="utf-8").splitlines():
+    line = raw.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    updates[key.strip()] = value.strip()
+
+lines = target.read_text(encoding="utf-8", errors="replace").splitlines() if target.exists() else []
+seen = set()
+merged = []
+for raw in lines:
+    if "=" in raw and not raw.lstrip().startswith("#"):
+        key = raw.split("=", 1)[0]
+        if key in updates:
+            merged.append(f"{key}={updates[key]}")
+            seen.add(key)
+            continue
+    merged.append(raw)
+for key, value in updates.items():
+    if key not in seen:
+        merged.append(f"{key}={value}")
+new_text = "\n".join(merged) + "\n"
+old_text = target.read_text(encoding="utf-8", errors="replace") if target.exists() else ""
+if old_text != new_text:
+    target.write_text(new_text, encoding="utf-8")
+    print("server_properties_changed=1")
+else:
+    print("server_properties_changed=0")
+PY
+)"
+fi
+
 install -m 0644 systemd/pummelchen-live-stats.service /etc/systemd/system/pummelchen-live-stats.service
 install -m 0644 systemd/pummelchen-live-stats.timer /etc/systemd/system/pummelchen-live-stats.timer
 install -m 0644 systemd/pummelchen-client-log-receiver.service /etc/systemd/system/pummelchen-client-log-receiver.service
@@ -162,9 +203,24 @@ install -m 0644 nginx/pummelchen-server.conf /etc/nginx/sites-available/pummelch
 ln -sfn /etc/nginx/sites-available/pummelchen-server.conf /etc/nginx/sites-enabled/pummelchen-server.conf
 nginx -t
 
-SANITIZE_OUTPUT="$(python3 scripts/sanitize_resource_pack_metadata.py "$SERVER_DIR/client-package" --write)"
-printf '%s\n' "$SANITIZE_OUTPUT"
-if printf '%s\n' "$SANITIZE_OUTPUT" | grep -Eq 'resource_pack_metadata_changes=[1-9]'; then
+SERVER_SANITIZE_OUTPUT="$(python3 scripts/sanitize_resource_pack_metadata.py "$SERVER_DIR" --target server --write)"
+CLIENT_SANITIZE_OUTPUT="$(python3 scripts/sanitize_resource_pack_metadata.py "$SERVER_DIR/client-package" --target client --write)"
+SAFETY_OUTPUT="$(python3 scripts/daily_update.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" enforce-safety)"
+CLIENT_EXCLUDED_FILES="$(find "$SERVER_DIR/client-package" -type f \( \
+  -iname '*animalgarden*common*raven*.jar' -o \
+  -iname '*automated*harvest*.jar' -o \
+  -iname '*structory*towers*.jar' -o \
+  -iname 'Incendium_*.jar' -o \
+  -iname 'guns++*.jar' -o \
+  -iname 'mine-treasure*.jar' \
+\) -print 2>/dev/null || true)"
+printf '%s\n' "$SERVER_SANITIZE_OUTPUT"
+printf '%s\n' "$CLIENT_SANITIZE_OUTPUT"
+printf '%s\n' "$SAFETY_OUTPUT"
+printf '%s\n' "$PROPERTIES_OUTPUT"
+if printf '%s\n' "$CLIENT_SANITIZE_OUTPUT" | grep -Eq 'resource_pack_metadata_changes=[1-9]' \
+  || printf '%s\n' "$SAFETY_OUTPUT" | grep -Eq 'client_removed=[1-9]' \
+  || [ -n "$CLIENT_EXCLUDED_FILES" ]; then
   python3 scripts/daily_update.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" rebuild-client
 fi
 python3 scripts/generate_status_site.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" --output-dir "$PROJECT_DIR/site/public" --public-url "http://91.99.176.243:7788"
@@ -179,9 +235,20 @@ if [ "$CREATE_RELEASE" = "1" ]; then
     --release-root "$PROJECT_DIR/releases" \
     --public-downloads "$PROJECT_DIR/site/public/downloads" \
     create --label deploy --status tested --activate --notes "Validated deploy release"
+  python3 scripts/release_manager.py \
+    --db "$PROJECT_DIR/data/minecraft_mods.sqlite" \
+    --server-dir "$SERVER_DIR" \
+    --release-root "$PROJECT_DIR/releases" \
+    --public-downloads "$PROJECT_DIR/site/public/downloads" \
+    prune --keep 2
 fi
 
 systemctl reload nginx
+if printf '%s\n' "$SERVER_SANITIZE_OUTPUT" | grep -Eq 'resource_pack_metadata_changes=[1-9]' \
+  || printf '%s\n' "$SAFETY_OUTPUT" | grep -Eq 'server_removed=[1-9]' \
+  || printf '%s\n' "$PROPERTIES_OUTPUT" | grep -q 'server_properties_changed=1'; then
+  systemctl restart pummelchen-minecraft.service
+fi
 curl -fsS http://127.0.0.1:7788/ >/dev/null
 curl -fsS http://127.0.0.1:7792/metrics | grep -q pummelchen_minecraft_up
 sqlite3 "$PROJECT_DIR/data/minecraft_mods.sqlite" 'PRAGMA integrity_check;' | grep -q '^ok$'

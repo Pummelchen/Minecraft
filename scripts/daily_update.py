@@ -40,6 +40,23 @@ DEFAULT_RELEASE_ROOT = Path("/var/minecraft_mods/releases")
 DEFAULT_PUBLIC_DOWNLOADS = Path("/var/minecraft_mods/site/public/downloads")
 CLIENT_ZIP_NAME = "minecraft_26.1.2_client_macos_apple_silicon.zip"
 MRPACK_NAME = "pummelchen-server-26.1.2.mrpack"
+SERVER_DISABLED_FILE_MARKERS = {
+    "animalgarden_commonraven": "server watchdog crash from Common Raven flying AI chunk loads",
+    "automated_harvest": "server watchdog crash in automated_harvest HarvestTicker",
+    "guns++": "server watchdog crash from startup/load forceload function",
+    "incendium": "server watchdog crash from startup/load forceload function",
+    "mine_treasure": "server watchdog crash from startup/load forceload function",
+    "ruins_26": "server watchdog crash in RuinsMod.inspectChunk during chunk entry",
+}
+CLIENT_EXCLUDED_FILE_MARKERS = {
+    "animalgarden_commonraven": "server watchdog crash from Common Raven flying AI chunk loads",
+    "automated_harvest": "server watchdog crash in automated_harvest HarvestTicker",
+    "guns++": "server watchdog crash from startup/load forceload function",
+    "incendium": "server watchdog crash from startup/load forceload function",
+    "mine_treasure": "server watchdog crash from startup/load forceload function",
+    "ruins_26": "server watchdog crash in RuinsMod.inspectChunk during chunk entry",
+    "structory_towers": "server-side structure pack with client-incompatible overlay metadata",
+}
 COMPATIBLE_GAME_VERSIONS = ("26.1.2", "26.1.1", "26.1")
 USER_AGENT = "Codex Pummelchen Update Pipeline"
 
@@ -241,6 +258,67 @@ def write_manifest(root: Path, output_path: Path) -> None:
             handle.write("\n")
 
 
+def client_exclusion_reason(file_name: str) -> str | None:
+    normalized = file_name.lower().replace("-", "_")
+    for marker, reason in CLIENT_EXCLUDED_FILE_MARKERS.items():
+        if marker in normalized:
+            return reason
+    return None
+
+
+def server_disable_reason(file_name: str) -> str | None:
+    normalized = file_name.lower().replace("-", "_")
+    for marker, reason in SERVER_DISABLED_FILE_MARKERS.items():
+        if marker in normalized:
+            return reason
+    return None
+
+
+def enforce_server_disables(server_dir: Path) -> list[tuple[Path, str]]:
+    disabled_dir = server_dir / "mods.failed" / "pummelchen-server-disabled"
+    removed: list[tuple[Path, str]] = []
+    for section in ("mods", "server-datapacks"):
+        section_dir = server_dir / section
+        if not section_dir.exists():
+            continue
+        for path in sorted(section_dir.iterdir(), key=lambda item: item.name.lower()):
+            if not path.is_file():
+                continue
+            reason = server_disable_reason(path.name)
+            if not reason:
+                continue
+            target = disabled_dir / section / path.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                target.unlink()
+            shutil.move(str(path), str(target))
+            removed.append((target, reason))
+    return removed
+
+
+def enforce_client_exclusions(server_dir: Path) -> list[tuple[Path, str]]:
+    package_dir = server_dir / "client-package"
+    disabled_dir = package_dir / "pummelchen-server-disabled"
+    removed: list[tuple[Path, str]] = []
+    for section in ("mods", "resourcepacks", "shaderpacks"):
+        section_dir = package_dir / section
+        if not section_dir.exists():
+            continue
+        for path in sorted(section_dir.iterdir(), key=lambda item: item.name.lower()):
+            if not path.is_file():
+                continue
+            reason = client_exclusion_reason(path.name)
+            if not reason:
+                continue
+            target = disabled_dir / section / path.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                target.unlink()
+            shutil.move(str(path), str(target))
+            removed.append((target, reason))
+    return removed
+
+
 def create_mrpack(server_dir: Path) -> Path:
     package_dir = server_dir / "client-package"
     mrpack_path = server_dir / MRPACK_NAME
@@ -272,7 +350,8 @@ def create_mrpack(server_dir: Path) -> Path:
 
 def rebuild_client_package(server_dir: Path) -> tuple[Path, str]:
     package_dir = server_dir / "client-package"
-    sanitize_resource_pack_metadata.sanitize_path(package_dir, write=True)
+    enforce_client_exclusions(server_dir)
+    sanitize_resource_pack_metadata.sanitize_path(package_dir, write=True, target="client")
     write_manifest(package_dir, package_dir / "manifest.txt")
     create_mrpack(server_dir)
     zip_path = server_dir / CLIENT_ZIP_NAME
@@ -599,6 +678,7 @@ def apply_server_update(
     target = server_dir / server_section / downloaded.name
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(downloaded, target)
+    sanitize_resource_pack_metadata.sanitize_path(target, write=True, target="server")
     try:
         ok, test_status, error_count, severe, log_path = processor.run_server_test(label, timeout)
     except Exception as exc:
@@ -634,10 +714,11 @@ def apply_server_update(
         )
         return False
     client_backup = snapshot_client_package(server_dir, label)
+    client_exclusion = client_exclusion_reason(target.name)
     try:
         for name in old_files:
             remove_client_file(server_dir, name)
-        if not server_datapack:
+        if not server_datapack and not client_exclusion:
             client_target = server_dir / "client-package" / "mods" / target.name
             client_target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(target, client_target)
@@ -676,17 +757,19 @@ def apply_server_update(
         file_info=file_info,
         status="OK",
         server_status="OK",
-        client_package="Not included" if server_datapack else "Included",
+        client_package="Not included" if server_datapack or client_exclusion else "Included",
         installed_server=True,
-        included_client=not server_datapack,
+        included_client=not server_datapack and not client_exclusion,
         files=[target.name],
         note=(
             f"Daily updater accepted server datapack {target.name}; boot test {label} reached Done with no severe filtered errors."
             if server_datapack
+            else f"Daily updater accepted {target.name}; boot test {label} reached Done, but client package excluded it: {client_exclusion}."
+            if client_exclusion
             else f"Daily updater accepted {target.name}; boot test {label} reached Done with no severe filtered errors."
         ),
         entry_type="Datapack" if server_datapack else None,
-        installation="Server only" if server_datapack else None,
+        installation="Server only" if server_datapack or client_exclusion else None,
         file_role="server_datapack" if server_datapack else "server_file",
         path_hint=str(server_dir / server_section),
     )
@@ -711,6 +794,8 @@ def apply_server_update(
         notes=(
             f"Server datapack boot test passed; client package rebuilt without datapack: {package_path.name}"
             if server_datapack
+            else f"Server boot test passed; client package rebuilt without client-excluded file ({client_exclusion}): {package_path.name}"
+            if client_exclusion
             else f"Server boot test passed and client package rebuilt: {package_path.name}"
         ),
     )
@@ -834,6 +919,17 @@ def create_tested_release(args: argparse.Namespace, label: str, stats: dict[str,
         activate=True,
     )
     release_manager.create_release(release_args)
+    prune_args = argparse.Namespace(
+        db=args.db,
+        server_key=args.server_key,
+        release_root=args.release_root,
+        public_downloads=args.public_downloads,
+        actor="daily_update",
+        keep=2,
+        dry_run=False,
+        command="prune",
+    )
+    release_manager.prune_releases(prune_args)
 
 
 def rebuild(args: argparse.Namespace) -> int:
@@ -842,6 +938,18 @@ def rebuild(args: argparse.Namespace) -> int:
     print(f"client_zip={package_path}")
     print(f"client_zip_sha256={digest}")
     print(f"mrpack={mrpack}")
+    return 0
+
+
+def enforce_safety(args: argparse.Namespace) -> int:
+    server_removed = enforce_server_disables(args.server_dir)
+    client_removed = enforce_client_exclusions(args.server_dir)
+    print(f"server_removed={len(server_removed)}")
+    for path, reason in server_removed:
+        print(f"server_disabled={path.name}\treason={reason}")
+    print(f"client_removed={len(client_removed)}")
+    for path, reason in client_removed:
+        print(f"client_disabled={path.name}\treason={reason}")
     return 0
 
 
@@ -864,6 +972,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--no-create-release", action="store_true")
 
     sub.add_parser("rebuild-client", help="Rebuild zip, sha256, and mrpack from current client-package")
+    sub.add_parser("enforce-safety", help="Quarantine known bad server files and client-excluded files")
     return parser
 
 
@@ -873,6 +982,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return scan_and_apply(args)
     if args.command == "rebuild-client":
         return rebuild(args)
+    if args.command == "enforce-safety":
+        return enforce_safety(args)
     raise SystemExit(f"unknown command: {args.command}")
 
 

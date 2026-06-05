@@ -124,6 +124,82 @@ sha256_line "$SERVER/Pummelchen-Client-Installer.dmg" > "$SERVER/Pummelchen-Clie
 [ -f "$PUBLIC/current-release.json" ] || fail "current-release.json was not published"
 [ -f "$PUBLIC/releases/qa_release_1/client-sync-manifest.tsv" ] || fail "release client manifest was not published"
 [ ! -e "$PUBLIC/releases/qa_release_1/client-files/tools/upload-token.txt" ] || fail "upload token leaked into public release"
+"$PYTHON_BIN" - "$PUBLIC" <<'PY'
+from pathlib import Path
+import stat
+import sys
+
+public = Path(sys.argv[1])
+checks = [
+    public / "current-release.json",
+    public / "current-release.txt",
+    public / "releases/qa_release_1/client-sync-manifest.tsv",
+    public / "releases/qa_release_1/client-files/mods/client-mod-a.jar",
+]
+for path in checks:
+    mode = stat.S_IMODE(path.stat().st_mode)
+    assert mode == 0o644, f"{path} has public mode {oct(mode)}"
+for path in [public, public / "releases", public / "releases/qa_release_1"]:
+    mode = stat.S_IMODE(path.stat().st_mode)
+    assert mode == 0o755, f"{path} has directory mode {oct(mode)}"
+PY
+
+log "Client package exclusion fixture"
+EXCLUSION_SERVER="$TMP_DIR/exclusion-server"
+mkdir -p "$EXCLUSION_SERVER/mods" "$EXCLUSION_SERVER/client-package/mods" "$EXCLUSION_SERVER/client-package/resourcepacks" \
+  "$EXCLUSION_SERVER/client-package/shaderpacks"
+"$PYTHON_BIN" - "$EXCLUSION_SERVER/client-package/mods" <<'PY'
+from pathlib import Path
+import sys
+import zipfile
+
+mods = Path(sys.argv[1])
+for name in [
+    "keep-me.jar",
+    "animalgarden-commonraven-1.0.1-neoforge-26.1.2.10.jar",
+    "automated_harvest-26.1.2.jar",
+    "Structory_Towers_26.1_v1.0.16.jar",
+]:
+    with zipfile.ZipFile(mods / name, "w") as archive:
+        archive.writestr("pack.mcmeta", '{"pack":{"pack_format":94,"description":"fixture"}}')
+PY
+cp "$EXCLUSION_SERVER/client-package/mods/animalgarden-commonraven-1.0.1-neoforge-26.1.2.10.jar" "$EXCLUSION_SERVER/mods/"
+"$PYTHON_BIN" - "$EXCLUSION_SERVER/mods/ruins-26.1.2.2NF.jar" "$EXCLUSION_SERVER/client-package/mods/ruins-26.1.2.2NF.jar" <<'PY'
+from pathlib import Path
+import sys
+import zipfile
+
+for raw in sys.argv[1:]:
+    path = Path(raw)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("pack.mcmeta", '{"pack":{"pack_format":94,"description":"fixture"}}')
+PY
+"$PYTHON_BIN" "$ROOT_DIR/scripts/daily_update.py" --db "$DB" --server-dir "$EXCLUSION_SERVER" enforce-safety >/dev/null
+"$PYTHON_BIN" - "$EXCLUSION_SERVER/client-package/mods/animalgarden-commonraven-1.0.1-neoforge-26.1.2.10.jar" <<'PY'
+from pathlib import Path
+import sys
+import zipfile
+
+path = Path(sys.argv[1])
+path.parent.mkdir(parents=True, exist_ok=True)
+with zipfile.ZipFile(path, "w") as archive:
+    archive.writestr("pack.mcmeta", '{"pack":{"pack_format":94,"description":"fixture"}}')
+PY
+"$PYTHON_BIN" "$ROOT_DIR/scripts/daily_update.py" --db "$DB" --server-dir "$EXCLUSION_SERVER" rebuild-client >/dev/null
+[ -f "$EXCLUSION_SERVER/client-package/mods/keep-me.jar" ] || fail "client exclusion removed normal mod"
+[ ! -e "$EXCLUSION_SERVER/mods/animalgarden-commonraven-1.0.1-neoforge-26.1.2.10.jar" ] || fail "server safety left Common Raven jar active"
+[ ! -e "$EXCLUSION_SERVER/client-package/mods/animalgarden-commonraven-1.0.1-neoforge-26.1.2.10.jar" ] || fail "client exclusion left Common Raven jar active"
+[ ! -e "$EXCLUSION_SERVER/mods/ruins-26.1.2.2NF.jar" ] || fail "server safety left Ruins jar active"
+[ ! -e "$EXCLUSION_SERVER/client-package/mods/ruins-26.1.2.2NF.jar" ] || fail "client exclusion left Ruins jar active"
+[ ! -e "$EXCLUSION_SERVER/client-package/mods/automated_harvest-26.1.2.jar" ] || fail "client exclusion left automated harvest jar active"
+[ ! -e "$EXCLUSION_SERVER/client-package/mods/Structory_Towers_26.1_v1.0.16.jar" ] || fail "client exclusion left Structory Towers jar active"
+[ -f "$EXCLUSION_SERVER/mods.failed/pummelchen-server-disabled/mods/animalgarden-commonraven-1.0.1-neoforge-26.1.2.10.jar" ] || fail "server safety did not quarantine Common Raven"
+[ -f "$EXCLUSION_SERVER/client-package/pummelchen-server-disabled/mods/animalgarden-commonraven-1.0.1-neoforge-26.1.2.10.jar" ] || fail "client exclusion did not quarantine Common Raven"
+[ -f "$EXCLUSION_SERVER/mods.failed/pummelchen-server-disabled/mods/ruins-26.1.2.2NF.jar" ] || fail "server safety did not quarantine Ruins"
+[ -f "$EXCLUSION_SERVER/client-package/pummelchen-server-disabled/mods/ruins-26.1.2.2NF.jar" ] || fail "client exclusion did not quarantine Ruins"
+[ -f "$EXCLUSION_SERVER/client-package/pummelchen-server-disabled/mods/automated_harvest-26.1.2.jar" ] || fail "client exclusion did not quarantine automated harvest"
+[ -f "$EXCLUSION_SERVER/client-package/pummelchen-server-disabled/mods/Structory_Towers_26.1_v1.0.16.jar" ] || fail "client exclusion did not quarantine Structory Towers"
 
 log "Rollback fixture"
 printf 'mod-b\n' > "$SERVER/mods/mod-b.jar"
@@ -137,6 +213,20 @@ printf 'mod-b\n' > "$SERVER/mods/mod-b.jar"
   --db "$DB" --server-dir "$SERVER" --release-root "$RELEASES" --public-downloads "$PUBLIC" \
   validate qa_release_1
 [ ! -f "$SERVER/mods/mod-b.jar" ] || fail "rollback did not remove newer mod"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/release_manager.py" \
+  --db "$DB" --server-dir "$SERVER" --release-root "$RELEASES" --public-downloads "$PUBLIC" \
+  prune --keep 0 >/dev/null
+[ -d "$RELEASES/qa_release_1" ] || fail "release prune removed active release"
+[ ! -e "$RELEASES/qa_release_2" ] || fail "release prune kept inactive release with keep=0"
+[ ! -e "$PUBLIC/releases/qa_release_2" ] || fail "release prune kept inactive public release link"
+"$PYTHON_BIN" - "$DB" <<'PY' || fail "release prune did not mark inactive release"
+import sqlite3
+import sys
+
+conn = sqlite3.connect(sys.argv[1])
+status = conn.execute("SELECT status FROM pack_releases WHERE release_id = 'qa_release_2'").fetchone()[0]
+assert status == "pruned", status
+PY
 
 log "Client manifest checker"
 MANIFEST_PACKAGE="$TMP_DIR/manifest-package"
@@ -198,8 +288,64 @@ pack = {
 with zipfile.ZipFile(sys.argv[1], "w") as archive:
     archive.writestr("pack.mcmeta", json.dumps(pack))
 PY
+"$PYTHON_BIN" - "$RESOURCE_PACKAGE/resourcepacks/ranged-pack.jar" <<'PY'
+import json
+import sys
+import zipfile
+
+pack = {
+    "pack": {
+        "pack_format": 94,
+        "description": "fixture",
+        "supported_formats": [81, 94],
+        "min_format": 81,
+        "max_format": 94,
+    },
+    "overlays": {
+        "entries": [
+            {
+                "directory": "1-21-5-overlay",
+                "min_format": 81,
+                "max_format": 94,
+            },
+            {
+                "directory": "1-21-11-overlay",
+                "min_format": [101, 1],
+                "max_format": [101, 1],
+            }
+        ]
+    },
+}
+with zipfile.ZipFile(sys.argv[1], "w") as archive:
+    archive.writestr("pack.mcmeta", json.dumps(pack))
+PY
+"$PYTHON_BIN" - "$RESOURCE_PACKAGE/resourcepacks/new-schema-pack.jar" <<'PY'
+import json
+import sys
+import zipfile
+
+pack = {
+    "pack": {
+        "description": "fixture",
+        "min_format": [94, 1],
+        "max_format": [101, 1],
+    },
+    "overlays": {
+        "entries": [
+            {
+                "directory": "26-1-overlay",
+                "min_format": [101, 1],
+                "max_format": [101, 1],
+                "formats": [101, 101],
+            }
+        ]
+    },
+}
+with zipfile.ZipFile(sys.argv[1], "w") as archive:
+    archive.writestr("pack.mcmeta", json.dumps(pack))
+PY
 "$PYTHON_BIN" "$ROOT_DIR/scripts/sanitize_resource_pack_metadata.py" "$RESOURCE_PACKAGE" --write \
-  | grep -q 'resource_pack_metadata_changes=2' || fail "resource pack sanitizer did not report changes"
+  | grep -q 'resource_pack_metadata_changes=4' || fail "resource pack sanitizer did not report changes"
 "$PYTHON_BIN" - "$RESOURCE_PACKAGE/resourcepacks/bad-pack.zip" <<'PY'
 import json
 import sys
@@ -207,7 +353,9 @@ import zipfile
 
 with zipfile.ZipFile(sys.argv[1]) as archive:
     metadata = json.loads(archive.read("pack.mcmeta"))
-assert "formats" not in metadata["overlays"]["entries"][0], metadata
+assert metadata["overlays"]["entries"][0]["formats"] == [84, 999], metadata
+assert metadata["overlays"]["entries"][0]["min_format"] == 84, metadata
+assert metadata["overlays"]["entries"][0]["max_format"] == 999, metadata
 PY
 "$PYTHON_BIN" - "$RESOURCE_PACKAGE/resourcepacks/legacy-missing-formats.zip" <<'PY'
 import json
@@ -218,6 +366,134 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     metadata = json.loads(archive.read("pack.mcmeta"))
 entry = metadata["overlays"]["entries"][1]
 assert entry["formats"] == [71, 512], metadata
+for item in metadata["overlays"]["entries"]:
+    assert "min_format" in item, metadata
+    assert "max_format" in item, metadata
+PY
+"$PYTHON_BIN" - "$RESOURCE_PACKAGE/resourcepacks/ranged-pack.jar" <<'PY'
+import json
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    metadata = json.loads(archive.read("pack.mcmeta"))
+assert metadata["pack"]["supported_formats"] == [81, 94], metadata
+assert "min_format" not in metadata["pack"], metadata
+assert "max_format" not in metadata["pack"], metadata
+assert "formats" not in metadata["overlays"]["entries"][0], metadata
+assert "formats" not in metadata["overlays"]["entries"][1], metadata
+PY
+"$PYTHON_BIN" - "$RESOURCE_PACKAGE/resourcepacks/new-schema-pack.jar" <<'PY'
+import json
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    metadata = json.loads(archive.read("pack.mcmeta"))
+assert "formats" not in metadata["overlays"]["entries"][0], metadata
+PY
+CLIENT_NEW_SCHEMA_PACK="$RESOURCE_PACKAGE/resourcepacks/client-new-schema-pack.jar"
+"$PYTHON_BIN" - "$CLIENT_NEW_SCHEMA_PACK" <<'PY'
+import json
+import sys
+import zipfile
+
+pack = {
+    "pack": {
+        "pack_format": 48,
+        "description": "fixture",
+        "supported_formats": [48, 101],
+        "min_format": 48,
+        "max_format": [101, 1],
+    },
+    "overlays": {
+        "entries": [
+            {
+                "directory": "1-21-5-overlay",
+                "min_format": 71,
+                "max_format": [101, 1],
+                "formats": [71, 101],
+            },
+            {
+                "directory": "1-21-11-overlay",
+                "min_format": [94, 1],
+                "max_format": [101, 1],
+                "formats": [94, 101],
+            },
+        ]
+    },
+}
+with zipfile.ZipFile(sys.argv[1], "w") as archive:
+    archive.writestr("pack.mcmeta", json.dumps(pack))
+PY
+"$PYTHON_BIN" "$ROOT_DIR/scripts/sanitize_resource_pack_metadata.py" "$CLIENT_NEW_SCHEMA_PACK" --target client --write \
+  | grep -q 'resource_pack_metadata_changes=1' || fail "client resource pack sanitizer did not report changes"
+"$PYTHON_BIN" - "$CLIENT_NEW_SCHEMA_PACK" <<'PY'
+import json
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    metadata = json.loads(archive.read("pack.mcmeta"))
+assert metadata["pack"]["supported_formats"] == [48, 101], metadata
+assert "min_format" not in metadata["pack"], metadata
+assert "max_format" not in metadata["pack"], metadata
+assert metadata["overlays"]["entries"][0]["formats"] == [71, 101], metadata
+assert metadata["overlays"]["entries"][1]["formats"] == [94, 101], metadata
+for item in metadata["overlays"]["entries"]:
+    assert "min_format" in item, metadata
+    assert "max_format" in item, metadata
+PY
+CLIENT_MIXED_SCHEMA_PACK="$RESOURCE_PACKAGE/resourcepacks/client-mixed-schema-pack.jar"
+"$PYTHON_BIN" - "$CLIENT_MIXED_SCHEMA_PACK" <<'PY'
+import json
+import sys
+import zipfile
+
+pack = {
+    "pack": {
+        "pack_format": 15,
+        "description": "fixture",
+        "supported_formats": [15, 101],
+        "min_format": 15,
+        "max_format": [101, 1],
+    },
+    "overlays": {
+        "entries": [
+            {
+                "directory": "legacy-overlay",
+                "min_format": 48,
+                "max_format": 48,
+            },
+            {
+                "directory": "newer-overlay",
+                "min_format": 71,
+                "max_format": [101, 1],
+            },
+        ]
+    },
+}
+with zipfile.ZipFile(sys.argv[1], "w") as archive:
+    archive.writestr("pack.mcmeta", json.dumps(pack))
+PY
+"$PYTHON_BIN" "$ROOT_DIR/scripts/sanitize_resource_pack_metadata.py" "$CLIENT_MIXED_SCHEMA_PACK" --target client --write \
+  | grep -q 'resource_pack_metadata_changes=1' || fail "client mixed resource pack sanitizer did not report changes"
+"$PYTHON_BIN" - "$CLIENT_MIXED_SCHEMA_PACK" <<'PY'
+import json
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    metadata = json.loads(archive.read("pack.mcmeta"))
+assert metadata["pack"]["supported_formats"] == [15, 101], metadata
+assert "min_format" not in metadata["pack"], metadata
+assert "max_format" not in metadata["pack"], metadata
+assert metadata["overlays"]["entries"][0]["formats"] == [48, 48], metadata
+assert metadata["overlays"]["entries"][1]["formats"] == [71, 101], metadata
+assert metadata["overlays"]["entries"][0]["min_format"] == 48, metadata
+assert metadata["overlays"]["entries"][0]["max_format"] == 48, metadata
+assert metadata["overlays"]["entries"][1]["min_format"] == 71, metadata
+assert metadata["overlays"]["entries"][1]["max_format"] == [101, 1], metadata
 PY
 
 log "Client mod dependency checker"
@@ -281,6 +557,70 @@ if "$PYTHON_BIN" "$ROOT_DIR/scripts/check_client_mod_dependencies.py" "$DEP_PACK
   fail "dependency checker did not catch missing client dependency"
 fi
 rm -f /tmp/pummelchen-depcheck.$$
+
+log "Auto-updater cleanup fixture"
+AUTO_REMOTE="$TMP_DIR/auto-remote"
+AUTO_MC="$TMP_DIR/auto-mc"
+AUTO_HOME="$TMP_DIR/auto-home"
+AUTO_LOGS="$TMP_DIR/auto-logs"
+AUTO_CACHE="$TMP_DIR/auto-cache"
+mkdir -p "$AUTO_REMOTE/downloads/client-files/mods" \
+  "$AUTO_REMOTE/downloads/client-files/resourcepacks" \
+  "$AUTO_REMOTE/downloads/client-files/shaderpacks" \
+  "$AUTO_MC/mods" "$AUTO_MC/resourcepacks/Old Pack" "$AUTO_MC/shaderpacks/OldShader" \
+  "$AUTO_MC/config"
+printf 'wanted mod\n' > "$AUTO_REMOTE/downloads/client-files/mods/wanted.jar"
+printf 'wanted resource\n' > "$AUTO_REMOTE/downloads/client-files/resourcepacks/Wanted Pack[1].zip"
+printf 'wanted shader\n' > "$AUTO_REMOTE/downloads/client-files/shaderpacks/wanted-shader.zip"
+printf 'old mod\n' > "$AUTO_MC/mods/old.jar"
+printf 'old resource\n' > "$AUTO_MC/resourcepacks/Old Pack/pack.mcmeta"
+printf 'old shader\n' > "$AUTO_MC/shaderpacks/OldShader/shaders.properties"
+printf 'resourcePacks:["vanilla","file/Old Pack"]\nincompatibleResourcePacks:["file/Old Pack"]\n' > "$AUTO_MC/options.txt"
+printf 'shaderPack=OldShader\n' > "$AUTO_MC/optionsshaders.txt"
+printf 'shaderPack=OldShader\n' > "$AUTO_MC/config/iris.properties"
+printf 'showLoadWarnings = true\n' > "$AUTO_MC/config/neoforge-client.toml"
+printf 'showLoadWarnings = true\n' > "$AUTO_MC/config/forge-client.toml"
+printf 'showCheckScreen = true\n' > "$AUTO_MC/config/yuushya-client.toml"
+mkdir -p "$AUTO_MC/config/underground_village"
+printf '{"enableInGameMessage":{"value":true}}\n' > "$AUTO_MC/config/underground_village/common.json"
+printf '{"general":{"showTutorial":{"value":true}}}\n' > "$AUTO_MC/config/mtsconfigclient.json"
+{
+  printf 'mods\twanted.jar\t%s\tsha256:%s\tfile://%s\n' \
+    "$(wc -c < "$AUTO_REMOTE/downloads/client-files/mods/wanted.jar" | tr -d '[:space:]')" \
+    "$(sha256_value "$AUTO_REMOTE/downloads/client-files/mods/wanted.jar")" \
+    "$AUTO_REMOTE/downloads/client-files/mods/wanted.jar"
+  printf 'resourcepacks\tWanted Pack[1].zip\t%s\tsha256:%s\tdownloads/client-files/resourcepacks/Wanted Pack[1].zip\n' \
+    "$(wc -c < "$AUTO_REMOTE/downloads/client-files/resourcepacks/Wanted Pack[1].zip" | tr -d '[:space:]')" \
+    "$(sha256_value "$AUTO_REMOTE/downloads/client-files/resourcepacks/Wanted Pack[1].zip")"
+  printf 'shaderpacks\twanted-shader.zip\t%s\tsha256:%s\tfile://%s\n' \
+    "$(wc -c < "$AUTO_REMOTE/downloads/client-files/shaderpacks/wanted-shader.zip" | tr -d '[:space:]')" \
+    "$(sha256_value "$AUTO_REMOTE/downloads/client-files/shaderpacks/wanted-shader.zip")" \
+    "$AUTO_REMOTE/downloads/client-files/shaderpacks/wanted-shader.zip"
+} > "$AUTO_REMOTE/client-sync-manifest.tsv"
+PUMMELCHEN_SYNC_MANIFEST_URL="file://$AUTO_REMOTE/client-sync-manifest.tsv" \
+  PUMMELCHEN_BASE_URL="file://$AUTO_REMOTE" \
+  MINECRAFT_DIR="$AUTO_MC" \
+  PUMMELCHEN_HOME="$AUTO_HOME" \
+  PUMMELCHEN_LOG_DIR="$AUTO_LOGS" \
+  PUMMELCHEN_CACHE_DIR="$AUTO_CACHE" \
+  PUMMELCHEN_LOG_TO_STDOUT=1 \
+  bash "$ROOT_DIR/client-package/tools/pummelchen-auto-update.sh" --quiet >/dev/null
+[ -f "$AUTO_MC/mods/wanted.jar" ] || fail "auto-updater did not install wanted mod"
+[ -f "$AUTO_MC/resourcepacks/Wanted Pack[1].zip" ] || fail "auto-updater did not install wanted resource pack"
+[ -f "$AUTO_MC/shaderpacks/wanted-shader.zip" ] || fail "auto-updater did not install wanted shader pack"
+[ ! -e "$AUTO_MC/mods/old.jar" ] || fail "auto-updater left unmanaged old mod active"
+[ ! -e "$AUTO_MC/resourcepacks/Old Pack" ] || fail "auto-updater left unmanaged resource pack active"
+[ ! -e "$AUTO_MC/shaderpacks/OldShader" ] || fail "auto-updater left unmanaged shader pack active"
+find "$AUTO_MC" -maxdepth 2 -path '*before-pummelchen-auto-*/*' -print | grep -q 'Old Pack' || fail "auto-updater did not quarantine old resource pack"
+grep -Fq 'resourcePacks:["vanilla"]' "$AUTO_MC/options.txt" || fail "auto-updater did not reset active resource packs"
+grep -Fq 'incompatibleResourcePacks:[]' "$AUTO_MC/options.txt" || fail "auto-updater did not reset incompatible resource packs"
+grep -Fxq 'shaderPack=' "$AUTO_MC/optionsshaders.txt" || fail "auto-updater did not disable options shader"
+grep -Fxq 'shaderPack=' "$AUTO_MC/config/iris.properties" || fail "auto-updater did not disable Iris shader"
+grep -Fxq 'showLoadWarnings=false' "$AUTO_MC/config/neoforge-client.toml" || fail "auto-updater did not quiet NeoForge load warnings"
+grep -Fxq 'showLoadWarnings=false' "$AUTO_MC/config/forge-client.toml" || fail "auto-updater did not quiet Forge load warnings"
+grep -Fxq 'showCheckScreen=false' "$AUTO_MC/config/yuushya-client.toml" || fail "auto-updater did not quiet Yuushya check screen"
+grep -Fq '"enableInGameMessage":{"value":false}' "$AUTO_MC/config/underground_village/common.json" || fail "auto-updater did not disable underground village message"
+grep -Fq '"showTutorial":{"value":false}' "$AUTO_MC/config/mtsconfigclient.json" || fail "auto-updater did not disable MTS tutorial"
 
 log "macOS client smoke launcher fixture"
 SMOKE_MC="$TMP_DIR/client-smoke-mc"

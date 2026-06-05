@@ -1,5 +1,5 @@
 #!/bin/bash
-set -uo pipefail
+set -euo pipefail
 
 CHECK_ONLY=0
 QUIET=0
@@ -13,21 +13,36 @@ done
 DEFAULT_BASE_URL="http://91.99.176.243:7788"
 DEFAULT_ZIP_NAME="minecraft_26.1.2_client_macos_apple_silicon.zip"
 CONFIG_PATH="${PUMMELCHEN_CONFIG_PATH:-$HOME/Library/Application Support/Pummelchen/client.conf}"
+ENV_PUMMELCHEN_BASE_URL="${PUMMELCHEN_BASE_URL:-}"
+ENV_BASE_URL="${BASE_URL:-}"
+ENV_PUMMELCHEN_CLIENT_ZIP_NAME="${PUMMELCHEN_CLIENT_ZIP_NAME:-}"
+ENV_CLIENT_ZIP_NAME="${CLIENT_ZIP_NAME:-}"
+ENV_MINECRAFT_DIR="${MINECRAFT_DIR:-}"
+ENV_MC_DIR="${MC_DIR:-}"
+ENV_PUMMELCHEN_HOME="${PUMMELCHEN_HOME:-}"
+ENV_PUMMELCHEN_LOG_DIR="${PUMMELCHEN_LOG_DIR:-}"
+ENV_PUMMELCHEN_CACHE_DIR="${PUMMELCHEN_CACHE_DIR:-}"
+ENV_PUMMELCHEN_SERVER_NAME="${PUMMELCHEN_SERVER_NAME:-}"
+ENV_SERVER_NAME="${SERVER_NAME:-}"
+ENV_PUMMELCHEN_SERVER_ADDRESS="${PUMMELCHEN_SERVER_ADDRESS:-}"
+ENV_SERVER_ADDRESS="${SERVER_ADDRESS:-}"
+ENV_PUMMELCHEN_JAVA_BIN="${PUMMELCHEN_JAVA_BIN:-}"
+ENV_JAVA_BIN="${JAVA_BIN:-}"
 
 if [ -f "$CONFIG_PATH" ]; then
   # shellcheck source=/dev/null
   . "$CONFIG_PATH"
 fi
 
-BASE_URL="${PUMMELCHEN_BASE_URL:-${BASE_URL:-$DEFAULT_BASE_URL}}"
-CLIENT_ZIP_NAME="${PUMMELCHEN_CLIENT_ZIP_NAME:-${CLIENT_ZIP_NAME:-$DEFAULT_ZIP_NAME}}"
-MC_DIR="${MINECRAFT_DIR:-${MC_DIR:-$HOME/Library/Application Support/minecraft}}"
-PUMMELCHEN_HOME="${PUMMELCHEN_HOME:-$HOME/Library/Application Support/Pummelchen}"
-LOG_DIR="${PUMMELCHEN_LOG_DIR:-$HOME/Library/Logs/Pummelchen}"
-CACHE_DIR="${PUMMELCHEN_CACHE_DIR:-$HOME/Library/Caches/Pummelchen}"
-SERVER_NAME="${PUMMELCHEN_SERVER_NAME:-${SERVER_NAME:-Pummelchen Server}}"
-SERVER_ADDRESS="${PUMMELCHEN_SERVER_ADDRESS:-${SERVER_ADDRESS:-91.99.176.243:25565}}"
-JAVA_BIN="${PUMMELCHEN_JAVA_BIN:-${JAVA_BIN:-java}}"
+BASE_URL="${ENV_PUMMELCHEN_BASE_URL:-${ENV_BASE_URL:-${PUMMELCHEN_BASE_URL:-${BASE_URL:-$DEFAULT_BASE_URL}}}}"
+CLIENT_ZIP_NAME="${ENV_PUMMELCHEN_CLIENT_ZIP_NAME:-${ENV_CLIENT_ZIP_NAME:-${PUMMELCHEN_CLIENT_ZIP_NAME:-${CLIENT_ZIP_NAME:-$DEFAULT_ZIP_NAME}}}}"
+MC_DIR="${ENV_MINECRAFT_DIR:-${ENV_MC_DIR:-${MINECRAFT_DIR:-${MC_DIR:-$HOME/Library/Application Support/minecraft}}}}"
+PUMMELCHEN_HOME="${ENV_PUMMELCHEN_HOME:-${PUMMELCHEN_HOME:-$HOME/Library/Application Support/Pummelchen}}"
+LOG_DIR="${ENV_PUMMELCHEN_LOG_DIR:-${PUMMELCHEN_LOG_DIR:-$HOME/Library/Logs/Pummelchen}}"
+CACHE_DIR="${ENV_PUMMELCHEN_CACHE_DIR:-${PUMMELCHEN_CACHE_DIR:-$HOME/Library/Caches/Pummelchen}}"
+SERVER_NAME="${ENV_PUMMELCHEN_SERVER_NAME:-${ENV_SERVER_NAME:-${PUMMELCHEN_SERVER_NAME:-${SERVER_NAME:-Pummelchen Server}}}}"
+SERVER_ADDRESS="${ENV_PUMMELCHEN_SERVER_ADDRESS:-${ENV_SERVER_ADDRESS:-${PUMMELCHEN_SERVER_ADDRESS:-${SERVER_ADDRESS:-91.99.176.243:25565}}}}"
+JAVA_BIN="${ENV_PUMMELCHEN_JAVA_BIN:-${ENV_JAVA_BIN:-${PUMMELCHEN_JAVA_BIN:-${JAVA_BIN:-java}}}}"
 STATE_DIR="$MC_DIR/.pummelchen"
 RELEASE_POINTER_URL="${PUMMELCHEN_RELEASE_POINTER_URL:-${BASE_URL%/}/downloads/current-release.json}"
 MANIFEST_URL="${PUMMELCHEN_SYNC_MANIFEST_URL:-}"
@@ -138,6 +153,20 @@ verify_hash() {
   [ "$actual" = "$expected" ]
 }
 
+url_escape_path() {
+  local value="$1"
+  value="${value//%/%25}"
+  value="${value// /%20}"
+  value="${value//\[/%5B}"
+  value="${value//\]/%5D}"
+  value="${value//\"/%22}"
+  value="${value//#/%23}"
+  value="${value//\?/%3F}"
+  value="${value//</%3C}"
+  value="${value//>/%3E}"
+  printf '%s\n' "$value"
+}
+
 manifest_to_keys() {
   awk -F '\t' 'NF >= 5 && $1 !~ /^#/ { print $1 "\t" $2 }' "$1"
 }
@@ -192,37 +221,122 @@ remove_stale_managed_files() {
     fi
     path="$MC_DIR/$section/$name"
     if [ -e "$path" ]; then
-      rm -f "$path" || fail "Could not remove stale managed file: $path"
+      rm -rf "$path" || fail "Could not remove stale managed file: $path"
       removed=$((removed + 1))
     fi
   done < "$previous_keys"
   log "Removed $removed stale managed file(s)."
 }
 
-move_unmanaged_mods() {
+move_unmanaged_files() {
   local wanted_manifest="$1"
-  local wanted_mods="$2"
-  awk -F '\t' 'NF >= 5 && $1 == "mods" { print $2 }' "$wanted_manifest" > "$wanted_mods"
+  local wanted_dir="$2"
+  local section
+  for section in mods resourcepacks shaderpacks; do
+    local wanted_names="$wanted_dir/$section.txt"
+    awk -F '\t' -v section="$section" 'NF >= 5 && $1 == section { print $2 }' "$wanted_manifest" > "$wanted_names"
 
-  local dst="$MC_DIR/mods"
-  [ -d "$dst" ] || return 0
-  local backup_dir="$MC_DIR/mods.before-pummelchen-auto-$STAMP"
-  local moved=0
-  shopt -s nullglob
-  for path in "$dst"/*.jar; do
-    local name
-    name="$(basename "$path")"
-    if ! grep -Fxq "$name" "$wanted_mods"; then
-      mkdir -p "$backup_dir"
-      mv "$path" "$backup_dir/$name" || fail "Could not move unmanaged mod jar: $path"
-      moved=$((moved + 1))
+    local dst="$MC_DIR/$section"
+    [ -d "$dst" ] || continue
+    local backup_dir="$MC_DIR/$section.before-pummelchen-auto-$STAMP"
+    local moved=0
+    shopt -s nullglob
+    for path in "$dst"/*; do
+      local name
+      name="$(basename "$path")"
+      [ "$name" = ".DS_Store" ] && continue
+      if [ "$section" = "mods" ]; then
+        case "$name" in
+          *.jar|*.zip) ;;
+          *) continue ;;
+        esac
+      fi
+      if ! grep -Fxq "$name" "$wanted_names"; then
+        mkdir -p "$backup_dir"
+        mv "$path" "$backup_dir/$name" || fail "Could not move unmanaged $section item: $path"
+        moved=$((moved + 1))
+      fi
+    done
+    shopt -u nullglob
+    if [ "$moved" -gt 0 ]; then
+      log "Moved $moved unmanaged $section item(s) to: $backup_dir"
     fi
   done
-  shopt -u nullglob
-  if [ "$moved" -gt 0 ]; then
-    log "Moved $moved unmanaged mod jar(s) to: $backup_dir"
-  fi
 }
+
+set_options_line() {
+  local path="$1"
+  local key="$2"
+  local value="$3"
+  mkdir -p "$(dirname "$path")"
+  [ -f "$path" ] || : > "$path"
+  local tmp="$path.pummelchen.tmp"
+  awk -v key="$key" -v value="$value" '
+    BEGIN { replaced = 0 }
+    index($0, key ":") == 1 {
+      print key ":" value
+      replaced = 1
+      next
+    }
+    { print }
+    END {
+      if (!replaced) print key ":" value
+    }
+  ' "$path" > "$tmp" && mv "$tmp" "$path"
+}
+
+set_property_line() {
+  local path="$1"
+  local key="$2"
+  local value="$3"
+  [ -f "$path" ] || return 0
+  local tmp="$path.pummelchen.tmp"
+  awk -v key="$key" -v value="$value" '
+    BEGIN { replaced = 0 }
+    index($0, key "=") == 1 {
+      print key "=" value
+      replaced = 1
+      next
+    }
+    { print }
+    END {
+      if (!replaced) print key "=" value
+    }
+  ' "$path" > "$tmp" && mv "$tmp" "$path"
+}
+
+set_json_boolean_value() {
+  local path="$1"
+  local key="$2"
+  local value="$3"
+  [ -f "$path" ] || return 0
+  command -v perl >/dev/null 2>&1 || return 0
+  perl -0pi -e "s/(\\\"$key\\\"\\s*:\\s*\\{\\s*\\\"value\\\"\\s*:\\s*)(true|false)/\${1}$value/s" "$path" || true
+}
+
+apply_pummelchen_client_defaults() {
+  set_property_line "$MC_DIR/config/neoforge-client.toml" "showLoadWarnings" "false"
+  set_property_line "$MC_DIR/config/forge-client.toml" "showLoadWarnings" "false"
+  set_property_line "$MC_DIR/config/yuushya-client.toml" "showCheckScreen" "false"
+  set_json_boolean_value "$MC_DIR/config/underground_village/common.json" "enableInGameMessage" "false"
+  set_json_boolean_value "$MC_DIR/config/mtsconfigclient.json" "showTutorial" "false"
+  log "Applied Pummelchen client defaults for quieter first launch."
+}
+
+reset_client_visual_state() {
+  local options="$MC_DIR/options.txt"
+  if [ -f "$options" ]; then
+    cp "$options" "$options.before-pummelchen-auto-$STAMP"
+  fi
+  set_options_line "$options" "resourcePacks" '["vanilla"]'
+  set_options_line "$options" "incompatibleResourcePacks" '[]'
+  set_property_line "$MC_DIR/optionsshaders.txt" "shaderPack" ""
+  set_property_line "$MC_DIR/config/iris.properties" "shaderPack" ""
+  set_property_line "$MC_DIR/iris.properties" "shaderPack" ""
+  log "Reset active resource packs to vanilla and disabled active shader selection."
+}
+
+SYNC_CHANGED_COUNT=0
 
 sync_files() {
   local wanted_manifest="$1"
@@ -246,8 +360,8 @@ sync_files() {
     tmp="$download_dir/$section/$name"
     mkdir -p "$(dirname "$tmp")"
     case "$url_path" in
-      http://*|https://*) file_url="$url_path" ;;
-      *) file_url="${BASE_URL%/}/${url_path#/}" ;;
+      http://*|https://*|file://*) file_url="$url_path" ;;
+      *) file_url="${BASE_URL%/}/$(url_escape_path "${url_path#/}")" ;;
     esac
     log "Downloading $section/$name"
     download_url "$file_url" "$tmp" || fail "Could not download $file_url"
@@ -257,7 +371,7 @@ sync_files() {
     verified=$((verified + 1))
   done < "$wanted_manifest"
   log "Verified $verified file(s); changed $changed file(s)."
-  printf '%s\n' "$changed"
+  SYNC_CHANGED_COUNT="$changed"
 }
 
 repair_server_entry() {
@@ -305,7 +419,7 @@ WANTED_MANIFEST="$WORK_DIR/client-sync-manifest.tsv"
 RELEASE_JSON="$WORK_DIR/current-release.json"
 CURRENT_KEYS="$WORK_DIR/current.keys"
 PREVIOUS_KEYS="$WORK_DIR/previous.keys"
-WANTED_MODS="$WORK_DIR/wanted-mods.txt"
+WANTED_NAMES_DIR="$WORK_DIR/wanted-names"
 DOWNLOAD_DIR="$WORK_DIR/downloads"
 
 resolve_release_manifest "$RELEASE_JSON"
@@ -329,10 +443,13 @@ if [ "$CHECK_ONLY" = "1" ]; then
   exit 0
 fi
 
-mkdir -p "$MC_DIR/mods" "$MC_DIR/resourcepacks" "$MC_DIR/shaderpacks" "$DOWNLOAD_DIR"
+mkdir -p "$MC_DIR/mods" "$MC_DIR/resourcepacks" "$MC_DIR/shaderpacks" "$DOWNLOAD_DIR" "$WANTED_NAMES_DIR"
 remove_stale_managed_files "$WANTED_MANIFEST" "$CURRENT_KEYS" "$PREVIOUS_KEYS"
-CHANGED_COUNT="$(sync_files "$WANTED_MANIFEST" "$DOWNLOAD_DIR" | tail -n 1)"
-move_unmanaged_mods "$WANTED_MANIFEST" "$WANTED_MODS"
+sync_files "$WANTED_MANIFEST" "$DOWNLOAD_DIR"
+CHANGED_COUNT="$SYNC_CHANGED_COUNT"
+move_unmanaged_files "$WANTED_MANIFEST" "$WANTED_NAMES_DIR"
+reset_client_visual_state
+apply_pummelchen_client_defaults
 repair_server_entry
 
 cp "$WANTED_MANIFEST" "$STATE_DIR/client-sync-manifest.tsv"

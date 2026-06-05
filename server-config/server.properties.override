@@ -1,0 +1,4 @@
+view-distance=6
+simulation-distance=4
+sync-chunk-writes=false
+max-tick-time=60000
