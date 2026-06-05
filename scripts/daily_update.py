@@ -43,6 +43,8 @@ MRPACK_NAME = "pummelchen-server-26.1.2.mrpack"
 SERVER_DISABLED_FILE_MARKERS = {
     "animalgarden_commonraven": "server watchdog crash from Common Raven flying AI chunk loads",
     "automated_harvest": "server watchdog crash in automated_harvest HarvestTicker",
+    "automotives": "missing mandatory Create 6.0.0+ dependency",
+    "better_snowy_biome": "server watchdog crash from scheduled fillbiome functions",
     "guns++": "server watchdog crash from startup/load forceload function",
     "incendium": "server watchdog crash from startup/load forceload function",
     "mine_treasure": "server watchdog crash from startup/load forceload function",
@@ -51,6 +53,8 @@ SERVER_DISABLED_FILE_MARKERS = {
 CLIENT_EXCLUDED_FILE_MARKERS = {
     "animalgarden_commonraven": "server watchdog crash from Common Raven flying AI chunk loads",
     "automated_harvest": "server watchdog crash in automated_harvest HarvestTicker",
+    "automotives": "missing mandatory Create 6.0.0+ dependency",
+    "better_snowy_biome": "server watchdog crash from scheduled fillbiome functions",
     "guns++": "server watchdog crash from startup/load forceload function",
     "incendium": "server watchdog crash from startup/load forceload function",
     "mine_treasure": "server watchdog crash from startup/load forceload function",
@@ -348,6 +352,50 @@ def create_mrpack(server_dir: Path) -> Path:
     return mrpack_path
 
 
+def should_publish_client_file(relative_path: Path) -> bool:
+    parts = relative_path.parts
+    if not parts:
+        return False
+    blocked_parts = {
+        "__MACOSX",
+        ".git",
+        ".DS_Store",
+        "manifest-snapshots",
+        "pummelchen-server-disabled",
+    }
+    if any(part in blocked_parts for part in parts):
+        return False
+    if any(part.endswith(".rollback") for part in parts):
+        return False
+    if relative_path.name in {".DS_Store", "upload-token.txt"}:
+        return False
+    if parts[0] in {"mods", "resourcepacks", "shaderpacks"}:
+        return len(parts) == 2 and bool(relative_path.suffix)
+    if parts[0] == "tools":
+        return len(parts) == 2 and relative_path.name in {
+            "AddPummelchenServer.java",
+            "pummelchen-auto-update.sh",
+            "pummelchen-client-doctor.sh",
+            "upload-token.txt.example",
+        }
+    return len(parts) == 1 and relative_path.name in {
+        "Install Mods.command",
+        "README.txt",
+        "manifest.txt",
+    }
+
+
+def create_client_zip(package_dir: Path, zip_path: Path) -> None:
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(package_dir.rglob("*"), key=lambda item: item.relative_to(package_dir).as_posix().lower()):
+            if not path.is_file():
+                continue
+            relative_path = path.relative_to(package_dir)
+            if not should_publish_client_file(relative_path):
+                continue
+            archive.write(path, f"client-package/{relative_path.as_posix()}")
+
+
 def rebuild_client_package(server_dir: Path) -> tuple[Path, str]:
     package_dir = server_dir / "client-package"
     enforce_client_exclusions(server_dir)
@@ -360,7 +408,7 @@ def rebuild_client_package(server_dir: Path) -> tuple[Path, str]:
         zip_path.unlink()
     if sha_path.exists():
         sha_path.unlink()
-    subprocess.run(["zip", "-qr", str(zip_path), "client-package"], cwd=server_dir, check=True)
+    create_client_zip(package_dir, zip_path)
     digest = sha256_file(zip_path)
     sha_path.write_text(f"{digest}  {CLIENT_ZIP_NAME}\n", encoding="utf-8")
     return zip_path, digest

@@ -206,9 +206,11 @@ nginx -t
 SERVER_SANITIZE_OUTPUT="$(python3 scripts/sanitize_resource_pack_metadata.py "$SERVER_DIR" --target server --write)"
 CLIENT_SANITIZE_OUTPUT="$(python3 scripts/sanitize_resource_pack_metadata.py "$SERVER_DIR/client-package" --target client --write)"
 SAFETY_OUTPUT="$(python3 scripts/daily_update.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" enforce-safety)"
-CLIENT_EXCLUDED_FILES="$(find "$SERVER_DIR/client-package" -type f \( \
+CLIENT_EXCLUDED_FILES="$(find "$SERVER_DIR/client-package/mods" -maxdepth 1 -type f \( \
   -iname '*animalgarden*common*raven*.jar' -o \
   -iname '*automated*harvest*.jar' -o \
+  -iname '*automotives*.jar' -o \
+  -iname '*better*snowy*biome*.jar' -o \
   -iname '*structory*towers*.jar' -o \
   -iname 'Incendium_*.jar' -o \
   -iname 'guns++*.jar' -o \
