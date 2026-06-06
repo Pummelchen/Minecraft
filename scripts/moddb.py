@@ -507,6 +507,21 @@ CREATE TABLE IF NOT EXISTS codex_fixed_mods (
     UNIQUE(original_mod_id, fixed_file_name)
 );
 
+CREATE TABLE IF NOT EXISTS mod_acceptance_block_client_runs (
+    id INTEGER PRIMARY KEY,
+    acceptance_block_id INTEGER NOT NULL REFERENCES mod_acceptance_blocks(id) ON DELETE CASCADE,
+    run_label TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    client_mod_file_names TEXT,
+    missing_client_file_names TEXT,
+    server_log_path TEXT,
+    hmc_log_path TEXT,
+    minecraft_log_path TEXT,
+    notes TEXT
+);
+
 CREATE TABLE IF NOT EXISTS headless_client_runs (
     id INTEGER PRIMARY KEY,
     server_instance_id INTEGER REFERENCES server_instances(id) ON DELETE SET NULL,
@@ -603,6 +618,7 @@ CREATE INDEX IF NOT EXISTS idx_mod_acceptance_releases_key ON mod_acceptance_rel
 CREATE INDEX IF NOT EXISTS idx_mod_acceptance_blocks_release ON mod_acceptance_blocks(acceptance_release_id, level, ordinal);
 CREATE INDEX IF NOT EXISTS idx_mod_acceptance_blocks_status ON mod_acceptance_blocks(status, level);
 CREATE INDEX IF NOT EXISTS idx_codex_fixed_mods_original ON codex_fixed_mods(original_mod_id, status);
+CREATE INDEX IF NOT EXISTS idx_mod_acceptance_block_client_block ON mod_acceptance_block_client_runs(acceptance_block_id, status);
 CREATE INDEX IF NOT EXISTS idx_headless_client_runs_status ON headless_client_runs(status, started_at);
 CREATE INDEX IF NOT EXISTS idx_headless_client_runs_release ON headless_client_runs(release_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_client_installer_sessions_status ON client_installer_sessions(status, first_seen_at);

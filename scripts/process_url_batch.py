@@ -77,6 +77,11 @@ KNOWN_IGNORED_ERROR_PATTERNS = (
     "Pack declares support for format 81",
     "com.mojang.serialization.DataResult$Error.getOrThrow",
     "Couldn't parse data file 'mot_structures:",
+    "No starting jigsaw minecraft:start found in start pool mot_structures:well/",
+    "Block-attached entity at invalid position",
+    "[minecraft/BlockAttachedEntity]",
+    "Exception caught in connection",
+    "java.net.SocketException: Connection reset",
 )
 CLIENT_ONLY_HINTS = (
     "animation",

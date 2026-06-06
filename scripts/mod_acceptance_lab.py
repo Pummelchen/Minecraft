@@ -15,6 +15,8 @@ import contextlib
 import dataclasses
 import datetime as dt
 import hashlib
+import io
+import json
 import os
 import random
 import re
@@ -39,6 +41,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import process_url_batch as processor
+import headless_client_lab
 import server_ops
 from moddb import connect, init_db, row_hash, slugify, utc_now
 
@@ -49,6 +52,7 @@ DEFAULT_LAB_ROOT = Path("/var/minecraft_mods/mod_acceptance_lab")
 DEFAULT_SERVER_KEY = "minecraft_26_1_2"
 DEFAULT_DISPLAY_NAME = "Pummelchen Server"
 DEFAULT_BUNDLE_SIZE = 10
+DEFAULT_HEADLESS_BASE_DIR = Path("/var/minecraft_mods/headless_client_lab")
 IGNORED_DEPENDENCIES = {
     "java",
     "minecraft",
@@ -57,14 +61,46 @@ IGNORED_DEPENDENCIES = {
     "minecraftforge",
 }
 STATIC_DEPENDENCY_HINTS = {
+    b"com/geckolib/": "geckolib",
+    b"com.geckolib.": "geckolib",
     b"terrablender/api/": "terrablender",
     b"terrablender.api.": "terrablender",
+    b"gbg:shoot_gun": "gbg",
     b"productivelib": "productivelib",
+}
+PROVIDER_DATA_DIRS = {
+    "advancement",
+    "cat_variant",
+    "chicken_variant",
+    "cow_variant",
+    "damage_type",
+    "dialog",
+    "dimension",
+    "dimension_type",
+    "enchantment",
+    "frog_variant",
+    "instrument",
+    "item_modifier",
+    "jukebox_song",
+    "loot_table",
+    "painting_variant",
+    "pig_variant",
+    "predicate",
+    "recipe",
+    "structure",
+    "trim_material",
+    "trim_pattern",
+    "wolf_variant",
+    "worldgen",
 }
 ERROR_RE = re.compile(
     r"(^|[^A-Za-z])ERROR([^A-Za-z]|$)|Exception|Crash report|Failed to start|"
     r"ModLoadingException|Missing.*dependencies|UnsupportedClassVersion|mixin apply failed|"
     r"NoClassDefFoundError|ClassNotFoundException|server watchdog",
+    re.IGNORECASE,
+)
+VERSION_CHECKER_NOISE_RE = re.compile(
+    r"VersionChecker|Failed to process update information|Starting version check",
     re.IGNORECASE,
 )
 
@@ -170,6 +206,61 @@ def toml_metadata(path: Path) -> tuple[set[str], set[str], list[str]]:
                             ):
                                 required.add(dep_id)
                 break
+            if "META-INF/jarjar/metadata.json" in existing:
+                try:
+                    metadata = json.loads(archive.read("META-INF/jarjar/metadata.json").decode("utf-8", errors="replace"))
+                except Exception as exc:
+                    warnings.append(f"META-INF/jarjar/metadata.json: {type(exc).__name__}: {exc}")
+                else:
+                    for jar_entry in metadata.get("jars") or []:
+                        if not isinstance(jar_entry, dict):
+                            continue
+                        nested_path = str(jar_entry.get("path") or "")
+                        if nested_path not in existing:
+                            continue
+                        try:
+                            with zipfile.ZipFile(io.BytesIO(archive.read(nested_path))) as nested_archive:
+                                nested_existing = set(nested_archive.namelist())
+                                for metadata_path in metadata_paths:
+                                    if metadata_path not in nested_existing:
+                                        continue
+                                    nested_data = tomllib.loads(
+                                        nested_archive.read(metadata_path).decode("utf-8", errors="replace")
+                                    )
+                                    for mod_entry in nested_data.get("mods") or []:
+                                        mod_id = normalize_mod_id(str(mod_entry.get("modId") or ""))
+                                        if mod_id:
+                                            mod_ids.add(mod_id)
+                                    nested_dependency_groups = nested_data.get("dependencies") or {}
+                                    if isinstance(nested_dependency_groups, dict):
+                                        for deps in nested_dependency_groups.values():
+                                            if isinstance(deps, dict):
+                                                deps = [deps]
+                                            if not isinstance(deps, list):
+                                                continue
+                                            for dep in deps:
+                                                if not isinstance(dep, dict):
+                                                    continue
+                                                dep_id = normalize_mod_id(str(dep.get("modId") or ""))
+                                                side = str(dep.get("side") or "").strip().upper()
+                                                dep_type = str(dep.get("type") or "").strip().lower()
+                                                mandatory_value = dep.get("mandatory", True)
+                                                mandatory = str(mandatory_value).strip().lower() not in {
+                                                    "false",
+                                                    "0",
+                                                    "no",
+                                                }
+                                                if (
+                                                    dep_id
+                                                    and dep_id not in IGNORED_DEPENDENCIES
+                                                    and mandatory is not False
+                                                    and dep_type in {"", "required"}
+                                                    and side != "CLIENT"
+                                                ):
+                                                    required.add(dep_id)
+                                    break
+                        except Exception as exc:
+                            warnings.append(f"{nested_path}: {type(exc).__name__}: {exc}")
     except Exception as exc:
         warnings.append(f"metadata scan failed: {type(exc).__name__}: {exc}")
     return mod_ids, required, warnings
@@ -197,6 +288,23 @@ def static_dependency_hints(path: Path) -> set[str]:
     except Exception:
         return found
     return found
+
+
+def datapack_namespaces(path: Path) -> set[str]:
+    namespaces: set[str] = set()
+    if not zipfile.is_zipfile(path):
+        return namespaces
+    try:
+        with zipfile.ZipFile(path) as archive:
+            for name in archive.namelist():
+                parts = name.split("/")
+                if len(parts) >= 4 and parts[0] == "data" and parts[2] in PROVIDER_DATA_DIRS:
+                    namespace = normalize_mod_id(parts[1])
+                    if namespace and namespace not in IGNORED_DEPENDENCIES:
+                        namespaces.add(namespace)
+    except Exception:
+        return namespaces
+    return namespaces
 
 
 def split_db_file_names(value: str) -> list[str]:
@@ -228,6 +336,7 @@ def db_file_map(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
 def build_mod_jar(path: Path, mapped: sqlite3.Row | None = None) -> ModJar:
     mod_ids, deps, warnings = toml_metadata(path)
     deps.update(static_dependency_hints(path))
+    mod_ids.update(datapack_namespaces(path))
     if not mod_ids:
         fallback = normalize_mod_id(path.stem.split("-")[0])
         if fallback:
@@ -292,6 +401,18 @@ def dependency_closure(targets: Sequence[ModJar], available: Sequence[ModJar]) -
                 selected[dependency.path] = dependency
                 queue.append(dependency)
     return sorted(selected.values(), key=lambda jar: jar.file_name.lower()), sorted(missing)
+
+
+def dependency_gaps(selected: Sequence[ModJar]) -> list[str]:
+    selected_ids = {mod_id for jar in selected for mod_id in jar.mod_ids}
+    gaps: set[str] = set()
+    for jar in selected:
+        for dep_id in jar.required_deps:
+            if dep_id in IGNORED_DEPENDENCIES:
+                continue
+            if dep_id not in selected_ids:
+                gaps.add(f"{jar.file_name} requires {dep_id}")
+    return sorted(gaps)
 
 
 def find_free_port(start: int = 25580, end: int = 25680) -> int:
@@ -444,14 +565,29 @@ def stop_process(proc: subprocess.Popen[str]) -> None:
         proc.wait(timeout=20)
 
 
+def ignored_acceptance_error(lines: Sequence[str], index: int, line: str) -> bool:
+    """Ignore known non-fatal infrastructure noise without hiding real mod-load errors."""
+    context = "\n".join(lines[max(0, index - 12) : index + 1])
+    if VERSION_CHECKER_NOISE_RE.search(context) and (
+        "JsonSyntaxException" in line
+        or "IllegalStateException: Expected BEGIN_OBJECT" in line
+        or "Troubleshooting.md#unexpected-json-structure" in line
+    ):
+        return True
+    return False
+
+
 def severe_errors(log_path: Path) -> tuple[int, tuple[str, ...]]:
     if not log_path.exists():
         return 0, ()
-    raw = [
-        f"{index}:{line}"
-        for index, line in enumerate(log_path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1)
-        if ERROR_RE.search(line)
-    ]
+    lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    raw = []
+    for zero_index, line in enumerate(lines):
+        if not ERROR_RE.search(line):
+            continue
+        if ignored_acceptance_error(lines, zero_index, line):
+            continue
+        raw.append(f"{zero_index + 1}:{line}")
     if not raw:
         return 0, ()
     temp = log_path.with_suffix(log_path.suffix + ".errors")
@@ -862,7 +998,7 @@ def run_pyramid_block(
         heap_mb=args.heap_mb,
         exercise_radius=args.exercise_radius,
     )
-    if not args.keep_lab:
+    if not args.keep_lab and result.status == "passed":
         shutil.rmtree(work_root / item_label, ignore_errors=True)
     return result.status, included, [], result, result.notes
 
@@ -929,7 +1065,7 @@ def run_singles(args: argparse.Namespace) -> int:
             if result.status != "passed":
                 final_status = "failed"
             print(f"{ordinal}/{len(active)} {result.status} {target.file_name}", flush=True)
-            if not args.keep_lab:
+            if not args.keep_lab and result.status == "passed":
                 shutil.rmtree(work_root / item_label, ignore_errors=True)
         finish_run(conn, run_id, final_status)
     print(f"run_label={run_label}")
@@ -1011,7 +1147,7 @@ def run_bundles(args: argparse.Namespace) -> int:
             if result.status != "passed":
                 final_status = "failed"
             print(f"bundle {bundle_index}/{len(bundles)} {result.status} targets={len(bundle)} included={len(included)}", flush=True)
-            if not args.keep_lab:
+            if not args.keep_lab and result.status == "passed":
                 shutil.rmtree(work_root / item_label, ignore_errors=True)
         finish_run(conn, run_id, final_status)
     print(f"run_label={run_label}")
@@ -1268,7 +1404,7 @@ def run_files(args: argparse.Namespace) -> int:
             ),
         )
         finish_run(conn, run_id, result.status)
-    if not args.keep_lab:
+    if not args.keep_lab and result.status == "passed":
         shutil.rmtree(args.lab_root / "work" / run_label / "candidate", ignore_errors=True)
     print(f"run_label={run_label}")
     print(f"status={result.status}")
@@ -1522,6 +1658,293 @@ def register_fixed_mod(args: argparse.Namespace) -> int:
     return 0
 
 
+def block_row(conn: sqlite3.Connection, args: argparse.Namespace) -> sqlite3.Row:
+    if getattr(args, "block_id", 0):
+        row = conn.execute(
+            """
+            SELECT b.*, r.release_key
+            FROM mod_acceptance_blocks b
+            JOIN mod_acceptance_releases r ON r.id = b.acceptance_release_id
+            WHERE b.id = ?
+            """,
+            (args.block_id,),
+        ).fetchone()
+    else:
+        if not args.release_key:
+            raise SystemExit("--release-key is required when --block-id is not used")
+        row = conn.execute(
+            """
+            SELECT b.*, r.release_key
+            FROM mod_acceptance_blocks b
+            JOIN mod_acceptance_releases r ON r.id = b.acceptance_release_id
+            WHERE r.release_key = ? AND b.level = ? AND b.ordinal = ?
+            """,
+            (args.release_key, args.level, args.ordinal),
+        ).fetchone()
+    if not row:
+        raise SystemExit("acceptance block not found")
+    return row
+
+
+def block_jars(row: sqlite3.Row, active: Sequence[ModJar]) -> tuple[list[ModJar], list[str]]:
+    active_by_name = jar_by_name(active)
+    jars: list[ModJar] = []
+    missing: list[str] = []
+    for name in parse_names(str(row["included_file_names"] or row["target_file_names"] or "")):
+        jar = active_by_name.get(name.lower())
+        if jar:
+            jars.append(jar)
+        else:
+            missing.append(name)
+    return jars, missing
+
+
+def prepare_block_client_base(
+    args: argparse.Namespace,
+    *,
+    run_label: str,
+    included: Sequence[ModJar],
+) -> tuple[Path, list[str], list[str]]:
+    base_dir = args.headless_base_dir / "block_runs" / run_label
+    if base_dir.exists():
+        shutil.rmtree(base_dir)
+    game_dir = base_dir / "game"
+    for subdir in ("mods", "resourcepacks", "shaderpacks", "logs", "crash-reports", "screenshots", "run"):
+        (game_dir / subdir).mkdir(parents=True, exist_ok=True)
+    launcher = args.headless_base_dir / "headlessmc-launcher.jar"
+    if not launcher.exists():
+        raise SystemExit(f"HeadlessMC launcher missing, run headless setup first: {launcher}")
+    try:
+        (base_dir / "headlessmc-launcher.jar").symlink_to(launcher)
+    except OSError:
+        shutil.copy2(launcher, base_dir / "headlessmc-launcher.jar")
+    client_mods = args.server_dir / "client-package" / "mods"
+    copied: list[str] = []
+    missing: list[str] = []
+    for jar in included:
+        source = client_mods / jar.file_name
+        if source.exists():
+            shutil.copy2(source, game_dir / "mods" / jar.file_name)
+            copied.append(jar.file_name)
+        else:
+            missing.append(jar.file_name)
+    headless_client_lab.seed_options(game_dir)
+    return base_dir, copied, missing
+
+
+def insert_block_client_run(
+    conn: sqlite3.Connection,
+    *,
+    block_id: int,
+    run_label: str,
+    copied: Sequence[str],
+    missing_client: Sequence[str],
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO mod_acceptance_block_client_runs(
+            acceptance_block_id, run_label, status, started_at,
+            client_mod_file_names, missing_client_file_names
+        ) VALUES (?, ?, 'running', ?, ?, ?)
+        """,
+        (block_id, run_label, utc_now(), "\n".join(copied), "\n".join(missing_client)),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def finish_block_client_run(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    status: str,
+    server_log: Path,
+    hmc_log: Path,
+    minecraft_log: Path,
+    notes: str,
+) -> None:
+    conn.execute(
+        """
+        UPDATE mod_acceptance_block_client_runs
+        SET status = ?, completed_at = ?, server_log_path = ?, hmc_log_path = ?,
+            minecraft_log_path = ?, notes = ?
+        WHERE id = ?
+        """,
+        (status, utc_now(), str(server_log), str(hmc_log), str(minecraft_log), notes, run_id),
+    )
+    conn.commit()
+
+
+def run_block_client_row(args: argparse.Namespace, row: sqlite3.Row, active: Sequence[ModJar]) -> str:
+    included, missing_server = block_jars(row, active)
+    release_key = str(row["release_key"])
+    block_key = str(row["block_key"])
+    run_label = args.run_label or now_label(f"block_client_{release_key}_{block_key}")
+    if missing_server:
+        raise SystemExit("block references server jars no longer active: " + ", ".join(missing_server))
+    missing_required = dependency_gaps(included)
+    if args.dry_run:
+        print(f"run_label={run_label}")
+        print(f"block_id={row['id']}")
+        print(f"release_key={release_key}")
+        print(f"block_key={block_key}")
+        print(f"included_server_jars={len(included)}")
+        if missing_required:
+            print("missing_required_dependencies=" + " | ".join(missing_required))
+            return "failed"
+        return "dry_run"
+    if missing_required:
+        raise SystemExit("block omits required dependencies: " + " | ".join(missing_required[:20]))
+
+    args.lab_root.mkdir(parents=True, exist_ok=True)
+    work_root = args.lab_root / "client-work" / run_label
+    log_root = args.lab_root / "client-logs" / run_label
+    log_root.mkdir(parents=True, exist_ok=True)
+    server_log = log_root / "server.log"
+    port = find_free_port(25690, 25850)
+    client_base, copied, missing_client = prepare_block_client_base(args, run_label=run_label, included=included)
+    hmc_log = client_base / "run" / run_label / "headlessmc.log"
+    minecraft_log = client_base / "game" / "logs" / "latest.log"
+    status = "failed"
+    notes = ""
+    proc: subprocess.Popen[str] | None = None
+    with connect(args.db) as conn:
+        init_db(conn)
+        run_id = insert_block_client_run(
+            conn,
+            block_id=int(row["id"]),
+            run_label=run_label,
+            copied=copied,
+            missing_client=missing_client,
+        )
+    try:
+        prepare_lab_server(
+            source_server=args.server_dir,
+            lab_dir=work_root,
+            jars=included,
+            port=port,
+            heap_mb=args.server_heap_mb,
+        )
+        with server_log.open("w", encoding="utf-8") as log_handle:
+            proc = subprocess.Popen(
+                ["bash", "start.sh"],
+                cwd=work_root,
+                stdin=subprocess.PIPE,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+                start_new_session=True,
+            )
+            boot_status, boot_seconds = wait_for_done_or_exit(proc, server_log, args.boot_timeout)
+            if boot_status != "started":
+                notes = f"server boot {boot_status} before Done after {boot_seconds:.1f}s"
+            else:
+                headless_args = argparse.Namespace(
+                    db=args.db,
+                    server_dir=args.server_dir,
+                    server_key=args.server_key,
+                    base_dir=client_base,
+                    hmc_version=headless_client_lab.DEFAULT_HMC_VERSION,
+                    minecraft_version=args.minecraft_version,
+                    loader=args.loader,
+                    server_host="127.0.0.1",
+                    server_port=port,
+                    command="run",
+                    run_label=run_label,
+                    duration=args.client_duration,
+                    ingame_timeout=args.client_ingame_timeout,
+                    heap_gb=args.client_heap_gb,
+                    dry_run=False,
+                    offline=not args.online,
+                    exercise_input=False,
+                )
+                code = headless_client_lab.run_smoke(headless_args)
+                status = "passed" if code == 0 else "failed"
+                notes = (
+                    f"block client {status}; server boot {boot_seconds:.1f}s; "
+                    f"client copied={len(copied)} missing_client={len(missing_client)}"
+                )
+        error_count, severe = severe_errors(server_log)
+        if severe:
+            status = "failed"
+            notes += "; severe server log errors: " + " | ".join(severe[:3])
+        if missing_client:
+            notes += "; server jars absent from client package: " + ", ".join(missing_client[:20])
+    finally:
+        if proc is not None:
+            stop_process(proc)
+        with connect(args.db) as conn:
+            init_db(conn)
+            finish_block_client_run(
+                conn,
+                run_id=run_id,
+                status=status,
+                server_log=server_log,
+                hmc_log=hmc_log,
+                minecraft_log=minecraft_log,
+                notes=notes,
+            )
+        if not args.keep_lab and status == "passed":
+            shutil.rmtree(work_root, ignore_errors=True)
+    print(f"run_label={run_label}")
+    print(f"status={status}")
+    print(f"server_log={server_log}")
+    print(f"hmc_log={hmc_log}")
+    print(f"minecraft_log={minecraft_log}")
+    print(f"notes={notes}")
+    return status
+
+
+def run_block_client(args: argparse.Namespace) -> int:
+    with connect(args.db) as conn:
+        init_db(conn)
+        row = block_row(conn, args)
+        active = active_server_jars(args.server_dir, conn)
+    status = run_block_client_row(args, row, active)
+    return 0 if status in {"passed", "dry_run"} else 1
+
+
+def run_block_clients(args: argparse.Namespace) -> int:
+    with connect(args.db) as conn:
+        init_db(conn)
+        active = active_server_jars(args.server_dir, conn)
+        query = """
+            SELECT b.*, r.release_key
+            FROM mod_acceptance_blocks b
+            JOIN mod_acceptance_releases r ON r.id = b.acceptance_release_id
+            WHERE r.release_key = ? AND b.level = ? AND b.status = 'passed'
+        """
+        params: list[Any] = [args.release_key, args.level]
+        if not args.include_tested:
+            query += """
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM mod_acceptance_block_client_runs c
+                  WHERE c.acceptance_block_id = b.id AND c.status = 'passed'
+              )
+            """
+        query += " ORDER BY b.ordinal"
+        if args.limit:
+            query += " LIMIT ?"
+            params.append(args.limit)
+        rows = conn.execute(query, params).fetchall()
+    if args.dry_run:
+        print(f"release_key={args.release_key}")
+        print(f"level={args.level}")
+        print(f"selected_blocks={len(rows)}")
+        for row in rows[:20]:
+            print(f"{row['id']}\t{row['block_key']}\tordinal={row['ordinal']}")
+        return 0
+    final_status = "passed"
+    for row in rows:
+        args.run_label = ""
+        status = run_block_client_row(args, row, active)
+        if status != "passed":
+            final_status = "failed"
+    print(f"status={final_status}")
+    return 0 if final_status == "passed" else 1
+
+
 def init_database(args: argparse.Namespace) -> int:
     with connect(args.db) as conn:
         init_db(conn)
@@ -1544,6 +1967,21 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--exercise-radius", type=int, default=2)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--offset", type=int, default=0)
+    parser.add_argument("--keep-lab", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+
+
+def add_block_client_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--run-label")
+    parser.add_argument("--boot-timeout", type=int, default=420)
+    parser.add_argument("--server-heap-mb", type=int, default=2048)
+    parser.add_argument("--client-duration", type=int, default=120)
+    parser.add_argument("--client-ingame-timeout", type=int, default=240)
+    parser.add_argument("--client-heap-gb", type=int, default=2)
+    parser.add_argument("--headless-base-dir", type=Path, default=DEFAULT_HEADLESS_BASE_DIR)
+    parser.add_argument("--minecraft-version", default="26.1.2")
+    parser.add_argument("--loader", default="neoforge")
+    parser.add_argument("--online", action="store_true", help="Use authenticated online mode instead of offline lab mode")
     parser.add_argument("--keep-lab", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
 
@@ -1581,6 +2019,18 @@ def build_parser() -> argparse.ArgumentParser:
     fixed.add_argument("--status", choices=["candidate", "active", "rejected", "obsolete"], default="candidate")
     fixed.add_argument("--installed-on-server", action="store_true")
     fixed.add_argument("--included-in-client", action="store_true")
+    block_client = sub.add_parser("run-block-client")
+    add_block_client_args(block_client)
+    block_client.add_argument("--block-id", type=int, default=0)
+    block_client.add_argument("--release-key", default="")
+    block_client.add_argument("--level", type=int, default=0)
+    block_client.add_argument("--ordinal", type=int, default=1)
+    block_clients = sub.add_parser("run-block-clients")
+    add_block_client_args(block_clients)
+    block_clients.add_argument("--release-key", required=True)
+    block_clients.add_argument("--level", type=int, default=0)
+    block_clients.add_argument("--limit", type=int, default=0)
+    block_clients.add_argument("--include-tested", action="store_true")
     return parser
 
 
@@ -1600,6 +2050,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_files(args)
     if args.command == "register-fixed":
         return register_fixed_mod(args)
+    if args.command == "run-block-client":
+        return run_block_client(args)
+    if args.command == "run-block-clients":
+        return run_block_clients(args)
     raise SystemExit(f"unknown command {args.command}")
 
 

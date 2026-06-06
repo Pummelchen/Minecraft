@@ -4,8 +4,8 @@
 This is intentionally a real Minecraft Java client path, not a protocol bot.
 It syncs the active client package into a dedicated game directory, launches
 HeadlessMC with HMC-Specifics under Xvfb or an existing DISPLAY, joins the
-server through quick-play, sends movement/screenshot commands, and records the
-run in SQLite.
+server through quick-play, sends optional movement/screenshot commands, and
+records the run in SQLite.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Sequence
 
@@ -44,12 +45,22 @@ DEFAULT_LOADER = "neoforge"
 DEFAULT_SERVER_HOST = "127.0.0.1"
 DEFAULT_SERVER_PORT = 25565
 DEFAULT_JAVA_BIN = Path("/usr/lib/jvm/java-25-openjdk-amd64/bin/java")
+HMC_SPECIFICS_BASE_URL = "https://github.com/headlesshq/hmc-specifics/releases/download"
+HMC_SPECIFICS_LEGACY_VERSION = "2.4.0"
 FATAL_PATTERNS = re.compile(
-    r"Minecraft has crashed|Reported exception|Crash report|Failed to compile.*shader|"
+    r"Minecraft has crashed|Reported exception|Crash report|Unknown loader:|"
+    r"ModLoadingException|Loading errors encountered|has failed to load correctly|"
+    r"Currently, .+ is not installed|Mod .+ requires .+|"
+    r"StackOverflowError|Error executing task on Client|"
+    r"NoClassDefFoundError|ClassNotFoundException|"
+    r"Failed to compile.*shader|"
     r"Shader compilation failed|EXCEPTION_ACCESS_VIOLATION|OpenGL.*fatal|Invalid session|"
     r"multiplayer\.disconnect\.unverified_username|Authentication servers are down|"
     r"Failed to connect to the server|Connection refused|Timed out",
     re.IGNORECASE,
+)
+IGNORED_FATAL_PATTERNS = (
+    re.compile(r"Realms.*Invalid session", re.IGNORECASE),
 )
 
 
@@ -228,6 +239,70 @@ def clean_copy_section(src: Path, dst: Path, patterns: tuple[str, ...]) -> tuple
     return copied, bytes_total
 
 
+def hmc_specifics_url(minecraft_version: str, loader: str) -> tuple[str, str]:
+    loader = loader.lower()
+    tag = f"{minecraft_version}-latest"
+    name = f"hmc-specifics-{minecraft_version}-{loader}-latest.jar"
+    return name, f"{HMC_SPECIFICS_BASE_URL}/{tag}/{name}"
+
+
+def hmc_legacy_loader_name(loader: str) -> str:
+    return {"forge": "lexforge"}.get(loader.lower(), loader.lower())
+
+
+def hmc_legacy_specifics_name(minecraft_version: str, loader: str) -> str:
+    legacy_loader = hmc_legacy_loader_name(loader)
+    return f"hmc-specifics-{minecraft_version}-{HMC_SPECIFICS_LEGACY_VERSION}-{legacy_loader}-release.jar"
+
+
+def ensure_hmc_specifics(game_dir: Path, minecraft_version: str, loader: str, *, force: bool = False) -> Path:
+    mods = game_dir / "mods"
+    mods.mkdir(parents=True, exist_ok=True)
+    name, url = hmc_specifics_url(minecraft_version, loader)
+    target = mods / name
+    for existing in mods.glob("hmc-specifics-*.jar"):
+        if existing.name != name:
+            existing.unlink()
+    if target.exists() and not force:
+        return target
+    tmp = target.with_suffix(".jar.tmp")
+    urllib.request.urlretrieve(url, tmp)
+    with tmp.open("rb") as handle:
+        prefix = handle.read(64).lstrip()
+    if prefix.startswith(b"<!DOCTYPE") or prefix.startswith(b"<html"):
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"HMC-Specifics download returned HTML instead of a jar: {url}")
+    tmp.replace(target)
+    target.chmod(0o600)
+    return target
+
+
+def seed_hmc_specifics_cache(game_dir: Path, minecraft_version: str, loader: str) -> Path:
+    """Seed HeadlessMC's legacy specifics cache from the current latest jar.
+
+    HeadlessMC 2.9.0 resolves HMC-Specifics through GitHub's "latest" release,
+    which currently points at v2.4.0. That release does not contain 26.x jars;
+    the valid 26.x artifacts live under per-Minecraft-version tags such as
+    26.1.2-latest. Seeding the expected cache filename lets `launch -specifics`
+    use the pinned current jar without hitting the stale v2.4.0 URL.
+    """
+    source = ensure_hmc_specifics(game_dir, minecraft_version, loader)
+    if not zipfile.is_zipfile(source):
+        raise RuntimeError(f"HMC-Specifics source is not a jar: {source}")
+    target = Path.cwd() / "HeadlessMC" / "specifics" / "hmc-specifics" / hmc_legacy_specifics_name(
+        minecraft_version, loader
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists() or not zipfile.is_zipfile(target) or source.stat().st_size != target.stat().st_size:
+        shutil.copy2(source, target)
+        target.chmod(0o600)
+    mods = game_dir / "mods"
+    for existing in mods.glob("hmc-specifics-*.jar"):
+        if existing.name != target.name:
+            existing.unlink()
+    return target
+
+
 def seed_options(game_dir: Path) -> None:
     options = game_dir / "options.txt"
     values = {
@@ -235,7 +310,7 @@ def seed_options(game_dir: Path) -> None:
         "onboardAccessibility": "false",
         "fullscreen": "false",
         "renderDistance": "6",
-        "simulationDistance": "4",
+        "simulationDistance": "5",
         "maxFps": "60",
     }
     existing: dict[str, str] = {}
@@ -263,9 +338,11 @@ def sync_client_package(args: argparse.Namespace) -> int:
         "resourcepacks": clean_copy_section(package_dir / "resourcepacks", game_dir / "resourcepacks", ("*.zip", "*.jar")),
         "shaderpacks": clean_copy_section(package_dir / "shaderpacks", game_dir / "shaderpacks", ("*.zip", "*.jar")),
     }
+    specifics = ensure_hmc_specifics(game_dir, args.minecraft_version, args.loader)
     seed_options(game_dir)
     for section, (count, bytes_total) in counts.items():
         print(f"{section}={count} bytes={bytes_total}")
+    print(f"hmc_specifics={specifics.name}")
     return 0
 
 
@@ -301,6 +378,8 @@ def fatal_lines(paths: Sequence[Path]) -> list[str]:
             continue
         for index, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
             if FATAL_PATTERNS.search(line):
+                if any(pattern.search(line) for pattern in IGNORED_FATAL_PATTERNS):
+                    continue
                 lines.append(f"{path}:{index}:{line}")
     return lines
 
@@ -318,8 +397,140 @@ def send_command(proc: subprocess.Popen[str], command: str) -> None:
     proc.stdin.flush()
 
 
-def wait_for_ingame(proc: subprocess.Popen[str], hmc_log: Path, game_dir: Path, marker: Path, timeout: int) -> None:
+def latest_screen_snapshot(text: str) -> str:
+    marker = "\nScreen: "
+    index = text.rfind(marker)
+    if index == -1:
+        if text.startswith("Screen: "):
+            return text
+        return ""
+    return text[index + 1 :]
+
+
+def is_blocking_startup_dialog(snapshot: str) -> bool:
+    if not snapshot.startswith("Screen: "):
+        return False
+    if "currently not displaying a Gui" in snapshot:
+        return False
+    if "GenericMessageScreen" in snapshot and "Loading Minecraft" in snapshot:
+        return False
+    if any(
+        screen_name in snapshot
+        for screen_name in (
+            "ConnectScreen",
+            "DownloadingTerrainScreen",
+            "LevelLoadingScreen",
+            "ProgressScreen",
+            "ReceivingLevelScreen",
+            "TitleScreen",
+        )
+    ):
+        return False
+    return "Screen: net.minecraft.client.gui.screens." in snapshot
+
+
+def is_title_screen(snapshot: str) -> bool:
+    return "Screen: net.minecraft.client.gui.screens.TitleScreen" in snapshot
+
+
+def is_dismissible_loading_error_screen(snapshot: str) -> bool:
+    return (
+        "Screen: net.neoforged.neoforge.client.gui.LoadingErrorScreen" in snapshot
+        and "Proceed to main menu" in snapshot
+    )
+
+
+def is_fatal_loading_error_screen(snapshot: str) -> bool:
+    return (
+        "Screen: net.neoforged.neoforge.client.gui.LoadingErrorScreen" in snapshot
+        and not is_dismissible_loading_error_screen(snapshot)
+    )
+
+
+def gui_button_center(snapshot: str, label: str) -> tuple[int, int] | None:
+    for line in snapshot.splitlines():
+        if label not in line:
+            continue
+        numbers = [int(value) for value in re.findall(r"\b\d+\b", line)]
+        if len(numbers) < 6:
+            continue
+        x, y, width, height = numbers[-5], numbers[-4], numbers[-3], numbers[-2]
+        return x + width // 2, y + height // 2
+    return None
+
+
+def xdotool_click(display: str, x: int, y: int) -> bool:
+    tool = shutil.which("xdotool")
+    if not tool or not display:
+        return False
+    env = os.environ.copy()
+    env["DISPLAY"] = display
+    try:
+        result = subprocess.run(
+            [tool, "mousemove", str(x), str(y), "click", "1"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        return False
+    return result.returncode == 0
+
+
+def dismiss_startup_dialog(
+    proc: subprocess.Popen[str],
+    text: str,
+    *,
+    server_host: str,
+    server_port: int,
+    display: str,
+    attempted_actions: dict[str, int],
+) -> None:
+    snapshot = latest_screen_snapshot(text)
+    if is_dismissible_loading_error_screen(snapshot):
+        attempts = attempted_actions.get("loading_error_connect", 0)
+        if attempts >= 30:
+            return
+        attempted_actions["loading_error_connect"] = attempts + 1
+        center = gui_button_center(snapshot, "Proceed to main menu")
+        if center:
+            xdotool_click(display, *center)
+            time.sleep(0.5)
+        with contextlib.suppress(Exception):
+            send_command(proc, f"connect {server_host} {server_port}")
+        time.sleep(1.0)
+        return
+    if is_title_screen(snapshot):
+        attempts = attempted_actions.get("title_screen_connect", 0)
+        if attempts >= 30:
+            return
+        attempted_actions["title_screen_connect"] = attempts + 1
+        for command in (f"connect {server_host} {server_port}",):
+            with contextlib.suppress(Exception):
+                send_command(proc, command)
+                time.sleep(1.0)
+        return
+    if is_blocking_startup_dialog(snapshot):
+        for command in ("close",):
+            with contextlib.suppress(Exception):
+                send_command(proc, command)
+
+
+def wait_for_ingame(
+    proc: subprocess.Popen[str],
+    hmc_log: Path,
+    game_dir: Path,
+    marker: Path,
+    timeout: int,
+    *,
+    server_host: str,
+    server_port: int,
+    display: str,
+) -> None:
     deadline = time.monotonic() + timeout
+    attempted_actions: dict[str, int] = {}
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             raise RuntimeError("HeadlessMC exited before the client reached in-game state")
@@ -328,12 +539,23 @@ def wait_for_ingame(proc: subprocess.Popen[str], hmc_log: Path, game_dir: Path, 
         text = read_file(hmc_log)
         if "Minecraft is currently not displaying a Gui" in text or "currently not displaying a Gui" in text:
             return
+        snapshot = latest_screen_snapshot(text)
         crashes = crash_reports_since(game_dir, marker)
         fatals = fatal_lines([hmc_log, latest_log(game_dir)])
         if crashes:
             raise RuntimeError("Minecraft wrote a crash report before reaching in-game state")
+        if is_fatal_loading_error_screen(snapshot):
+            raise RuntimeError("fatal NeoForge loading error screen before reaching in-game state")
         if fatals:
             raise RuntimeError("fatal client log pattern before reaching in-game state: " + fatals[0])
+        dismiss_startup_dialog(
+            proc,
+            text,
+            server_host=server_host,
+            server_port=server_port,
+            display=display,
+            attempted_actions=attempted_actions,
+        )
     raise RuntimeError("timed out before reaching in-game state")
 
 
@@ -361,7 +583,14 @@ def start_xvfb(run_dir: Path) -> tuple[subprocess.Popen[str] | None, str, dict[s
     env = os.environ.copy()
     if env.get("DISPLAY"):
         return None, env["DISPLAY"], env
-    display = ":99"
+    display = ""
+    for display_num in range(99, 130):
+        candidate = f":{display_num}"
+        if not Path(f"/tmp/.X11-unix/X{display_num}").exists():
+            display = candidate
+            break
+    if not display:
+        raise RuntimeError("no free Xvfb display in :99-:129")
     env["DISPLAY"] = display
     xvfb = shutil.which("Xvfb")
     if not xvfb:
@@ -407,6 +636,7 @@ def run_smoke(args: argparse.Namespace) -> int:
         print(
             "launch="
             f"launch {args.loader}:{args.minecraft_version} -specifics --jvm \"-Xmx{args.heap_gb}G\" "
+            f"{'-offline ' if args.offline else ''}"
             f"--game-args \"--quickPlayMultiplayer {args.server_host}:{args.server_port}\""
         )
         return 0
@@ -414,6 +644,10 @@ def run_smoke(args: argparse.Namespace) -> int:
         raise SystemExit(f"HeadlessMC jar missing, run setup first: {hmc_jar}")
     if not (game_dir / "mods").exists():
         raise SystemExit("game directory is not prepared, run sync first")
+    try:
+        seed_hmc_specifics_cache(game_dir, args.minecraft_version, args.loader)
+    except Exception as exc:
+        raise SystemExit(f"could not prepare HMC-Specifics: {exc}") from exc
     run_dir.mkdir(parents=True, exist_ok=True)
     marker = run_dir / "start.marker"
     marker.write_text(utc_now() + "\n", encoding="utf-8")
@@ -452,35 +686,51 @@ def run_smoke(args: argparse.Namespace) -> int:
             launch = (
                 f"launch {args.loader}:{args.minecraft_version} -specifics "
                 f'--jvm "-Xmx{args.heap_gb}G" '
+                f"{'-offline ' if args.offline else ''}"
                 f'--game-args "--quickPlayMultiplayer {args.server_host}:{args.server_port}"'
             )
             send_command(proc, launch)
-            wait_for_ingame(proc, hmc_log, game_dir, marker, args.ingame_timeout)
+            wait_for_ingame(
+                proc,
+                hmc_log,
+                game_dir,
+                marker,
+                args.ingame_timeout,
+                server_host=args.server_host,
+                server_port=args.server_port,
+                display=display,
+            )
             end = time.monotonic() + args.duration
-            commands = [
-                "key w --duration 900",
-                "key w --duration 900",
-                "key a --duration 700",
-                "key d --duration 700",
-                "key s --duration 400",
-                "key space --duration 250",
-                "key f2",
-            ]
+            commands = (
+                [
+                    "key w --duration 900",
+                    "key w --duration 900",
+                    "key a --duration 700",
+                    "key d --duration 700",
+                    "key s --duration 400",
+                    "key space --duration 250",
+                    "key f2",
+                ]
+                if args.exercise_input
+                else []
+            )
             while time.monotonic() < end:
                 if proc.poll() is not None:
-                    raise RuntimeError("HeadlessMC/Minecraft exited during walk test")
+                    raise RuntimeError("HeadlessMC/Minecraft exited during client smoke test")
                 crashes = crash_reports_since(game_dir, marker)
                 fatals = fatal_lines([hmc_log, mc_log])
                 if crashes:
-                    raise RuntimeError("Minecraft wrote a crash report during walk test")
+                    raise RuntimeError("Minecraft wrote a crash report during client smoke test")
                 if fatals:
-                    raise RuntimeError("fatal client log pattern during walk test: " + fatals[0])
-                send_command(proc, random.choice(commands))
+                    raise RuntimeError("fatal client log pattern during client smoke test: " + fatals[0])
+                if commands:
+                    send_command(proc, random.choice(commands))
                 time.sleep(1)
             send_command(proc, "disconnect")
             time.sleep(2)
             status = "passed"
-            notes = f"joined {args.server_host}:{args.server_port} and walked for {args.duration}s"
+            action = "walked" if commands else "idled"
+            notes = f"joined {args.server_host}:{args.server_port} and {action} for {args.duration}s"
     except Exception as exc:
         notes = f"{type(exc).__name__}: {exc}"
     finally:
@@ -540,6 +790,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--duration", type=int, default=600)
     run_parser.add_argument("--ingame-timeout", type=int, default=240)
     run_parser.add_argument("--heap-gb", type=int, default=4)
+    run_parser.add_argument("--offline", action="store_true")
+    run_parser.add_argument("--exercise-input", action="store_true")
     run_parser.add_argument("--dry-run", action="store_true")
     return parser
 

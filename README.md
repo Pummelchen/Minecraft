@@ -70,6 +70,16 @@ build host before rebuilding a client package if
   active client package, launches HeadlessMC/HMC-Specifics under Xvfb or an
   existing X display, joins the server, walks, captures renderer/log evidence,
   and records runs in SQLite.
+- `scripts/patch_gbg_enchantments.py` - audited repair helper for
+  Gamingbarn-style gun datapack loot tables when Minecraft component schema
+  changes require `minecraft:enchantments` to use the nested `levels` shape.
+- `scripts/patch_mots_structures_lang.py` - audited repair helper for the
+  malformed MOTS Structures 1.4 English language JSON.
+- `scripts/patch_pack_mcmeta_compat.py` - audited helper for pack metadata
+  compatibility repairs in jar/zip resources before acceptance retests.
+- `scripts/patch_productivefarming_bucket_model.py` - audited repair helper for
+  Productive Farming bucket item model JSON when the 26.1.x model schema
+  rejects the upstream file.
 - `scripts/check_client_manifest.py` - validates client package manifest syntax,
   checksums, and strict parity when package files are present.
 - `scripts/check_client_mod_dependencies.py` - scans NeoForge mod metadata,
@@ -138,39 +148,58 @@ and deploy validation commands, see `PRODUCTION_AUDIT.md`.
 
 ## Current Snapshot
 
-As of the 2026-06-04 macOS installer rollout:
+As of the 2026-06-06 V1D pyramid promotion:
 
-- 489 tracker rows, 476 canonical rows, 13 duplicate rows collapsed.
-- 296 canonical rows OK, 155 skipped, 25 failed; work score is `62.2%`.
-- The active `/var/minecraft_26.1.2` server has 271 active server mod jars.
-- The built macOS Apple Silicon package currently contains 286 mod files, 9
-  resource packs, and 1 shader pack. Every active server jar is present in the
-  client package; the remaining client jars are client-only extras.
+- Live server unit: `pummelchen-minecraft.service` is active on
+  `/var/minecraft_26.1.2`.
+- Active immutable release: `release_20260606_V1D_pyramid`.
+- Acceptance source release: `2026-06-06_V1D`, block `256`,
+  `CLIENT_PYRAMID_V1C_SANITIZED_NO_DREAMDISPLAYS`.
+- Server-side active jars: 243.
+- Mac client package: 242 mod jars, 9 resource packs, 1 shader pack.
+- Current client sync manifest:
+  `/downloads/releases/release_20260606_V1D_pyramid/client-sync-manifest.tsv`.
+- Current ZIP SHA256:
+  `33b71c157c3e3a3f934fc7b543785085585350f3a31eb01145ff68c62341db42`.
+- Current MRPack SHA256:
+  `7196ef8b770b117cd4d0412f687d8cfdcb3996aae18be28b351581447c98661d`.
 - System Java and the Minecraft server runtime are aligned on OpenJDK `25.0.3`;
   `/usr/bin/java` resolves to `/usr/lib/jvm/java-25-openjdk-amd64/bin/java`,
   which is also the explicit runtime in `/var/minecraft_26.1.2/run.sh`.
 - The server JVM args are tracked in `server-config/user_jvm_args.txt` and on
   the VPS at `/var/minecraft_26.1.2/user_jvm_args.txt`.
-- The rebuilt one-touch client package is
-  `/var/minecraft_26.1.2/minecraft_26.1.2_client_macos_apple_silicon.zip`.
-- Active tested release:
-  `release_20260604_193955_deploy`.
-- Current ZIP SHA256:
-  `d5979386be446ea0fb215db524897976574f0788753c10166530f6d18f76ed97`.
-- Current MRPack SHA256:
-  `abed3858c5487bd2c70b90cfe6a555f56ff56d228b433903a19e01ca21360b74`.
-- Current macOS installer DMG SHA256:
-  `60561dc06cc03c6b8fb231221b7ccad01adf60e9a95326d1d5df7192b92e1d2d`.
-- The 2026-06-04 client launch repair added OELib for Yumemigusa, replaced
-  HealingBed with the 26.1.2 NeoForge build, repaired Structory Towers pack
-  metadata, and verified the installed macOS client with
-  `scripts/macos_client_launch_smoke.py` until the client reached a startup
-  marker.
-- Final update validation `daily_update_clumps_20260604_110950` reached
-  `STATUS=started` after Spark, Architectury API, ChocoCraft, and Clumps were
-  active together.
-  Residual nonfatal ERROR-tagged content/model/version-check lines are covered by
-  `scripts/process_url_batch.py`'s baseline filter.
+- The live world was reset during V1D promotion, so the server starts from a
+  fresh world for this release.
+- The Mac client on the local MacBook was synced against the V1D manifest and
+  verified at 242/242 mod jars, 9/9 resource packs, and 1/1 shader pack.
+  `AddPummelchenServer.java` was run afterward to keep exactly one
+  `91.99.176.243:25565` server-list entry. macOS Accessibility prevented
+  automated launcher clicking from this Codex process, so the final online
+  whitelisted account join remains a manual/launcher-driven check.
+- VPS cleanup after promotion removed failed lab working copies and restored
+  `/var` free space to about 39 GB.
+
+The accepted V1D release passed:
+
+- isolated server boot with the promoted server jar set,
+- HeadlessMC/HMC-Specifics real-client startup under Xvfb,
+- quick-play join to the isolated lab server,
+- 360 seconds of in-game idle time,
+- client package dependency parity checks,
+- live server boot to `Done` on the production unit.
+
+Known removals from earlier failed candidates are recorded in SQLite release
+notes:
+
+- V1 failed on severe data-pack/mod errors from Immersive Vehicles/MTS, Bloom,
+  Maple, and underground_village/Stoneholm.
+- V1A still failed on Alex's Mobs NeoForge, Berezka API, EDM, and Epic
+  Structures Villages data errors.
+- V1B failed because `abandoned_structures` still required the excluded
+  `berezka_api`.
+- V1C passed but was superseded because DreamDisplays produced a client-side
+  `NoClassDefFoundError`.
+- V1D removed DreamDisplays and is the promoted production release.
 
 ## Latest Batch Notes
 
@@ -374,8 +403,19 @@ python3 scripts/mod_acceptance_lab.py run-singles --limit 10
 python3 scripts/mod_acceptance_lab.py run-bundles --limit 1
 python3 scripts/mod_acceptance_lab.py run-pyramid
 python3 scripts/mod_acceptance_lab.py run-files --include-active-deps /path/to/candidate.jar
+python3 scripts/mod_acceptance_lab.py run-block-client --release-key YYYY-MM-DD_V1 --level 0 --ordinal 1
+python3 scripts/mod_acceptance_lab.py run-block-clients --release-key YYYY-MM-DD_V1 --level 0 --limit 3
 python3 scripts/mod_acceptance_lab.py register-fixed --original-mod-id 123 --fixed-jar /path/to/fixed.jar --patch-notes "Short repair note"
 ```
+
+The dependency scanner handles NeoForge TOML, embedded JarJar libraries, static
+bytecode/JSON hints, and selected datapack provider namespaces. This matters for
+packs such as Productive Farming, which bundles `productivelib`, and
+Gamingbarn-style gun extensions, which reference the `gbg` namespace provided by
+the base Gamingbarn's Guns jar.
+`run-block-client` also revalidates dependency closure for synthetic blocks
+before it starts Java; this prevents exclusion candidates from accidentally
+keeping a mod while omitting one of its required providers.
 
 The acceptance order is:
 
@@ -385,14 +425,22 @@ The acceptance order is:
 3. Level-0 bundle tests in groups of 10 active mods.
 4. Pyramid rollups: passing adjacent blocks are merged and retested until one
    passing block remains, recorded as `YYYY-MM-DD_Vn`.
-5. Headless real-client join/walk smoke test for the active client release.
+5. Per-block headless real-client join/walk tests against isolated block
+   servers using `run-block-client` or `run-block-clients`.
 6. Gameplay/load lab scenarios for player-facing survival checks.
 
 Failed mods stay out of the live server and should be investigated one at a
-time in isolated lab servers. If a small repair is fully understood, register
-the repaired jar as a linked `Codex_Fixed` duplicate with `register-fixed`; the
+time in isolated lab servers. Successful lab work directories are cleaned by
+default, while failed server/client directories are preserved for log and
+crash-report analysis. If a small repair is fully understood, register the
+repaired jar as a linked `Codex_Fixed` duplicate with `register-fixed`; the
 original remains marked failed while the fixed copy carries its own checksum,
 patch notes, and promotion status.
+
+Known nonfatal structure-generation noise is filtered narrowly by exact pattern.
+For example, MOTS Structures 1.4 can log missing `minecraft:start` jigsaw
+entries for cherry/mangrove well pools while still reaching `Done`, idling, and
+shutting down cleanly; that signal is tracked separately from true crashes.
 
 ## Headless Client Lab
 
@@ -426,7 +474,15 @@ Runs are stored in `headless_client_runs` with the active release id, renderer
 summary, HeadlessMC log, Minecraft `latest.log`, crash-report count, fatal-log
 count, and pass/fail notes. The lab always syncs from
 `/var/minecraft_26.1.2/client-package`, so it tests the same client pack that
-Mac users install.
+Mac users install. Offline mode is the default for isolated block tests; Realms
+offline-auth noise is ignored, but real multiplayer login failures remain
+fatal.
+The launcher path seeds the HeadlessMC specifics cache with the legacy
+`hmc-specifics-2.4.0.jar` runtime and removes stale game-folder
+`hmc-specifics-*.jar` copies, because HeadlessMC 2.9.0 with
+HMC-Specifics 26.1.2 currently expects that cached runtime shape. Client-side
+`NoClassDefFoundError` and `ClassNotFoundException` are fatal in the harness so
+non-crashing runtime defects do not get promoted silently.
 
 The load lab supports dry-run validation plus real scenarios:
 

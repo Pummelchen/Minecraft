@@ -294,6 +294,122 @@ PY
 "$PYTHON_BIN" "$ROOT_DIR/scripts/mod_acceptance_lab.py" --db "$DB" --server-dir "$ACCEPTANCE_SERVER" run-files --dry-run \
   --candidate-group-size 2 "$ACCEPTANCE_SERVER/mods/pummelchen-dependent-1.0.0.jar" \
   | grep -q 'context_files=1' || fail "candidate acceptance did not add known-working context"
+"$PYTHON_BIN" - "$ROOT_DIR" "$TMP_DIR/jarjar-parent.jar" <<'PY'
+from pathlib import Path
+import io
+import json
+import sys
+import zipfile
+
+sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
+import mod_acceptance_lab
+
+parent = Path(sys.argv[2])
+nested_bytes = io.BytesIO()
+with zipfile.ZipFile(nested_bytes, "w") as nested:
+    nested.writestr(
+        "META-INF/neoforge.mods.toml",
+        """
+modLoader="javafml"
+loaderVersion="[1,)"
+license="MIT"
+[[mods]]
+modId="pummeljarjarlib"
+version="1.0.0"
+displayName="Pummel JarJar Lib"
+""",
+    )
+with zipfile.ZipFile(parent, "w") as archive:
+    archive.writestr(
+        "META-INF/neoforge.mods.toml",
+        """
+modLoader="javafml"
+loaderVersion="[1,)"
+license="MIT"
+[[mods]]
+modId="pummeljarjarparent"
+version="1.0.0"
+displayName="Pummel JarJar Parent"
+[[dependencies.pummeljarjarparent]]
+modId="pummeljarjarlib"
+mandatory=true
+versionRange="[1,)"
+ordering="NONE"
+side="BOTH"
+""",
+    )
+    archive.writestr("META-INF/jarjar/pummeljarjarlib-1.0.0.jar", nested_bytes.getvalue())
+    archive.writestr(
+        "META-INF/jarjar/metadata.json",
+        json.dumps(
+            {
+                "jars": [
+                    {
+                        "identifier": {"group": "test", "artifact": "pummeljarjarlib"},
+                        "version": {"range": "[1,)", "artifactVersion": "1.0.0"},
+                        "path": "META-INF/jarjar/pummeljarjarlib-1.0.0.jar",
+                    }
+                ]
+            }
+        ),
+    )
+jar = mod_acceptance_lab.build_mod_jar(parent)
+assert "pummeljarjarlib" in jar.mod_ids, jar
+assert "pummeljarjarlib" not in jar.required_deps, jar
+PY
+"$PYTHON_BIN" - "$ROOT_DIR" "$TMP_DIR/gbg-provider.jar" "$TMP_DIR/gbg-extension.jar" <<'PY'
+from pathlib import Path
+import json
+import sys
+import zipfile
+
+sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
+import mod_acceptance_lab
+
+provider = Path(sys.argv[2])
+extension = Path(sys.argv[3])
+with zipfile.ZipFile(provider, "w") as archive:
+    archive.writestr(
+        "META-INF/neoforge.mods.toml",
+        """
+modLoader="javafml"
+loaderVersion="[1,)"
+license="MIT"
+[[mods]]
+modId="mrgamingbarnsguns"
+version="1.0.0"
+displayName="Gamingbarn Fixture"
+""",
+    )
+    archive.writestr("data/gbg/enchantment/shoot_gun.json", "{}")
+with zipfile.ZipFile(extension, "w") as archive:
+    archive.writestr(
+        "data/example/loot_table/guns/test.json",
+        json.dumps({"components": {"minecraft:enchantments": {"gbg:shoot_gun": 1}}}),
+    )
+provider_jar = mod_acceptance_lab.build_mod_jar(provider)
+extension_jar = mod_acceptance_lab.build_mod_jar(extension)
+assert "gbg" in provider_jar.mod_ids, provider_jar
+assert "mrgamingbarnsguns" in provider_jar.mod_ids, provider_jar
+assert "gbg" in extension_jar.required_deps, extension_jar
+included, missing = mod_acceptance_lab.dependency_closure([extension_jar], [extension_jar, provider_jar])
+assert not missing, missing
+assert {jar.path for jar in included} == {provider, extension}, included
+PY
+"$PYTHON_BIN" - "$ROOT_DIR" "$TMP_DIR/quack-gecko-user.jar" <<'PY'
+from pathlib import Path
+import sys
+import zipfile
+
+sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
+import mod_acceptance_lab
+
+path = Path(sys.argv[2])
+with zipfile.ZipFile(path, "w") as archive:
+    archive.writestr("example/NeedsGecko.class", b"com/geckolib/animatable/GeoEntity")
+jar = mod_acceptance_lab.build_mod_jar(path)
+assert "geckolib" in jar.required_deps, jar
+PY
 FIXED_JAR="$TMP_DIR/codex-fixed-fixture.jar"
 printf 'fixed jar\n' > "$FIXED_JAR"
 ORIGINAL_MOD_ID="$("$PYTHON_BIN" - "$DB" <<'PY'
@@ -351,6 +467,197 @@ row = conn.execute(
 ).fetchone()
 assert row == ("Codex_Fixed", original_id, "candidate"), row
 PY
+"$PYTHON_BIN" - "$DB" <<'PY'
+import datetime as dt
+import sqlite3
+import sys
+
+conn = sqlite3.connect(sys.argv[1])
+now = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
+cur = conn.execute(
+    "INSERT INTO mod_acceptance_releases(release_key, created_at, status, bundle_size, active_file_count, notes) "
+    "VALUES ('qa_acceptance', ?, 'running', 2, 2, 'fixture')",
+    (now,),
+)
+release_id = cur.lastrowid
+conn.execute(
+    """
+    INSERT INTO mod_acceptance_blocks(
+        acceptance_release_id, level, ordinal, block_key, status,
+        target_file_names, included_file_names, created_at
+    )
+    VALUES (?, 0, 1, 'L00_B001', 'passed',
+            'pummelchen-dependent-1.0.0.jar',
+            'pummelchen-dependent-1.0.0.jar\npummelchen-lib-1.0.0.jar',
+            ?)
+    """,
+    (release_id, now),
+)
+conn.commit()
+PY
+"$PYTHON_BIN" "$ROOT_DIR/scripts/mod_acceptance_lab.py" --db "$DB" --server-dir "$ACCEPTANCE_SERVER" run-block-client \
+  --release-key qa_acceptance --level 0 --ordinal 1 --dry-run \
+  | grep -q 'included_server_jars=2' || fail "block-client dry-run did not resolve included jars"
+"$PYTHON_BIN" - "$DB" <<'PY'
+import datetime as dt
+import sqlite3
+import sys
+
+conn = sqlite3.connect(sys.argv[1])
+now = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
+release_id = conn.execute(
+    "SELECT id FROM mod_acceptance_releases WHERE release_key = 'qa_acceptance'"
+).fetchone()[0]
+conn.execute(
+    """
+    INSERT INTO mod_acceptance_blocks(
+        acceptance_release_id, level, ordinal, block_key, status,
+        target_file_names, included_file_names, created_at
+    )
+    VALUES (?, 0, 2, 'L00_B002', 'passed',
+            'pummelchen-dependent-1.0.0.jar',
+            'pummelchen-dependent-1.0.0.jar',
+            ?)
+    """,
+    (release_id, now),
+)
+conn.commit()
+PY
+if "$PYTHON_BIN" "$ROOT_DIR/scripts/mod_acceptance_lab.py" --db "$DB" --server-dir "$ACCEPTANCE_SERVER" run-block-client \
+  --release-key qa_acceptance --level 0 --ordinal 2 --dry-run >"$TMP_DIR/block-client-missing-deps.out" 2>&1; then
+  fail "block-client dry-run allowed an omitted dependency"
+fi
+grep -q 'missing_required_dependencies=pummelchen-dependent-1.0.0.jar requires pummellib' \
+  "$TMP_DIR/block-client-missing-deps.out" || fail "block-client dry-run did not report omitted dependency"
+cat > "$TMP_DIR/acceptance-errors.log" <<'LOG'
+[15:07:36] [NeoForge Version Check/WARN] [ne.ne.fm.VersionChecker/]: Failed to process update information
+com.google.gson.JsonSyntaxException: java.lang.IllegalStateException: Expected BEGIN_OBJECT but was STRING at line 1 column 1 path $
+Caused by: java.lang.IllegalStateException: Expected BEGIN_OBJECT but was STRING at line 1 column 1 path $
+[17:46:00] [Worker-Main-2/ERROR] [minecraft/BlockAttachedEntity]: Block-attached entity at invalid position: BlockPos{x=-177, y=-34, z=759}
+[19:13:05] [Worker-Main-2/ERROR] [minecraft/JigsawPlacement]: No starting jigsaw minecraft:start found in start pool mot_structures:well/cherry
+[15:24:07] [Worker-Main-1/ERROR] [minecraft/SimpleJsonResourceReloadListener]: Couldn't parse data file 'example:guns/test' from 'example:loot_table/guns/test.json'
+LOG
+"$PYTHON_BIN" - "$ROOT_DIR" "$TMP_DIR/acceptance-errors.log" <<'PY'
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
+import mod_acceptance_lab
+
+count, severe = mod_acceptance_lab.severe_errors(Path(sys.argv[2]))
+assert count >= 1, (count, severe)
+assert len(severe) == 1, (count, severe)
+assert "SimpleJsonResourceReloadListener" in severe[0], severe
+PY
+"$PYTHON_BIN" - "$TMP_DIR/gbg-source.jar" <<'PY'
+from pathlib import Path
+import json
+import sys
+import zipfile
+
+with zipfile.ZipFile(Path(sys.argv[1]), "w") as archive:
+    archive.writestr(
+        "data/example/loot_table/guns/test.json",
+        json.dumps(
+            {
+                "pools": [
+                    {
+                        "entries": [
+                            {
+                                "functions": [
+                                    {
+                                        "function": "minecraft:set_components",
+                                        "components": {"minecraft:enchantments": {"gbg:shoot_gun": 1}},
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        ),
+    )
+PY
+"$PYTHON_BIN" "$ROOT_DIR/scripts/patch_gbg_enchantments.py" "$TMP_DIR/gbg-source.jar" "$TMP_DIR/gbg-patched.jar" \
+  | grep -q 'patched_components=1' || fail "GBG enchantment patcher did not rewrite fixture"
+"$PYTHON_BIN" - "$TMP_DIR/gbg-patched.jar" <<'PY' || fail "GBG enchantment patcher wrote unexpected JSON"
+from pathlib import Path
+import json
+import sys
+import zipfile
+
+with zipfile.ZipFile(Path(sys.argv[1])) as archive:
+    data = json.loads(archive.read("data/example/loot_table/guns/test.json"))
+value = data["pools"][0]["entries"][0]["functions"][0]["components"]["minecraft:enchantments"]
+assert value == {"levels": {"gbg:shoot_gun": 1}}, value
+PY
+"$PYTHON_BIN" - "$TMP_DIR/mots-broken.jar" <<'PY'
+from pathlib import Path
+import sys
+import zipfile
+
+with zipfile.ZipFile(Path(sys.argv[1]), "w") as archive:
+    archive.writestr(
+        "assets/mot/lang/en_us.json",
+        """{
+    "item.mot.chart.village_taiga": "Taiga Village Chart"
+    "item.mot.chart.explorer_jungle": "Jungle Explorer Chart"
+
+
+    "advancement.mot.adventure.find_resin_crypt.title": "Echoing Creaks"
+}
+""",
+    )
+PY
+"$PYTHON_BIN" "$ROOT_DIR/scripts/patch_mots_structures_lang.py" "$TMP_DIR/mots-broken.jar" "$TMP_DIR/mots-fixed.jar" \
+  | grep -q 'patched_resource_count=2' || fail "MOTS language patcher did not repair fixture"
+"$PYTHON_BIN" - "$TMP_DIR/mots-fixed.jar" <<'PY' || fail "MOTS language patcher wrote invalid JSON"
+from pathlib import Path
+import json
+import sys
+import zipfile
+
+with zipfile.ZipFile(Path(sys.argv[1])) as archive:
+    data = json.loads(archive.read("assets/mot/lang/en_us.json"))
+assert data["item.mot.chart.village_taiga"] == "Taiga Village Chart", data
+assert data["item.mot.chart.explorer_jungle"] == "Jungle Explorer Chart", data
+PY
+"$PYTHON_BIN" - "$TMP_DIR/productivefarming-broken.jar" <<'PY'
+from pathlib import Path
+import json
+import sys
+import zipfile
+
+broken = {
+    "parent": "neoforge:item/bucket",
+    "loader": "neoforge:fluid_container",
+    "fluid": "productivefarming:nutrient_water",
+}
+with zipfile.ZipFile(Path(sys.argv[1]), "w") as archive:
+    archive.writestr("assets/productivefarming/models/item/nutrient_water_bucket.json", json.dumps(broken))
+    archive.writestr("assets/productivefarming/items/nutrient_water_bucket.json", json.dumps({"model": {"type": "neoforge:fluid_container"}}))
+PY
+"$PYTHON_BIN" "$ROOT_DIR/scripts/patch_productivefarming_bucket_model.py" \
+  "$TMP_DIR/productivefarming-broken.jar" "$TMP_DIR/productivefarming-fixed.jar" \
+  | grep -q 'patched_models=2' || fail "Productive Farming bucket patcher did not repair fixture"
+"$PYTHON_BIN" - "$TMP_DIR/productivefarming-fixed.jar" <<'PY' || fail "Productive Farming bucket patcher wrote unexpected JSON"
+from pathlib import Path
+import json
+import sys
+import zipfile
+
+with zipfile.ZipFile(Path(sys.argv[1])) as archive:
+    item = json.loads(archive.read("assets/productivefarming/items/nutrient_water_bucket.json"))
+    assert item == {
+        "model": {
+            "type": "minecraft:model",
+            "model": "minecraft:item/water_bucket",
+        }
+    }, item
+    model = json.loads(archive.read("assets/productivefarming/models/item/nutrient_water_bucket.json"))
+    assert model["parent"] == "minecraft:item/generated", model
+    assert model["textures"]["layer0"] == "minecraft:item/water_bucket", model
+PY
 
 log "Headless client lab fixture"
 HEADLESS_SERVER="$TMP_DIR/headless-server"
@@ -364,10 +671,133 @@ printf 'resource\n' > "$HEADLESS_SERVER/client-package/resourcepacks/headless-re
 "$PYTHON_BIN" "$ROOT_DIR/scripts/headless_client_lab.py" --db "$DB" --server-dir "$HEADLESS_SERVER" --base-dir "$HEADLESS_BASE" sync >/tmp/headless-sync.$$
 grep -q 'mods=1' /tmp/headless-sync.$$ || fail "headless client sync did not copy mod fixture"
 grep -q 'resourcepacks=1' /tmp/headless-sync.$$ || fail "headless client sync did not copy resource fixture"
+grep -q 'hmc_specifics=hmc-specifics-26.1.2-neoforge-latest.jar' /tmp/headless-sync.$$ || fail "headless client sync did not install HMC-Specifics"
 rm -f /tmp/headless-sync.$$
 [ -f "$HEADLESS_BASE/game/options.txt" ] || fail "headless client sync did not seed options.txt"
+grep -q '^simulationDistance:5$' "$HEADLESS_BASE/game/options.txt" || fail "headless client sync wrote invalid simulation distance"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/headless_client_lab.py" --db "$DB" --server-dir "$HEADLESS_SERVER" --base-dir "$HEADLESS_BASE" run --dry-run \
   | grep -q 'launch=launch neoforge:26.1.2 -specifics' || fail "headless client dry-run did not print launch command"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/headless_client_lab.py" --db "$DB" --server-dir "$HEADLESS_SERVER" --base-dir "$HEADLESS_BASE" run --dry-run --offline \
+  | grep -q -- '-offline' || fail "headless client offline dry-run did not include offline flag"
+"$PYTHON_BIN" - "$ROOT_DIR" "$TMP_DIR" <<'PY' || fail "headless client fatal classifier mishandled Realms offline auth noise"
+import io
+import os
+import shutil
+from pathlib import Path
+import sys
+import zipfile
+
+root = Path(sys.argv[1])
+tmp = Path(sys.argv[2])
+sys.path.insert(0, str(root / "scripts"))
+import headless_client_lab
+
+realms_log = tmp / "realms-invalid-session.log"
+realms_log.write_text(
+    "[Download-2/INFO] [mojang/RealmsClient]: Could not authorize you against Realms server: "
+    "javax.ws.rs.BadRequestException: Invalid session\n"
+    "com.mojang.realmsclient.exception.RealmsServiceException: "
+    "Realms authentication error with message 'javax.ws.rs.BadRequestException: Invalid session'\n",
+    encoding="utf-8",
+)
+assert headless_client_lab.fatal_lines([realms_log]) == []
+login_log = tmp / "multiplayer-invalid-session.log"
+login_log.write_text("multiplayer.disconnect.unverified_username: Invalid session\n", encoding="utf-8")
+assert headless_client_lab.fatal_lines([login_log]), "real multiplayer invalid-session failure must remain fatal"
+stack_log = tmp / "client-stack-overflow.log"
+stack_log.write_text(
+    "[Render thread/ERROR] [net.minecraft.util.thread.BlockableEventLoop/FATAL]: Error executing task on Client\n"
+    "Caused by: java.lang.StackOverflowError\n",
+    encoding="utf-8",
+)
+assert headless_client_lab.fatal_lines([stack_log]), "client StackOverflowError must be fatal"
+class_log = tmp / "missing-client-class.log"
+class_log.write_text("java.lang.NoClassDefFoundError: com/example/MissingClass\n", encoding="utf-8")
+assert headless_client_lab.fatal_lines([class_log]), "client missing-class failures must be fatal"
+loading_error_log = tmp / "loading-error-screen.log"
+loading_error_log.write_text("Screen: net.neoforged.neoforge.client.gui.LoadingErrorScreen\n", encoding="utf-8")
+assert headless_client_lab.fatal_lines([loading_error_log]) == []
+fatal_loading = "Screen: net.neoforged.neoforge.client.gui.LoadingErrorScreen\nButtons:\n0    Quit Game\n"
+assert headless_client_lab.is_fatal_loading_error_screen(fatal_loading)
+dismissible_loading = (
+    "Screen: net.neoforged.neoforge.client.gui.LoadingErrorScreen\n"
+    "Buttons:\n"
+    "2    Proceed to main menu   50   246   185   20   1   ExtendedButton\n"
+)
+assert not headless_client_lab.is_fatal_loading_error_screen(dismissible_loading)
+assert headless_client_lab.is_dismissible_loading_error_screen(dismissible_loading)
+class FakeProc:
+    stdin = io.StringIO()
+
+fake = FakeProc()
+attempted = {}
+headless_client_lab.dismiss_startup_dialog(
+    fake,
+    dismissible_loading,
+    server_host="127.0.0.1",
+    server_port=25690,
+    display="",
+    attempted_actions=attempted,
+)
+commands = fake.stdin.getvalue().splitlines()
+assert commands == ["connect 127.0.0.1 25690"], commands
+assert attempted == {"loading_error_connect": 1}, attempted
+assert not any(command.startswith("key ") for command in commands), commands
+assert headless_client_lab.gui_button_center(dismissible_loading, "Proceed to main menu") == (142, 256)
+assert (
+    headless_client_lab.hmc_legacy_specifics_name("26.1.2", "neoforge")
+    == "hmc-specifics-26.1.2-2.4.0-neoforge-release.jar"
+)
+cache_src = tmp / "hmc-specifics-26.1.2-neoforge-latest.jar"
+with zipfile.ZipFile(cache_src, "w") as archive:
+    archive.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n")
+game_mods = tmp / "game" / "mods"
+game_mods.mkdir(parents=True)
+stale_game_specifics = game_mods / cache_src.name
+shutil.copy2(cache_src, stale_game_specifics)
+original_ensure = headless_client_lab.ensure_hmc_specifics
+headless_client_lab.ensure_hmc_specifics = lambda game_dir, minecraft_version, loader: cache_src
+cwd = Path.cwd()
+cache_cwd = tmp / "hmc-cache-cwd"
+cache_cwd.mkdir()
+os.chdir(cache_cwd)
+try:
+    seeded = headless_client_lab.seed_hmc_specifics_cache(tmp / "game", "26.1.2", "neoforge")
+finally:
+    os.chdir(cwd)
+    headless_client_lab.ensure_hmc_specifics = original_ensure
+assert seeded.name == "hmc-specifics-26.1.2-2.4.0-neoforge-release.jar"
+assert seeded.exists()
+assert zipfile.is_zipfile(seeded)
+assert not stale_game_specifics.exists()
+connect_screen = """Screen: net.minecraft.client.gui.screens.ConnectScreen
+Buttons:
+0    Cancel   140   199   200   20   1   Plain
+"""
+assert not headless_client_lab.is_blocking_startup_dialog(connect_screen)
+title_screen = "Screen: net.minecraft.client.gui.screens.TitleScreen\n"
+assert headless_client_lab.is_title_screen(title_screen)
+assert not headless_client_lab.is_blocking_startup_dialog(title_screen)
+mod_error_log = tmp / "mod-loading-error.log"
+mod_error_log.write_text(
+    "Loading errors encountered:\n"
+    "- More Babies (more_babies) has failed to load correctly\n"
+    "Mod yumemigusa requires oelib 6.2.3 or above\n"
+    "Currently, oelib is not installed\n",
+    encoding="utf-8",
+)
+assert len(headless_client_lab.fatal_lines([mod_error_log])) >= 3
+loading = """Screen: net.minecraft.client.gui.screens.GenericMessageScreen
+Other:
+0    Loading Minecraft   177   131   126   33   FocusableTextWidget
+"""
+assert not headless_client_lab.is_blocking_startup_dialog(loading)
+welcome = """Screen: net.minecraft.client.gui.screens.dialog.MultiButtonDialogScreen
+Other:
+1    Welcome to Chems' Guns!   197   13   55   9   StringWidget
+"""
+assert headless_client_lab.is_blocking_startup_dialog(welcome)
+PY
 
 log "Rollback fixture"
 printf 'mod-b\n' > "$SERVER/mods/mod-b.jar"

@@ -256,7 +256,10 @@ if printf '%s\n' "$SERVER_SANITIZE_OUTPUT" | grep -Eq 'resource_pack_metadata_ch
   systemctl restart pummelchen-minecraft.service
 fi
 curl -fsS http://127.0.0.1:7788/ >/dev/null
-curl -fsS http://127.0.0.1:7792/metrics | grep -q pummelchen_minecraft_up
+METRICS_TMP="$(mktemp)"
+trap 'rm -f "$METRICS_TMP"' EXIT
+curl -fsS http://127.0.0.1:7792/metrics -o "$METRICS_TMP"
+grep -q pummelchen_minecraft_up "$METRICS_TMP"
 sqlite3 "$PROJECT_DIR/data/minecraft_mods.sqlite" 'PRAGMA integrity_check;' | grep -q '^ok$'
 REMOTE
 }
