@@ -315,6 +315,120 @@ def add_chandelier(structure: Structure, x: int, y: int, z: int) -> None:
     structure.set(x, y - 2, z + 1, st("minecraft:sea_lantern"))
 
 
+def add_lantern_post(structure: Structure, x: int, y: int, z: int) -> None:
+    structure.set(x, y, z, st("minecraft:cobblestone"))
+    structure.set(x, y + 1, z, st("minecraft:oak_fence", east="false", north="false", south="false", west="false", waterlogged="false"))
+    structure.set(x, y + 2, z, st("minecraft:lantern", hanging="false", waterlogged="false"))
+
+
+def add_reference_front_facade(structure: Structure) -> None:
+    glass = st("minecraft:purple_stained_glass")
+    vertical = st("minecraft:dark_oak_log", axis="y")
+    horizontal = st("minecraft:dark_oak_planks")
+    accent = st("minecraft:purple_terracotta")
+
+    structure.fill(20, 7, 34, 36, 12, 34, glass)
+    for x in (20, 24, 28, 32, 36):
+        structure.fill(x, 7, 34, x, 12, 34, vertical)
+    for y in (7, 10, 12):
+        structure.fill(20, y, 34, 36, y, 34, horizontal)
+    structure.fill(26, 7, 34, 30, 9, 34, accent)
+    add_door(structure, 27, 7, 34, "south", "left")
+    add_door(structure, 28, 7, 34, "south", "right")
+    for x in (19, 37):
+        structure.fill(x, 6, 34, x, 13, 34, st("minecraft:stripped_spruce_log", axis="y"))
+    for x in (22, 34):
+        structure.set(x, 11, 34, st("minecraft:potted_allium"))
+
+
+def add_reference_side_bays(structure: Structure) -> None:
+    frame = st("minecraft:stripped_spruce_log", axis="y")
+    header = st("minecraft:dark_oak_planks")
+
+    for x1, x2, crop in ((6, 14, "minecraft:moss_block"), (42, 50, "minecraft:farmland")):
+        structure.clear(x1, 7, 33, x2, 10, 33)
+        for x in (x1, x1 + 4, x2):
+            structure.fill(x, 7, 33, x, 11, 33, frame)
+        structure.fill(x1, 11, 33, x2, 11, 33, header)
+        structure.fill(x1 + 1, 7, 28, x2 - 1, 7, 32, st(crop, moisture="7") if crop.endswith("farmland") else st(crop))
+    for x in range(7, 14):
+        structure.set(x, 8, 30, st("minecraft:flowering_azalea"))
+        if x % 2 == 0:
+            structure.set(x, 8, 32, st("minecraft:potted_allium"))
+    for x in range(43, 50):
+        for z in range(28, 33):
+            if x in (45, 48):
+                structure.set(x, 7, z, st("minecraft:water"))
+            else:
+                structure.set(x, 8, z, st("minecraft:wheat", age="7"))
+    for x, z in ((6, 33), (14, 33), (42, 33), (50, 33)):
+        structure.set(x, 12, z, st("minecraft:lantern", hanging="true", waterlogged="false"))
+
+
+def add_gable_roof_z(
+    structure: Structure,
+    x1: int,
+    x2: int,
+    z1: int,
+    z2: int,
+    base_y: int,
+    *,
+    roof: str = "dark_oak",
+) -> None:
+    north = st(f"minecraft:{roof}_stairs", facing="north", half="bottom", shape="straight", waterlogged="false")
+    south = st(f"minecraft:{roof}_stairs", facing="south", half="bottom", shape="straight", waterlogged="false")
+    trim = st("minecraft:polished_deepslate")
+    ridge = st("minecraft:purpur_block")
+    center = (z1 + z2) // 2
+    for z in range(z1, z2 + 1):
+        slope = min(z - z1, z2 - z)
+        y = base_y + max(0, slope)
+        state = north if z <= center else south
+        for x in range(x1, x2 + 1):
+            structure.set(x, y, z, state)
+        if z in (z1, z2, center, center + 1):
+            structure.fill(x1, y + 1, z, x2, y + 1, z, trim if z in (z1, z2) else ridge)
+        structure.set(x1, y, z, trim)
+        structure.set(x2, y, z, trim)
+    for x in (x1, x2):
+        for z in range(z1 + 1, z2):
+            slope = min(z - z1, z2 - z)
+            for y in range(base_y, base_y + max(0, slope)):
+                structure.set(x, y, z, st("minecraft:stripped_oak_log", axis="x"))
+
+
+def add_gable_roof_x(
+    structure: Structure,
+    x1: int,
+    x2: int,
+    z1: int,
+    z2: int,
+    base_y: int,
+    *,
+    roof: str = "dark_oak",
+) -> None:
+    west = st(f"minecraft:{roof}_stairs", facing="west", half="bottom", shape="straight", waterlogged="false")
+    east = st(f"minecraft:{roof}_stairs", facing="east", half="bottom", shape="straight", waterlogged="false")
+    trim = st("minecraft:polished_deepslate")
+    ridge = st("minecraft:purpur_block")
+    center = (x1 + x2) // 2
+    for x in range(x1, x2 + 1):
+        slope = min(x - x1, x2 - x)
+        y = base_y + max(0, slope)
+        state = west if x <= center else east
+        for z in range(z1, z2 + 1):
+            structure.set(x, y, z, state)
+        if x in (x1, x2, center, center + 1):
+            structure.fill(x, y + 1, z1, x, y + 1, z2, trim if x in (x1, x2) else ridge)
+        structure.set(x, y, z1, trim)
+        structure.set(x, y, z2, trim)
+    for z in (z1, z2):
+        for x in range(x1 + 1, x2):
+            slope = min(x - x1, x2 - x)
+            for y in range(base_y, base_y + max(0, slope)):
+                structure.set(x, y, z, st("minecraft:stripped_oak_log", axis="z"))
+
+
 def add_windows(structure: Structure) -> None:
     glass = st("minecraft:purple_stained_glass")
     for x in (20, 24, 32, 36):
@@ -335,7 +449,7 @@ def add_landscaping(structure: Structure) -> None:
     grass = st("minecraft:grass_block")
     path = st("minecraft:dirt_path")
     podzol = st("minecraft:podzol")
-    purpur = st("minecraft:purpur_block")
+    bamboo = st("minecraft:bamboo_mosaic")
     quartz = st("minecraft:smooth_quartz")
     water = st("minecraft:water")
     structure.fill(0, 0, 0, 56, 0, 56, grass)
@@ -343,11 +457,17 @@ def add_landscaping(structure: Structure) -> None:
     structure.fill(0, 0, 37, 56, 0, 43, path)
     structure.fill(25, 0, 0, 31, 0, 37, path)
 
-    structure.fill(20, 0, 40, 36, 0, 54, grass)
-    structure.fill(21, 1, 41, 35, 1, 53, purpur)
-    structure.fill(23, 1, 43, 33, 1, 51, quartz)
+    structure.fill(19, 0, 39, 37, 0, 55, grass)
+    structure.fill(20, 1, 40, 36, 1, 54, bamboo)
+    structure.fill(22, 1, 42, 34, 1, 52, quartz)
     structure.fill(25, 1, 45, 31, 1, 49, water)
+    structure.fill(24, 1, 44, 32, 1, 44, st("minecraft:purpur_block"))
+    structure.fill(24, 1, 50, 32, 1, 50, st("minecraft:purpur_block"))
+    structure.fill(24, 1, 45, 24, 1, 49, st("minecraft:purpur_block"))
+    structure.fill(32, 1, 45, 32, 1, 49, st("minecraft:purpur_block"))
     structure.set(28, 2, 47, st("minecraft:sea_lantern"))
+    for x, z in ((20, 40), (36, 40), (20, 54), (36, 54)):
+        add_lantern_post(structure, x, 1, z)
 
     flowers = [
         "allium",
@@ -460,17 +580,25 @@ def add_basement(structure: Structure) -> None:
 def add_main_house(structure: Structure) -> None:
     oak = st("minecraft:oak_planks")
     stripped = st("minecraft:stripped_oak_log", axis="y")
-    purple = st("minecraft:purple_terracotta")
+    wall = st("minecraft:oak_planks")
     smooth = st("minecraft:smooth_quartz")
     dark = st("minecraft:dark_oak_planks")
 
     structure.fill(3, 6, 12, 53, 6, 39, oak)
+    structure.fill(3, 6, 12, 53, 6, 13, dark)
+    structure.fill(3, 6, 38, 53, 6, 39, dark)
+    structure.fill(3, 6, 12, 4, 6, 39, dark)
+    structure.fill(52, 6, 12, 53, 6, 39, dark)
     add_railing(structure, 3, 12, 53, 39, 7, gaps={(27, 39), (28, 39), (10, 39), (47, 39)})
 
-    structure.hollow_box(16, 6, 10, 40, 12, 34, purple, smooth, oak)
+    structure.hollow_box(16, 6, 10, 40, 12, 34, wall, smooth, oak)
     structure.hollow_box(4, 6, 15, 16, 11, 33, st("minecraft:oak_planks"), dark, oak)
     structure.hollow_box(40, 6, 15, 52, 11, 33, st("minecraft:oak_planks"), dark, oak)
     structure.hollow_box(18, 13, 8, 38, 18, 30, st("minecraft:stripped_birch_log", axis="y"), smooth, None)
+    structure.fill(30, 13, 20, 38, 18, 34, st("minecraft:stripped_birch_log", axis="y"))
+    structure.clear(31, 14, 21, 37, 17, 33)
+    structure.fill(31, 13, 21, 37, 13, 33, smooth)
+    structure.fill(31, 18, 21, 37, 18, 33, oak)
 
     for x in (4, 16, 40, 52):
         for z in (15, 33):
@@ -488,6 +616,8 @@ def add_main_house(structure: Structure) -> None:
     structure.clear(27, 13, 30, 29, 15, 30)
     add_door(structure, 28, 13, 30, "south", "left")
     add_windows(structure)
+    add_reference_front_facade(structure)
+    add_reference_side_bays(structure)
 
     structure.fill(23, 7, 18, 33, 7, 25, st("minecraft:purple_carpet"))
     structure.fill(18, 7, 12, 24, 7, 16, st("minecraft:smooth_quartz_slab", type="bottom", waterlogged="false"))
@@ -559,28 +689,18 @@ def add_main_house(structure: Structure) -> None:
 
 
 def add_roofs_and_terraces(structure: Structure) -> None:
-    purpur_stairs_n = st("minecraft:purpur_stairs", facing="north", half="bottom", shape="straight", waterlogged="false")
-    purpur_stairs_s = st("minecraft:purpur_stairs", facing="south", half="bottom", shape="straight", waterlogged="false")
-    trim = st("minecraft:polished_deepslate")
-    roof_block = st("minecraft:purpur_block")
-    for z in range(7, 32):
-        slope = min(z - 7, 31 - z)
-        y = 18 + max(0, slope)
-        state = purpur_stairs_n if z <= 19 else purpur_stairs_s
-        for x in range(13, 44):
-            structure.set(x, y, z, state)
-        if z in (7, 31, 19, 20):
-            structure.fill(13, y + 1, z, 43, y + 1, z, trim)
-    for x in (13, 43):
-        for z in range(8, 31):
-            slope = min(z - 7, 31 - z)
-            for y in range(18, 18 + max(0, slope)):
-                structure.set(x, y, z, st("minecraft:stripped_oak_log", axis="x"))
-    structure.fill(23, 24, 19, 33, 24, 20, roof_block)
-    structure.fill(25, 25, 19, 31, 25, 20, trim)
+    add_gable_roof_z(structure, 13, 43, 7, 31, 18, roof="dark_oak")
+    add_gable_roof_x(structure, 17, 39, 20, 37, 18, roof="spruce")
+    structure.fill(23, 25, 19, 33, 25, 20, st("minecraft:purpur_block"))
+    structure.fill(25, 26, 19, 31, 26, 20, st("minecraft:polished_deepslate"))
+    for x in (18, 38):
+        for z in (9, 29, 35):
+            structure.fill(x, 13, z, x, 20, z, st("minecraft:stripped_spruce_log", axis="y"))
 
     for x1, x2 in ((3, 17), (39, 53)):
         structure.fill(x1, 12, 14, x2, 12, 34, st("minecraft:oak_planks"))
+        structure.fill(x1, 12, 14, x2, 12, 15, st("minecraft:dark_oak_planks"))
+        structure.fill(x1, 12, 33, x2, 12, 34, st("minecraft:dark_oak_planks"))
         add_railing(structure, x1, 14, x2, 34, 13)
         structure.fill(x1 + 2, 13, 17, x2 - 2, 13, 22, st("minecraft:grass_block"))
         structure.fill(x1 + 2, 13, 25, x2 - 2, 13, 31, st("minecraft:farmland", moisture="7"))
@@ -595,12 +715,14 @@ def add_roofs_and_terraces(structure: Structure) -> None:
             structure.set(x, 14, 21, st("minecraft:cornflower"))
         for x, z in ((x1 + 2, 17), (x2 - 2, 17), (x1 + 2, 31), (x2 - 2, 31)):
             structure.set(x, 14, z, st("minecraft:lantern", hanging="false", waterlogged="false"))
+        for x in range(x1 + 3, x2 - 2, 4):
+            structure.set(x, 14, 16, st("minecraft:potted_allium"))
 
 
 def add_front_stairs_and_arcade(structure: Structure) -> None:
     stair = st("minecraft:oak_stairs", facing="south", half="bottom", shape="straight", waterlogged="false")
     stone = st("minecraft:stone_bricks")
-    for x1, x2 in ((3, 15), (41, 53)):
+    for x1, x2 in ((2, 18), (38, 54)):
         for step in range(6):
             z = 45 - step
             y = 1 + step
@@ -608,12 +730,16 @@ def add_front_stairs_and_arcade(structure: Structure) -> None:
                 structure.set(x, y, z, stair)
                 if y > 1:
                     structure.fill(x, 1, z, x, y - 1, z, st("minecraft:oak_planks"))
-        structure.fill(x1, 1, 35, x1, 6, 45, stone)
-        structure.fill(x2, 1, 35, x2, 6, 45, stone)
-    for x in (6, 14, 42, 50):
+        for x in (x1, x2):
+            for z in (35, 39, 43, 45):
+                structure.fill(x, 1, z, x, 6, z, stone)
+            add_fence_line(structure, [(x, 7, z) for z in range(35, 46)])
+    for x in (5, 14, 42, 51):
         for z in (35, 39):
             structure.fill(x, 1, z, x, 6, z, st("minecraft:spruce_log", axis="y"))
             structure.set(x, 6, z, st("minecraft:lantern", hanging="true", waterlogged="false"))
+    structure.fill(19, 6, 36, 37, 6, 39, st("minecraft:dark_oak_planks"))
+    add_railing(structure, 19, 36, 37, 39, 7, gaps={(27, 39), (28, 39)})
     structure.fill(8, 1, 35, 21, 5, 39, AIR)
     structure.fill(35, 1, 35, 49, 5, 39, AIR)
     for x in (8, 21, 35, 49):
@@ -656,7 +782,7 @@ def datapack_files() -> dict[str, bytes]:
                 "pack": {
                     "pack_format": PACK_FORMAT,
                     "supported_formats": SUPPORTED_FORMATS,
-                    "description": "Pummelchen Purple House: purple flower mansion with pets, gardens, and spa basement.",
+                    "description": "Pummelchen Purple House: L-shaped purple survival mansion with gardens, pets, and spa basement.",
                 }
             }
         ),

@@ -4,22 +4,24 @@
 
 Source: `https://www.youtube.com/watch?v=gL_4xJ6TO7g`
 
-The requested reference reads as a large survival compound rather than a small
-cabin:
+The requested reference reads as a large L-shaped survival compound rather than
+a small cabin:
 
 - Wide, symmetrical front composition with two broad side staircases.
-- Raised lower deck wrapping the building front and side wings.
-- Central multi-floor house volume with a steep gable roof.
-- Stone-and-wood support rhythm under the decks.
+- Raised lower deck wrapping the front and stepping into an L-shaped plan.
+- Central multi-floor house volume with steep intersecting gable roofs.
+- Gray roof trim, wood roof planes, purple ridge/accent blocks, and a central
+  front grid facade.
+- Stone-and-wood support rhythm under the decks, including open front arcades.
 - Courtyard focal point in front of the entrance, shown as a square pool.
-- Side utility zones that look like farms, storage, or work bays.
+- Side utility bays that read as garden/work/farm spaces from the front.
 - Dense rails, lanterns, potted plants, hanging greenery, and flower accents.
 
 The Pummelchen version keeps that massing and survival-house role, then turns it
-into a lady-focused purple flower mansion: purpur roofing, purple terracotta
-walls, purple glass, amethyst floor inlays, purple carpets, a large double
-purple bed, candle clusters, allium-heavy flower beds, and pet spaces for cats,
-birds, ducks, and chickens.
+into a lady-focused purple flower mansion: purple glass, purpur ridge/accent
+blocks, purple terracotta details, amethyst floor inlays, purple carpets, a
+large double purple bed, candle clusters, allium-heavy flower beds, and pet
+spaces for cats, birds, ducks, and chickens.
 
 ## 3D Plan
 
@@ -27,12 +29,12 @@ Coordinate plan uses the structure's local origin at the northwest lower corner.
 The finished NBT footprint is `57 x 32 x 57` blocks.
 
 ```text
-Y 25-31  Purple gable roof, polished deepslate ridge/trim
-Y 18-24  Upper roof shell over central house
+Y 25-31  Intersecting gable roof peaks, polished deepslate trim, purpur ridge
+Y 18-24  Wood roof planes over central house and front L-return
 Y 13-18  Upper living floor: large double bedroom, balcony, bookshelves, vanity/work desk
 Y 12-14  Left/right roof terraces: flower planters and wheat patches
-Y  7-12  Main floor: big kitchen, lovely living room, purple glass, front doors
-Y  6-7   Raised deck wrapping house and side wings
+Y  7-12  Main floor: big kitchen, lovely living room, central glass-grid facade
+Y  6-7   Raised L-shaped deck wrapping house, side wings, and front bridge
 Y  1-5   Basement: spa pool, storage, enchanting, smelting, quartz stair access
 Y  0-1   Courtyard, paths, flower beds, pool, pet gardens, foundation
 ```
@@ -45,8 +47,8 @@ Top view, X/Z:
   | cat patio        flowers / grass       bird pergola |
 8 |                upper house volume              |
 12|      left wing     central hall      right wing |
-34|      deck and front double entrance             |
-40|  left stairs     courtyard pool     right stairs|
+34|  open bay + grid entry + open bay/front bridge  |
+40|  broad stairs    courtyard pool     broad stairs |
 46|  chicken coop    flower paths       duck pond    |
 56+------------------------------------------------+
 ```
@@ -70,8 +72,8 @@ safety, with one modded pet entity from `Untitled Duck Mod` because that mod is
 active in the Pummelchen pack. The design is still based on what the Pummelchen
 server already carries:
 
-- ModernArch makes the vanilla shell and purple/glass/quartz palette read more
-  polished on clients.
+- ModernArch makes the vanilla shell, gray trim, wood roof planes, and
+  purple/glass/quartz palette read more polished on clients.
 - Macaw's Furniture and MrCrayfish's Furniture Mod: Refurbished are the intended
   optional upgrade path for sofas, kitchen counters, wardrobes, desks, and
   balcony seating.
@@ -83,6 +85,15 @@ server already carries:
 - The basement now centers on a quartz/amethyst spa pool with sea-lantern and
   candle lighting, while storage, enchanting, and smelting stay around the
   edges.
+
+## Current Build Shape
+
+The upgraded generated structure keeps the same `57 x 32 x 57` footprint and
+placement spacing, but now uses `22,101` placed blocks, `103` palette states,
+and `9` persistent pet entities. The exterior has the closer reference-match
+features requested in the latest upgrade: twin wide staircases, raised
+L-shaped decks, open utility bays, the central wood/glass grid facade, a square
+courtyard pool, and intersecting gable roofs with gray trim and purple accents.
 
 ## Project Files
 
