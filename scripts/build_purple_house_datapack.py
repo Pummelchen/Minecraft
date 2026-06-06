@@ -32,6 +32,7 @@ ZIP_DATE = (2026, 6, 6, 0, 0, 0)
 
 TAG_END = 0
 TAG_BYTE = 1
+TAG_DOUBLE = 6
 TAG_INT = 3
 TAG_STRING = 8
 TAG_LIST = 9
@@ -42,6 +43,11 @@ TAG_COMPOUND = 10
 class NbtList:
     item_type: int
     items: list[Any]
+
+
+@dataclass(frozen=True)
+class NbtByte:
+    value: int
 
 
 @dataclass(frozen=True)
@@ -61,6 +67,7 @@ class Structure:
     def __init__(self, size: tuple[int, int, int]) -> None:
         self.size = size
         self.blocks: dict[tuple[int, int, int], State] = {}
+        self.entities: list[dict[str, Any]] = []
 
     def set(self, x: int, y: int, z: int, state: State) -> None:
         sx, sy, sz = self.size
@@ -76,6 +83,19 @@ class Structure:
 
     def clear(self, x1: int, y1: int, z1: int, x2: int, y2: int, z2: int) -> None:
         self.fill(x1, y1, z1, x2, y2, z2, AIR)
+
+    def add_entity(self, entity_id: str, x: int, y: int, z: int, **nbt: Any) -> None:
+        sx, sy, sz = self.size
+        if not (0 <= x < sx and 0 <= y < sy and 0 <= z < sz):
+            raise ValueError(f"entity outside structure bounds: {(x, y, z)}")
+        entity_nbt: dict[str, Any] = {"id": entity_id, **nbt}
+        self.entities.append(
+            {
+                "pos": NbtList(TAG_DOUBLE, [x + 0.5, float(y), z + 0.5]),
+                "blockPos": NbtList(TAG_INT, [x, y, z]),
+                "nbt": entity_nbt,
+            }
+        )
 
     def hollow_box(
         self,
@@ -100,6 +120,10 @@ class Structure:
 
 
 def nbt_type(value: Any) -> int:
+    if isinstance(value, NbtByte):
+        return TAG_BYTE
+    if isinstance(value, float):
+        return TAG_DOUBLE
     if isinstance(value, int):
         return TAG_INT
     if isinstance(value, str):
@@ -119,7 +143,10 @@ def write_name(buf: bytearray, name: str) -> None:
 
 def write_payload(buf: bytearray, tag: int, value: Any) -> None:
     if tag == TAG_BYTE:
-        buf.extend(struct.pack(">b", int(value)))
+        raw_value = value.value if isinstance(value, NbtByte) else value
+        buf.extend(struct.pack(">b", int(raw_value)))
+    elif tag == TAG_DOUBLE:
+        buf.extend(struct.pack(">d", float(value)))
     elif tag == TAG_INT:
         buf.extend(struct.pack(">i", int(value)))
     elif tag == TAG_STRING:
@@ -183,7 +210,7 @@ def build_nbt(structure: Structure) -> bytes:
         "size": NbtList(TAG_INT, list(structure.size)),
         "palette": NbtList(TAG_COMPOUND, [state_compound(state) for state in palette]),
         "blocks": NbtList(TAG_COMPOUND, blocks),
-        "entities": NbtList(TAG_COMPOUND, []),
+        "entities": NbtList(TAG_COMPOUND, structure.entities),
     }
     return write_nbt_gzip(root)
 
@@ -255,6 +282,39 @@ def add_double_plant(structure: Structure, x: int, y: int, z: int, name: str) ->
     structure.set(x, y + 1, z, st(f"minecraft:{name}", half="upper"))
 
 
+def name_component(name: str) -> str:
+    return json.dumps({"text": name, "color": "light_purple", "italic": False}, separators=(",", ":"))
+
+
+def add_pet(structure: Structure, entity_id: str, x: int, y: int, z: int, name: str) -> None:
+    structure.add_entity(
+        entity_id,
+        x,
+        y,
+        z,
+        CustomName=name_component(name),
+        PersistenceRequired=NbtByte(1),
+    )
+
+
+def add_candle_cluster(structure: Structure, x: int, y: int, z: int, color: str = "purple", candles: int = 3) -> None:
+    structure.set(
+        x,
+        y,
+        z,
+        st(f"minecraft:{color}_candle", candles=str(candles), lit="true", waterlogged="false"),
+    )
+
+
+def add_chandelier(structure: Structure, x: int, y: int, z: int) -> None:
+    structure.set(x, y, z, st("minecraft:chain", axis="y"))
+    structure.set(x, y - 1, z, st("minecraft:lantern", hanging="true", waterlogged="false"))
+    structure.set(x - 1, y - 2, z, st("minecraft:sea_lantern"))
+    structure.set(x + 1, y - 2, z, st("minecraft:sea_lantern"))
+    structure.set(x, y - 2, z - 1, st("minecraft:sea_lantern"))
+    structure.set(x, y - 2, z + 1, st("minecraft:sea_lantern"))
+
+
 def add_windows(structure: Structure) -> None:
     glass = st("minecraft:purple_stained_glass")
     for x in (20, 24, 32, 36):
@@ -319,6 +379,46 @@ def add_landscaping(structure: Structure) -> None:
         structure.set(x, 0, z, podzol)
         add_double_plant(structure, x, 1, z, name)
 
+    # Pet-and-flower gardens around the mansion.
+    structure.fill(6, 0, 46, 16, 0, 54, st("minecraft:moss_block"))
+    add_railing(structure, 5, 45, 17, 55, 1, gaps={(11, 45), (12, 45)})
+    structure.fill(8, 1, 48, 14, 1, 48, st("minecraft:purple_carpet"))
+    structure.fill(8, 1, 51, 14, 1, 51, st("minecraft:magenta_carpet"))
+    for x, z in ((7, 47), (15, 47), (7, 53), (15, 53), (11, 50)):
+        structure.set(x, 1, z, st("minecraft:potted_allium"))
+    structure.set(10, 1, 50, st("minecraft:white_wool"))
+    structure.set(11, 1, 50, st("minecraft:purple_wool"))
+    structure.set(12, 1, 50, st("minecraft:white_wool"))
+
+    structure.fill(42, 0, 46, 54, 0, 55, st("minecraft:moss_block"))
+    add_railing(structure, 41, 45, 55, 56, 1, gaps={(47, 45), (48, 45)})
+    structure.fill(44, 1, 48, 52, 1, 53, water)
+    structure.fill(43, 1, 47, 53, 1, 47, quartz)
+    structure.fill(43, 1, 54, 53, 1, 54, quartz)
+    structure.fill(43, 1, 48, 43, 1, 53, quartz)
+    structure.fill(53, 1, 48, 53, 1, 53, quartz)
+    for x, z in ((45, 49), (48, 51), (51, 49)):
+        structure.set(x, 2, z, st("minecraft:lily_pad"))
+    for x, z in ((42, 46), (54, 46), (42, 55), (54, 55)):
+        structure.set(x, 2, z, st("minecraft:lantern", hanging="false", waterlogged="false"))
+
+    structure.fill(2, 0, 20, 13, 0, 32, st("minecraft:coarse_dirt"))
+    add_railing(structure, 1, 19, 14, 33, 1, gaps={(7, 33), (8, 33)})
+    structure.fill(4, 1, 23, 7, 1, 26, st("minecraft:hay_block", axis="y"))
+    structure.fill(9, 0, 22, 12, 0, 30, st("minecraft:farmland", moisture="7"))
+    structure.fill(9, 1, 22, 12, 1, 30, st("minecraft:wheat", age="7"))
+    structure.set(3, 2, 21, st("minecraft:lantern", hanging="false", waterlogged="false"))
+    structure.set(13, 2, 31, st("minecraft:lantern", hanging="false", waterlogged="false"))
+
+    structure.fill(43, 0, 3, 54, 0, 11, st("minecraft:moss_block"))
+    add_railing(structure, 42, 2, 55, 12, 1, gaps={(48, 12), (49, 12)})
+    for x in (45, 48, 51):
+        structure.fill(x, 1, 5, x, 4, 5, st("minecraft:cherry_log", axis="y"))
+        structure.fill(x - 1, 4, 4, x + 1, 4, 6, st("minecraft:cherry_leaves", distance="1", persistent="true"))
+        structure.set(x, 2, 7, st("minecraft:oak_fence", east="false", north="false", south="false", west="false", waterlogged="false"))
+    for x, z in ((44, 10), (47, 9), (50, 10), (53, 9)):
+        structure.set(x, 1, z, st("minecraft:cornflower"))
+
 
 def add_basement(structure: Structure) -> None:
     stone = st("minecraft:stone_bricks")
@@ -330,11 +430,23 @@ def add_basement(structure: Structure) -> None:
     structure.fill(27, 0, 12, 29, 0, 29, amethyst)
     structure.fill(17, 1, 12, 17, 4, 30, st("minecraft:bookshelf"))
     structure.fill(39, 1, 12, 39, 3, 30, st("minecraft:barrel", facing="west", open="false"))
+    structure.clear(22, 1, 12, 34, 4, 22)
+    structure.fill(23, 1, 13, 33, 1, 21, quartz)
+    structure.fill(25, 1, 15, 31, 1, 19, st("minecraft:water"))
+    structure.fill(24, 1, 14, 32, 1, 14, amethyst)
+    structure.fill(24, 1, 20, 32, 1, 20, amethyst)
+    structure.fill(24, 1, 15, 24, 1, 19, amethyst)
+    structure.fill(32, 1, 15, 32, 1, 19, amethyst)
+    for x, z in ((25, 14), (31, 14), (25, 20), (31, 20)):
+        structure.set(x, 2, z, st("minecraft:sea_lantern"))
+    for x, z in ((23, 13), (33, 13), (23, 21), (33, 21)):
+        add_candle_cluster(structure, x, 2, z, "purple", 4)
+    structure.fill(22, 1, 24, 34, 1, 24, st("minecraft:purple_carpet"))
     structure.fill(23, 1, 28, 33, 1, 28, st("minecraft:furnace", facing="north", lit="false"))
     structure.fill(24, 1, 29, 32, 1, 29, st("minecraft:blast_furnace", facing="north", lit="false"))
-    structure.set(28, 1, 17, st("minecraft:enchanting_table"))
-    structure.fill(25, 1, 15, 31, 1, 15, st("minecraft:bookshelf"))
-    structure.fill(25, 1, 19, 31, 1, 19, st("minecraft:bookshelf"))
+    structure.set(20, 1, 16, st("minecraft:enchanting_table"))
+    structure.fill(19, 1, 14, 21, 1, 14, st("minecraft:bookshelf"))
+    structure.fill(19, 1, 18, 21, 1, 18, st("minecraft:bookshelf"))
     for x in (19, 37):
         for z in (11, 30):
             structure.fill(x, 1, z, x, 5, z, st("minecraft:spruce_log", axis="y"))
@@ -383,12 +495,33 @@ def add_main_house(structure: Structure) -> None:
     structure.set(20, 8, 13, st("minecraft:furnace", facing="south", lit="false"))
     structure.set(21, 8, 13, st("minecraft:cauldron"))
     structure.set(23, 8, 13, st("minecraft:barrel", facing="south", open="false"))
+    structure.fill(18, 7, 18, 25, 7, 19, st("minecraft:smooth_quartz_slab", type="bottom", waterlogged="false"))
+    structure.set(19, 8, 18, st("minecraft:crafting_table"))
+    structure.set(20, 8, 18, st("minecraft:barrel", facing="up", open="false"))
+    structure.set(21, 8, 18, st("minecraft:cake"))
+    structure.set(23, 8, 18, st("minecraft:smoker", facing="north", lit="false"))
+    structure.set(24, 8, 18, st("minecraft:cauldron"))
+    structure.set(18, 8, 20, st("minecraft:potted_blue_orchid"))
+    structure.set(25, 8, 20, st("minecraft:potted_allium"))
     structure.fill(29, 7, 15, 34, 7, 15, st("minecraft:dark_oak_slab", type="bottom", waterlogged="false"))
     for x in (29, 31, 33):
-        structure.set(x, 8, 15, st("minecraft:flower_pot"))
+        structure.set(x, 8, 15, st("minecraft:potted_allium"))
     for x, z in ((26, 23), (27, 23), (30, 23), (31, 23)):
         structure.set(x, 7, z, st("minecraft:purple_wool"))
     structure.fill(27, 7, 22, 30, 7, 22, st("minecraft:dark_oak_slab", type="bottom", waterlogged="false"))
+    structure.fill(29, 7, 26, 35, 7, 30, st("minecraft:white_carpet"))
+    structure.fill(30, 7, 27, 34, 7, 27, st("minecraft:purple_wool"))
+    structure.fill(30, 7, 30, 34, 7, 30, st("minecraft:purple_wool"))
+    structure.fill(29, 7, 28, 29, 7, 29, st("minecraft:magenta_wool"))
+    structure.fill(35, 7, 28, 35, 7, 29, st("minecraft:magenta_wool"))
+    structure.fill(31, 7, 29, 33, 7, 29, st("minecraft:dark_oak_slab", type="bottom", waterlogged="false"))
+    structure.set(32, 8, 29, st("minecraft:potted_azure_bluet"))
+    structure.set(34, 8, 25, st("minecraft:campfire", facing="north", lit="false", signal_fire="false", waterlogged="false"))
+    add_chandelier(structure, 28, 12, 22)
+    add_chandelier(structure, 32, 12, 28)
+    for x, z in ((24, 21), (32, 21), (24, 28), (36, 28)):
+        structure.set(x, 7, z, st("minecraft:dark_oak_slab", type="bottom", waterlogged="false"))
+        add_candle_cluster(structure, x, 8, z, "purple", 3)
     for x, z in ((22, 30), (35, 30), (22, 12), (35, 12)):
         structure.set(x, 8, z, st("minecraft:lantern", hanging="false", waterlogged="false"))
 
@@ -402,10 +535,25 @@ def add_main_house(structure: Structure) -> None:
     structure.fill(22, 14, 32, 36, 14, 32, st("minecraft:purple_carpet"))
 
     add_bed(structure, 22, 14, 14, "east")
+    add_bed(structure, 22, 14, 15, "east")
+    structure.fill(21, 14, 13, 24, 14, 16, st("minecraft:white_carpet"))
+    structure.set(21, 15, 13, st("minecraft:cherry_fence", east="false", north="false", south="false", west="false", waterlogged="false"))
+    structure.set(24, 15, 13, st("minecraft:cherry_fence", east="false", north="false", south="false", west="false", waterlogged="false"))
+    structure.set(21, 15, 16, st("minecraft:cherry_fence", east="false", north="false", south="false", west="false", waterlogged="false"))
+    structure.set(24, 15, 16, st("minecraft:cherry_fence", east="false", north="false", south="false", west="false", waterlogged="false"))
+    structure.fill(21, 16, 13, 24, 16, 16, st("minecraft:purple_wool"))
+    structure.set(20, 14, 14, st("minecraft:barrel", facing="up", open="false"))
+    structure.set(20, 15, 14, st("minecraft:potted_allium"))
+    structure.set(25, 14, 14, st("minecraft:barrel", facing="up", open="false"))
+    add_candle_cluster(structure, 25, 15, 14, "pink", 2)
     structure.fill(27, 14, 16, 34, 14, 16, st("minecraft:purple_carpet"))
     structure.fill(29, 14, 20, 35, 14, 20, st("minecraft:bookshelf"))
     structure.fill(21, 14, 23, 25, 14, 23, st("minecraft:barrel", facing="north", open="false"))
     structure.set(33, 14, 24, st("minecraft:crafting_table"))
+    structure.fill(30, 14, 23, 35, 14, 26, st("minecraft:magenta_carpet"))
+    structure.set(31, 15, 24, st("minecraft:potted_flowering_azalea_bush"))
+    structure.set(34, 15, 24, st("minecraft:potted_blue_orchid"))
+    add_chandelier(structure, 28, 18, 20)
     for x, z in ((20, 12), (36, 12), (20, 28), (36, 28)):
         structure.set(x, 15, z, st("minecraft:lantern", hanging="false", waterlogged="false"))
 
@@ -473,6 +621,18 @@ def add_front_stairs_and_arcade(structure: Structure) -> None:
             structure.fill(x, 1, z, x, 6, z, st("minecraft:spruce_log", axis="y"))
 
 
+def add_pets(structure: Structure) -> None:
+    add_pet(structure, "minecraft:cat", 10, 2, 50, "Amethyst")
+    add_pet(structure, "minecraft:cat", 12, 2, 50, "Violet")
+    add_pet(structure, "minecraft:cat", 31, 8, 28, "Lady Lavender")
+    add_pet(structure, "minecraft:parrot", 45, 1, 7, "Iris")
+    add_pet(structure, "minecraft:parrot", 51, 1, 7, "Orchid")
+    add_pet(structure, "minecraft:chicken", 5, 2, 24, "Pearl")
+    add_pet(structure, "minecraft:chicken", 11, 1, 29, "Blossom")
+    add_pet(structure, "untitledduckmod:duck", 46, 2, 50, "Daisy")
+    add_pet(structure, "untitledduckmod:duck", 50, 2, 51, "Lilac")
+
+
 def build_structure() -> Structure:
     structure = Structure((57, 32, 57))
     add_landscaping(structure)
@@ -480,6 +640,7 @@ def build_structure() -> Structure:
     add_main_house(structure)
     add_front_stairs_and_arcade(structure)
     add_roofs_and_terraces(structure)
+    add_pets(structure)
     return structure
 
 
@@ -495,7 +656,7 @@ def datapack_files() -> dict[str, bytes]:
                 "pack": {
                     "pack_format": PACK_FORMAT,
                     "supported_formats": SUPPORTED_FORMATS,
-                    "description": "Pummelchen Purple House: rare purple modern survival mansion structure.",
+                    "description": "Pummelchen Purple House: purple flower mansion with pets, gardens, and spa basement.",
                 }
             }
         ),

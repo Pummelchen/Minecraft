@@ -215,9 +215,11 @@ notes:
 - `Purple House` is a project-owned server datapack generated from
   `scripts/build_purple_house_datapack.py` and registered through
   `server-datapacks-src/custom_datapacks.json`.
-- It adds a rare overworld purple survival mansion with basement, front
-  courtyard pool, side staircases/decks, upper terrace farms, many flowers, and
-  modern vanilla-safe interior staging.
+- It adds a rare overworld purple survival mansion for a lady who loves purple,
+  flowers, cats, birds, ducks, and chickens: spa-pool basement, large double
+  bed, big kitchen, lovely living room, front courtyard pool, side
+  staircases/decks, upper terrace farms, pet gardens, many flowers, and romantic
+  lighting.
 - Its structure-set spacing is `108` chunks, which yields one placement cell per
   about `2.986 km2`, matching the requested one house per roughly 3 square
   kilometers.

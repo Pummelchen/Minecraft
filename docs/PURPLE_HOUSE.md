@@ -15,10 +15,11 @@ cabin:
 - Side utility zones that look like farms, storage, or work bays.
 - Dense rails, lanterns, potted plants, hanging greenery, and flower accents.
 
-The Pummelchen version keeps that massing and survival-house role, then shifts
-the color story toward purple where it does not weaken the silhouette: purpur
-roofing, purple terracotta walls, purple glass, amethyst floor inlays, purple
-carpet, purple bed, and allium-heavy flower beds.
+The Pummelchen version keeps that massing and survival-house role, then turns it
+into a lady-focused purple flower mansion: purpur roofing, purple terracotta
+walls, purple glass, amethyst floor inlays, purple carpets, a large double
+purple bed, candle clusters, allium-heavy flower beds, and pet spaces for cats,
+birds, ducks, and chickens.
 
 ## 3D Plan
 
@@ -28,12 +29,12 @@ The finished NBT footprint is `57 x 32 x 57` blocks.
 ```text
 Y 25-31  Purple gable roof, polished deepslate ridge/trim
 Y 18-24  Upper roof shell over central house
-Y 13-18  Upper living floor: bedroom, balcony, bookshelves, work desk
+Y 13-18  Upper living floor: large double bedroom, balcony, bookshelves, vanity/work desk
 Y 12-14  Left/right roof terraces: flower planters and wheat patches
-Y  7-12  Main floor: kitchen, dining/living room, purple glass, front doors
+Y  7-12  Main floor: big kitchen, lovely living room, purple glass, front doors
 Y  6-7   Raised deck wrapping house and side wings
-Y  1-5   Basement: storage, enchanting, smelting, quartz stair access
-Y  0-1   Courtyard, paths, flower beds, pool, foundation
+Y  1-5   Basement: spa pool, storage, enchanting, smelting, quartz stair access
+Y  0-1   Courtyard, paths, flower beds, pool, pet gardens, foundation
 ```
 
 ```text
@@ -41,11 +42,12 @@ Top view, X/Z:
 
   0        16        28        40        56
 0 +------------------------------------------------+
-  | flowers / grass / approach paths               |
+  | cat patio        flowers / grass       bird pergola |
 8 |                upper house volume              |
 12|      left wing     central hall      right wing |
 34|      deck and front double entrance             |
 40|  left stairs     courtyard pool     right stairs|
+46|  chicken coop    flower paths       duck pond    |
 56+------------------------------------------------+
 ```
 
@@ -63,9 +65,10 @@ can receive the structure when they advertise that tag.
 
 ## Interior Direction
 
-The generated structure uses vanilla block IDs for boot and worldgen safety.
-That avoids hard failures if a decorative mod changes registry names. The design
-is still based on what the Pummelchen server already carries:
+The generated structure uses mostly vanilla block IDs for boot and worldgen
+safety, with one modded pet entity from `Untitled Duck Mod` because that mod is
+active in the Pummelchen pack. The design is still based on what the Pummelchen
+server already carries:
 
 - ModernArch makes the vanilla shell and purple/glass/quartz palette read more
   polished on clients.
@@ -75,6 +78,11 @@ is still based on what the Pummelchen server already carries:
 - Cooking for Blockheads maps naturally to the generated kitchen zone.
 - Display Case, PTS-Deco, and Luxury Building Pack can replace the vanilla
   bookshelves, barrels, slabs, and utility displays after generation.
+- Cats, parrots, chickens, and `untitledduckmod:duck` entities are placed as
+  persistent pets named around the property.
+- The basement now centers on a quartz/amethyst spa pool with sea-lantern and
+  candle lighting, while storage, enchanting, and smelting stay around the
+  edges.
 
 ## Project Files
 
