@@ -18,6 +18,8 @@ dist2/
 *.jar
 *.mrpack
 *.sha256
+!server-datapacks/
+!server-datapacks/*.zip
 
 # Generated status-site output
 site/public/

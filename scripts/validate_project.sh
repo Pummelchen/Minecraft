@@ -50,6 +50,10 @@ while IFS= read -r path; do
   bash -n "$path"
 done < <(find "$ROOT_DIR/scripts" "$ROOT_DIR/client-package" "$ROOT_DIR/client-installer" -type f \( -name '*.sh' -o -name '*.command' \) | sort)
 
+log "Custom server datapacks"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/build_purple_house_datapack.py" --check
+"$PYTHON_BIN" "$ROOT_DIR/scripts/sync_custom_datapacks.py" --project-dir "$ROOT_DIR" --check
+
 if command -v java >/dev/null 2>&1; then
   log "Minecraft server list helper"
   SERVER_LIST_MC="$TMP_DIR/server-list-mc"

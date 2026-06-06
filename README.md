@@ -108,6 +108,11 @@ build host before rebuilding a client package if
   install progress and planned mod/resource/shader counts, downloads and
   verifies the matching client package, reports setup telemetry to SQLite, and
   installs the managed client tooling.
+- `scripts/build_purple_house_datapack.py` - reproducibly builds the custom
+  Purple House server datapack, including the structure NBT and worldgen JSON.
+- `scripts/sync_custom_datapacks.py` - validates project-owned datapack zips,
+  installs them into the active server, mirrors them into the active world when
+  present, and registers them in the SQLite-backed mod collection.
 - `client-installer/` - Swift/AppKit progress runner and bootstrap script used
   inside the Mac installer DMG.
 - `scripts/fetch_client_runtime_assets.sh` - downloads third-party runtime
@@ -141,6 +146,10 @@ build host before rebuilding a client package if
 - `systemd/pummelchen-minecraft.service` - managed Minecraft server service for
   boot-time start and explicit operator start/stop/restart.
 - `server-config/user_jvm_args.txt` - tracked JVM args for the active server.
+- `server-datapacks/` - tracked custom server datapack zips that deploy into
+  `/var/minecraft_26.1.2/server-datapacks`.
+- `server-datapacks-src/` - source metadata and generated datapack contents for
+  project-owned custom server datapacks.
 - `site/public/index.html` - generated static status page staging copy.
 
 For the production audit plan, hardening notes, 100-client readiness checklist,
@@ -200,6 +209,20 @@ notes:
 - V1C passed but was superseded because DreamDisplays produced a client-side
   `NoClassDefFoundError`.
 - V1D removed DreamDisplays and is the promoted production release.
+
+## Custom Server Datapacks
+
+- `Purple House` is a project-owned server datapack generated from
+  `scripts/build_purple_house_datapack.py` and registered through
+  `server-datapacks-src/custom_datapacks.json`.
+- It adds a rare overworld purple survival mansion with basement, front
+  courtyard pool, side staircases/decks, upper terrace farms, many flowers, and
+  modern vanilla-safe interior staging.
+- Its structure-set spacing is `108` chunks, which yields one placement cell per
+  about `2.986 km2`, matching the requested one house per roughly 3 square
+  kilometers.
+- See `docs/PURPLE_HOUSE.md` for the 3D plan, reference-frame analysis, block
+  palette, and interior decoration notes for the active Pummelchen pack.
 
 ## Latest Batch Notes
 

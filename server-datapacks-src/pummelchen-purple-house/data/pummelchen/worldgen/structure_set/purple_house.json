@@ -1,0 +1,14 @@
+{
+  "structures": [
+    {
+      "structure": "pummelchen:purple_house",
+      "weight": 1
+    }
+  ],
+  "placement": {
+    "type": "minecraft:random_spread",
+    "spacing": 108,
+    "separation": 36,
+    "salt": 20260606
+  }
+}
