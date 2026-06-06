@@ -13,6 +13,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -27,10 +28,12 @@ DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
 DEFAULT_SERVER_DIR = Path("/var/minecraft_26.1.2")
 DEFAULT_RELEASE_ROOT = Path("/var/minecraft_mods/releases")
 DEFAULT_PUBLIC_DOWNLOADS = Path("/var/minecraft_mods/site/public/downloads")
+DEFAULT_PROJECT_ROOT = Path("/var/minecraft_mods")
 DEFAULT_SERVER_KEY = "minecraft_26_1_2"
 CLIENT_ZIP_NAME = "minecraft_26.1.2_client_macos_apple_silicon.zip"
 MRPACK_NAME = "pummelchen-server-26.1.2.mrpack"
 DMG_NAME = "Pummelchen-Client-Installer.dmg"
+LEGACY_SERVER_BACKUP = Path("/var/minecraft")
 
 
 def sha256_file(path: Path) -> str:
@@ -39,6 +42,65 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def path_size(path: Path) -> int:
+    if not path.exists() and not path.is_symlink():
+        return 0
+    if path.is_file() or path.is_symlink():
+        try:
+            return path.lstat().st_size
+        except OSError:
+            return 0
+    total = 0
+    for root, dirs, files in os.walk(path, followlinks=False):
+        for name in dirs:
+            candidate = Path(root) / name
+            if candidate.is_symlink():
+                try:
+                    total += candidate.lstat().st_size
+                except OSError:
+                    pass
+        for name in files:
+            candidate = Path(root) / name
+            try:
+                total += candidate.lstat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def ensure_path_inside(path: Path, root: Path, label: str) -> None:
+    root_resolved = root.resolve()
+    path_resolved = path.resolve() if path.exists() else path.parent.resolve() / path.name
+    try:
+        path_resolved.relative_to(root_resolved)
+    except ValueError as exc:
+        raise SystemExit(f"refusing to clean {label} outside {root}: {path}") from exc
+
+
+def is_older_than(path: Path, age_hours: float, now: float | None = None) -> bool:
+    if age_hours <= 0:
+        return True
+    now = now or time.time()
+    try:
+        return now - path.lstat().st_mtime >= age_hours * 3600
+    except OSError:
+        return False
+
+
+def remove_path(path: Path, *, dry_run: bool, reason: str) -> int:
+    if not path.exists() and not path.is_symlink():
+        return 0
+    bytes_count = path_size(path)
+    print(f"cleanup_removed={path}\tbytes={bytes_count}\treason={reason}")
+    if dry_run:
+        return bytes_count
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+    return bytes_count
 
 
 def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -677,6 +739,262 @@ def prune_releases(args: argparse.Namespace) -> int:
     return 0
 
 
+def cleanup_public_release_links(args: argparse.Namespace) -> tuple[int, int]:
+    releases_dir = args.public_downloads / "releases"
+    if not releases_dir.exists():
+        return 0, 0
+    with connect(args.db) as conn:
+        init_db(conn)
+        known_public_ids = {
+            row["release_id"]
+            for row in conn.execute(
+                """
+                SELECT release_id
+                FROM pack_releases
+                WHERE server_key = ? AND status != 'pruned'
+                """,
+                (args.server_key,),
+            )
+        }
+    removed = 0
+    bytes_removed = 0
+    for path in sorted(releases_dir.iterdir(), key=lambda item: item.name.lower()):
+        if not (path.name.startswith("release_") or path.name.startswith("qa_release_")):
+            continue
+        missing_target = path.is_symlink() and not path.exists()
+        if path.name not in known_public_ids or missing_target:
+            bytes_removed += remove_path(path, dry_run=args.dry_run, reason="stale public release link")
+            removed += 1
+    return removed, bytes_removed
+
+
+def cleanup_children(
+    root: Path,
+    *,
+    allowed_root: Path,
+    age_hours: float,
+    dry_run: bool,
+    reason: str,
+    name_prefixes: Sequence[str] | None = None,
+) -> tuple[int, int]:
+    if not root.exists():
+        return 0, 0
+    ensure_path_inside(root, allowed_root, reason)
+    removed = 0
+    bytes_removed = 0
+    for child in sorted(root.iterdir(), key=lambda item: item.name.lower()):
+        if name_prefixes and not any(child.name.startswith(prefix) for prefix in name_prefixes):
+            continue
+        if not is_older_than(child, age_hours):
+            continue
+        ensure_path_inside(child, allowed_root, reason)
+        bytes_removed += remove_path(child, dry_run=dry_run, reason=reason)
+        removed += 1
+    return removed, bytes_removed
+
+
+def cleanup_matching_files(
+    root: Path,
+    *,
+    allowed_root: Path,
+    patterns: Sequence[str],
+    age_hours: float,
+    dry_run: bool,
+    reason: str,
+) -> tuple[int, int]:
+    if not root.exists():
+        return 0, 0
+    ensure_path_inside(root, allowed_root, reason)
+    removed = 0
+    bytes_removed = 0
+    seen: set[Path] = set()
+    for pattern in patterns:
+        for path in sorted(root.rglob(pattern), key=lambda item: item.as_posix().lower()):
+            resolved_path = path.resolve() if path.exists() else path
+            if resolved_path in seen:
+                continue
+            seen.add(resolved_path)
+            if not path.is_file() or not is_older_than(path, age_hours):
+                continue
+            ensure_path_inside(path, allowed_root, reason)
+            bytes_removed += remove_path(path, dry_run=dry_run, reason=reason)
+            removed += 1
+    return removed, bytes_removed
+
+
+def cleanup_headless_cache(project_root: Path, *, dry_run: bool) -> tuple[int, int]:
+    base = project_root / "headless_client_lab"
+    if not base.exists():
+        return 0, 0
+    removed = 0
+    bytes_removed = 0
+    for rel in (
+        "game/mods",
+        "game/resourcepacks",
+        "game/shaderpacks",
+        "game/crash-reports",
+        "game/logs",
+        "game/screenshots",
+        "run",
+    ):
+        path = base / rel
+        if not path.exists():
+            continue
+        ensure_path_inside(path, project_root, "recreatable headless client cache")
+        bytes_removed += remove_path(path, dry_run=dry_run, reason="recreatable headless client cache")
+        removed += 1
+    return removed, bytes_removed
+
+
+def cleanup_project(args: argparse.Namespace) -> int:
+    if args.keep_releases < 0:
+        raise SystemExit("--keep-releases must be >= 0")
+    project_root = args.project_root or args.db.parent.parent
+    if not project_root.exists():
+        raise SystemExit(f"project root not found: {project_root}")
+    total_removed = 0
+    total_bytes = 0
+
+    prune_args = argparse.Namespace(
+        db=args.db,
+        server_key=args.server_key,
+        release_root=args.release_root,
+        public_downloads=args.public_downloads,
+        actor=getattr(args, "actor", "release_manager"),
+        keep=args.keep_releases,
+        dry_run=args.dry_run,
+        command="prune",
+    )
+    prune_releases(prune_args)
+
+    removed, bytes_removed = cleanup_public_release_links(args)
+    total_removed += removed
+    total_bytes += bytes_removed
+
+    temp_age = args.temp_max_age_hours
+    for root, allowed_root, reason in (
+        (args.server_dir / "codex-downloads", args.server_dir, "server download cache"),
+        (args.server_dir / "downloads", args.server_dir, "server scratch downloads"),
+        (project_root / "downloads", project_root, "project download cache"),
+        (project_root / "deploy-stage", project_root, "deploy staging cache"),
+    ):
+        removed, bytes_removed = cleanup_children(
+            root,
+            allowed_root=allowed_root,
+            age_hours=temp_age,
+            dry_run=args.dry_run,
+            reason=reason,
+        )
+        total_removed += removed
+        total_bytes += bytes_removed
+
+    for root, reason in (
+        (args.server_dir / "mods.rollback", "server mod rollback snapshot"),
+        (args.server_dir / "client-package.rollback", "client package rollback snapshot"),
+    ):
+        removed, bytes_removed = cleanup_children(
+            root,
+            allowed_root=args.server_dir,
+            age_hours=args.rollback_keep_days * 24,
+            dry_run=args.dry_run,
+            reason=reason,
+        )
+        total_removed += removed
+        total_bytes += bytes_removed
+
+    for root, prefixes, reason in (
+        (project_root / "test_sources", ("minecraft_", "pyramid_"), "recreatable test source"),
+        (project_root / "mod_acceptance_lab" / "work", None, "acceptance lab work cache"),
+        (project_root / "mod_acceptance_lab" / "client-work", None, "acceptance client work cache"),
+    ):
+        removed, bytes_removed = cleanup_children(
+            root,
+            allowed_root=project_root,
+            age_hours=args.lab_keep_days * 24,
+            dry_run=args.dry_run,
+            reason=reason,
+            name_prefixes=prefixes,
+        )
+        total_removed += removed
+        total_bytes += bytes_removed
+
+    for root in (
+        args.server_dir / "server-test-results",
+        project_root / "mod_acceptance_lab" / "logs",
+        project_root / "mod_acceptance_lab" / "client-logs",
+    ):
+        removed, bytes_removed = cleanup_matching_files(
+            root,
+            allowed_root=args.server_dir if root.is_relative_to(args.server_dir) else project_root,
+            patterns=("*.log", "*.errors", "*.status", "*.txt"),
+            age_hours=args.log_keep_days * 24,
+            dry_run=args.dry_run,
+            reason="old test log",
+        )
+        total_removed += removed
+        total_bytes += bytes_removed
+
+    removed, bytes_removed = cleanup_matching_files(
+        args.server_dir / "logs",
+        allowed_root=args.server_dir,
+        patterns=("*.log.gz", "*.log.*"),
+        age_hours=args.log_keep_days * 24,
+        dry_run=args.dry_run,
+        reason="old server log",
+    )
+    total_removed += removed
+    total_bytes += bytes_removed
+
+    removed, bytes_removed = cleanup_matching_files(
+        args.server_dir / "crash-reports",
+        allowed_root=args.server_dir,
+        patterns=("crash-*.txt",),
+        age_hours=args.crash_keep_days * 24,
+        dry_run=args.dry_run,
+        reason="old crash report",
+    )
+    total_removed += removed
+    total_bytes += bytes_removed
+
+    if args.include_headless_cache:
+        removed, bytes_removed = cleanup_headless_cache(project_root, dry_run=args.dry_run)
+        total_removed += removed
+        total_bytes += bytes_removed
+
+    if args.delete_legacy_server_backup and LEGACY_SERVER_BACKUP.exists():
+        active_server = args.server_dir.resolve()
+        legacy_server = LEGACY_SERVER_BACKUP.resolve()
+        if legacy_server == active_server:
+            raise SystemExit("refusing to delete active server as legacy backup")
+        total_bytes += remove_path(
+            LEGACY_SERVER_BACKUP,
+            dry_run=args.dry_run,
+            reason="explicit legacy server backup cleanup",
+        )
+        total_removed += 1
+
+    if not args.dry_run:
+        with connect(args.db) as conn:
+            init_db(conn)
+            active = current_release(conn, args.server_key)
+            conn.execute(
+                """
+                INSERT INTO release_events(release_id, event_at, event_type, status, actor, notes)
+                VALUES (?, ?, 'cleanup', 'ok', ?, ?)
+                """,
+                (
+                    active["release_id"] if active else None,
+                    utc_now(),
+                    getattr(args, "actor", "release_manager"),
+                    f"Cleanup removed {total_removed} path(s), logical bytes={total_bytes}.",
+                ),
+            )
+            conn.commit()
+    print(f"cleanup_removed_count={total_removed}")
+    print(f"cleanup_removed_logical_bytes={total_bytes}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
@@ -721,6 +1039,18 @@ def build_parser() -> argparse.ArgumentParser:
     prune = sub.add_parser("prune")
     prune.add_argument("--keep", type=int, default=2, help="Inactive rollback releases to retain in addition to active")
     prune.add_argument("--dry-run", action="store_true")
+
+    cleanup = sub.add_parser("cleanup")
+    cleanup.add_argument("--project-root", type=Path, default=DEFAULT_PROJECT_ROOT)
+    cleanup.add_argument("--keep-releases", type=int, default=1, help="Inactive rollback releases to retain in addition to active")
+    cleanup.add_argument("--temp-max-age-hours", type=float, default=0, help="Minimum age for scratch download caches")
+    cleanup.add_argument("--rollback-keep-days", type=float, default=2)
+    cleanup.add_argument("--lab-keep-days", type=float, default=2)
+    cleanup.add_argument("--log-keep-days", type=float, default=14)
+    cleanup.add_argument("--crash-keep-days", type=float, default=30)
+    cleanup.add_argument("--include-headless-cache", action="store_true", help="Remove recreatable HeadlessMC synced client files")
+    cleanup.add_argument("--delete-legacy-server-backup", action="store_true", help="Remove /var/minecraft when it is not the active server")
+    cleanup.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -746,6 +1076,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return current_json(args)
     if args.command == "prune":
         return prune_releases(args)
+    if args.command == "cleanup":
+        return cleanup_project(args)
     raise SystemExit(f"unknown command {args.command}")
 
 

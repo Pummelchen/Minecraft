@@ -94,4 +94,5 @@ mkdir -p "$OUTPUT_DIR"
 rm -f "$OUTPUT_DIR/$DMG_NAME"
 hdiutil create -volname "Pummelchen Client Installer" -srcfolder "$OUTPUT_DIR/build" -ov -format UDZO "$OUTPUT_DIR/$DMG_NAME"
 (cd "$OUTPUT_DIR" && shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256")
+rm -rf "$OUTPUT_DIR/build"
 echo "$OUTPUT_DIR/$DMG_NAME"

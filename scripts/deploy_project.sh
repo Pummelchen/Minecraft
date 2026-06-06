@@ -251,7 +251,7 @@ if [ "$CREATE_RELEASE" = "1" ]; then
     --server-dir "$SERVER_DIR" \
     --release-root "$PROJECT_DIR/releases" \
     --public-downloads "$PROJECT_DIR/site/public/downloads" \
-    prune --keep 2
+    cleanup --project-root "$PROJECT_DIR" --keep-releases 1 --include-headless-cache
 fi
 
 systemctl reload nginx

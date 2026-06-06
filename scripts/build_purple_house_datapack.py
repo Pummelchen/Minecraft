@@ -782,6 +782,8 @@ def datapack_files() -> dict[str, bytes]:
                 "pack": {
                     "pack_format": PACK_FORMAT,
                     "supported_formats": SUPPORTED_FORMATS,
+                    "min_format": min(SUPPORTED_FORMATS),
+                    "max_format": max(SUPPORTED_FORMATS),
                     "description": "Pummelchen Purple House: L-shaped purple survival mansion with gardens, pets, and spa basement.",
                 }
             }
@@ -798,6 +800,7 @@ def datapack_files() -> dict[str, bytes]:
                 "max_distance_from_center": 80,
                 "project_start_to_heightmap": "WORLD_SURFACE_WG",
                 "use_expansion_hack": False,
+                "spawn_overrides": {},
             }
         ),
         f"data/{NAMESPACE}/worldgen/structure_set/{STRUCTURE_NAME}.json": json_bytes(

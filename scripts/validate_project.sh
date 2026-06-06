@@ -904,6 +904,42 @@ status = conn.execute("SELECT status FROM pack_releases WHERE release_id = 'qa_r
 assert status == "pruned", status
 PY
 
+log "Release cleanup fixture"
+CLEAN_PROJECT="$TMP_DIR/project-root"
+mkdir -p "$CLEAN_PROJECT/downloads/stale-cache" \
+  "$CLEAN_PROJECT/test_sources/pyramid_old" \
+  "$CLEAN_PROJECT/headless_client_lab/game/mods" \
+  "$CLEAN_PROJECT/headless_client_lab/game/resourcepacks" \
+  "$SERVER/codex-downloads/daily_update" \
+  "$SERVER/mods.rollback/old-update" \
+  "$PUBLIC/releases"
+printf 'stale\n' > "$CLEAN_PROJECT/downloads/stale-cache/file.tmp"
+printf 'source\n' > "$CLEAN_PROJECT/test_sources/pyramid_old/source.jar"
+printf 'headless\n' > "$CLEAN_PROJECT/headless_client_lab/game/mods/cache.jar"
+printf 'resource\n' > "$CLEAN_PROJECT/headless_client_lab/game/resourcepacks/cache.zip"
+printf 'download\n' > "$SERVER/codex-downloads/daily_update/cache.jar"
+printf 'rollback\n' > "$SERVER/mods.rollback/old-update/mod.jar"
+ln -s "$RELEASES/missing/public" "$PUBLIC/releases/release_missing_cleanup"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/release_manager.py" \
+  --db "$DB" --server-dir "$SERVER" --release-root "$RELEASES" --public-downloads "$PUBLIC" \
+  cleanup --project-root "$CLEAN_PROJECT" --keep-releases 0 --temp-max-age-hours 0 \
+  --rollback-keep-days 0 --lab-keep-days 0 --include-headless-cache >/dev/null
+[ -d "$RELEASES/qa_release_1" ] || fail "cleanup removed active release"
+[ ! -e "$PUBLIC/releases/release_missing_cleanup" ] || fail "cleanup kept stale public release link"
+[ ! -e "$CLEAN_PROJECT/downloads/stale-cache" ] || fail "cleanup kept project download cache"
+[ ! -e "$CLEAN_PROJECT/test_sources/pyramid_old" ] || fail "cleanup kept recreatable test source"
+[ ! -e "$CLEAN_PROJECT/headless_client_lab/game/mods" ] || fail "cleanup kept headless mod cache"
+[ ! -e "$SERVER/codex-downloads/daily_update" ] || fail "cleanup kept server download cache"
+[ ! -e "$SERVER/mods.rollback/old-update" ] || fail "cleanup kept old rollback snapshot"
+"$PYTHON_BIN" - "$DB" <<'PY' || fail "cleanup event was not recorded"
+import sqlite3
+import sys
+
+conn = sqlite3.connect(sys.argv[1])
+count = conn.execute("SELECT COUNT(*) FROM release_events WHERE event_type = 'cleanup'").fetchone()[0]
+assert count >= 1, count
+PY
+
 log "Client manifest checker"
 MANIFEST_PACKAGE="$TMP_DIR/manifest-package"
 mkdir -p "$MANIFEST_PACKAGE/mods" "$MANIFEST_PACKAGE/resourcepacks" "$MANIFEST_PACKAGE/shaderpacks"

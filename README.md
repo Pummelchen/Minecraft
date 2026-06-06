@@ -380,7 +380,9 @@ python3 /var/minecraft_mods/scripts/release_manager.py list
 python3 /var/minecraft_mods/scripts/release_manager.py validate <release-id>
 python3 /var/minecraft_mods/scripts/release_manager.py rollback
 python3 /var/minecraft_mods/scripts/release_manager.py rollback --release-id <release-id> --restore-db
-python3 /var/minecraft_mods/scripts/release_manager.py prune --keep 2
+python3 /var/minecraft_mods/scripts/release_manager.py prune --keep 1
+python3 /var/minecraft_mods/scripts/release_manager.py cleanup --dry-run
+python3 /var/minecraft_mods/scripts/release_manager.py cleanup --include-headless-cache
 ```
 
 The daily noon UTC updater creates and activates a release only when at least
@@ -389,8 +391,12 @@ their next launch or background sync.
 
 Release pruning keeps the active release plus the requested number of inactive
 rollback releases, removes older generated release directories and public
-download links, and records a `prune` event in SQLite. This prevents repeated
-client ZIP/MRPack builds from filling the VPS disk during heavy test cycles.
+download links, and records a `prune` event in SQLite. The broader `cleanup`
+command also removes dangling public release links, server/project download
+caches, old rollback snapshots, old test logs, and optionally recreatable
+HeadlessMC synced client files. Daily tested releases run cleanup automatically
+after the release is activated. The old `/var/minecraft` backup is never removed
+unless `cleanup --delete-legacy-server-backup` is passed explicitly.
 
 ## Quality Gate And Deploy
 

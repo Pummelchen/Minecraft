@@ -1029,17 +1029,26 @@ def create_tested_release(args: argparse.Namespace, label: str, stats: dict[str,
         activate=True,
     )
     release_manager.create_release(release_args)
-    prune_args = argparse.Namespace(
+    cleanup_args = argparse.Namespace(
         db=args.db,
+        server_dir=args.server_dir,
         server_key=args.server_key,
         release_root=args.release_root,
         public_downloads=args.public_downloads,
+        project_root=args.db.parent.parent,
         actor="daily_update",
-        keep=2,
+        keep_releases=1,
+        temp_max_age_hours=0,
+        rollback_keep_days=2,
+        lab_keep_days=2,
+        log_keep_days=14,
+        crash_keep_days=30,
+        include_headless_cache=True,
+        delete_legacy_server_backup=False,
         dry_run=False,
-        command="prune",
+        command="cleanup",
     )
-    release_manager.prune_releases(prune_args)
+    release_manager.cleanup_project(cleanup_args)
 
 
 def rebuild(args: argparse.Namespace) -> int:
