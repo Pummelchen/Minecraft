@@ -415,6 +415,10 @@ bash scripts/deploy_project.sh --host root@91.99.176.243 --create-release
 The deploy script runs the same gate locally, syncs project-owned files,
 installs systemd/Nginx/Prometheus/Grafana config, regenerates the status page,
 smoke-tests HTTP and the metrics exporter, and checks SQLite integrity.
+Files in `server-config/config-overrides/` are copied into the live server
+`config/` directory during deploy. The tracked NeoForge override keeps
+`removeErroringEntities = true` so one broken ticking entity is removed instead
+of crashing the whole server; block-entity removal stays disabled.
 
 GitHub Actions runs `scripts/validate_project.sh` on pushes and pull requests.
 

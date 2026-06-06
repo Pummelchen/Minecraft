@@ -183,6 +183,8 @@ PY
 )"
 fi
 
+CONFIG_OUTPUT="$(python3 scripts/apply_config_overrides.py --source "$PROJECT_DIR/server-config/config-overrides" --target "$SERVER_DIR/config")"
+
 install -m 0644 systemd/pummelchen-live-stats.service /etc/systemd/system/pummelchen-live-stats.service
 install -m 0644 systemd/pummelchen-live-stats.timer /etc/systemd/system/pummelchen-live-stats.timer
 install -m 0644 systemd/pummelchen-client-log-receiver.service /etc/systemd/system/pummelchen-client-log-receiver.service
@@ -229,6 +231,7 @@ printf '%s\n' "$CLIENT_SANITIZE_OUTPUT"
 printf '%s\n' "$SAFETY_OUTPUT"
 printf '%s\n' "$CUSTOM_DATAPACKS_OUTPUT"
 printf '%s\n' "$PROPERTIES_OUTPUT"
+printf '%s\n' "$CONFIG_OUTPUT"
 if printf '%s\n' "$CLIENT_SANITIZE_OUTPUT" | grep -Eq 'resource_pack_metadata_changes=[1-9]' \
   || printf '%s\n' "$SAFETY_OUTPUT" | grep -Eq 'client_removed=[1-9]' \
   || [ -n "$CLIENT_EXCLUDED_FILES" ]; then
@@ -258,7 +261,8 @@ systemctl reload nginx
 if printf '%s\n' "$SERVER_SANITIZE_OUTPUT" | grep -Eq 'resource_pack_metadata_changes=[1-9]' \
   || printf '%s\n' "$SAFETY_OUTPUT" | grep -Eq 'server_removed=[1-9]' \
   || printf '%s\n' "$CUSTOM_DATAPACKS_OUTPUT" | grep -Eq 'custom_datapacks_changed=[1-9]' \
-  || printf '%s\n' "$PROPERTIES_OUTPUT" | grep -q 'server_properties_changed=1'; then
+  || printf '%s\n' "$PROPERTIES_OUTPUT" | grep -q 'server_properties_changed=1' \
+  || printf '%s\n' "$CONFIG_OUTPUT" | grep -Eq 'config_overrides_changed=[1-9]'; then
   systemctl restart pummelchen-minecraft.service
 fi
 curl -fsS http://127.0.0.1:7788/ >/dev/null

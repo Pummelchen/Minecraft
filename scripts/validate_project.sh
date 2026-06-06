@@ -54,6 +54,21 @@ log "Custom server datapacks"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/build_purple_house_datapack.py" --check
 "$PYTHON_BIN" "$ROOT_DIR/scripts/sync_custom_datapacks.py" --project-dir "$ROOT_DIR" --check
 
+log "Server config overrides"
+CONFIG_SOURCE="$TMP_DIR/config-overrides"
+CONFIG_TARGET="$TMP_DIR/server-config"
+mkdir -p "$CONFIG_SOURCE/nested" "$CONFIG_TARGET"
+printf 'removeErroringEntities = true\n' > "$CONFIG_SOURCE/neoforge-server.toml"
+printf 'answer=42\n' > "$CONFIG_SOURCE/nested/example.toml"
+CONFIG_DRY="$("$PYTHON_BIN" "$ROOT_DIR/scripts/apply_config_overrides.py" --source "$CONFIG_SOURCE" --target "$CONFIG_TARGET" --dry-run)"
+printf '%s\n' "$CONFIG_DRY" | grep -q 'config_overrides_changed=2' || fail "config override dry-run did not detect changes"
+[ ! -e "$CONFIG_TARGET/neoforge-server.toml" ] || fail "config override dry-run wrote files"
+CONFIG_APPLY="$("$PYTHON_BIN" "$ROOT_DIR/scripts/apply_config_overrides.py" --source "$CONFIG_SOURCE" --target "$CONFIG_TARGET")"
+printf '%s\n' "$CONFIG_APPLY" | grep -q 'config_overrides_changed=2' || fail "config override apply did not report changes"
+grep -q 'removeErroringEntities = true' "$CONFIG_TARGET/neoforge-server.toml" || fail "config override was not copied"
+CONFIG_REPEAT="$("$PYTHON_BIN" "$ROOT_DIR/scripts/apply_config_overrides.py" --source "$CONFIG_SOURCE" --target "$CONFIG_TARGET")"
+printf '%s\n' "$CONFIG_REPEAT" | grep -q 'config_overrides_changed=0' || fail "config override repeat was not a no-op"
+
 if command -v java >/dev/null 2>&1; then
   log "Minecraft server list helper"
   SERVER_LIST_MC="$TMP_DIR/server-list-mc"
