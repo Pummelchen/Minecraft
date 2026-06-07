@@ -364,10 +364,14 @@ def display_release_version(release_id: str) -> str:
     match = re.fullmatch(r"release_(\d{4})(\d{2})(\d{2})_([^_]+)(?:_.*)?", value)
     if match:
         year, month, day, version = match.groups()
+        if version_match := re.match(r"(V\d+)", version, re.IGNORECASE):
+            version = version_match.group(1).upper()
         return f"{year}-{month}-{day}_{version}"
     match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})_([^_]+)(?:_.*)?", value)
     if match:
         year, month, day, version = match.groups()
+        if version_match := re.match(r"(V\d+)", version, re.IGNORECASE):
+            version = version_match.group(1).upper()
         return f"{year}-{month}-{day}_{version}"
     return value or "Unknown"
 
@@ -1281,7 +1285,7 @@ def write_site(db_path: Path, output_dir: Path, server_dir: Path, public_url: st
 
     stats = collect_stats(server_dir)
     if active_release:
-        stats["Active release"] = str(active_release.get("release_id") or "")
+        stats["Active release"] = display_release_version(str(active_release.get("release_id") or ""))
     else:
         stats["Active release"] = "No active release"
     stats["Minecraft players"] = "Waiting for live feed"

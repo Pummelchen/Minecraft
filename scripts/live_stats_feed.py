@@ -7,6 +7,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -128,11 +129,28 @@ def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+def display_release_version(release_id: str) -> str:
+    value = (release_id or "").strip()
+    match = re.fullmatch(r"release_(\d{4})(\d{2})(\d{2})_([^_]+)(?:_.*)?", value)
+    if match:
+        year, month, day, version = match.groups()
+        if version_match := re.match(r"(V\d+)", version, re.IGNORECASE):
+            version = version_match.group(1).upper()
+        return f"{year}-{month}-{day}_{version}"
+    match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})_([^_]+)(?:_.*)?", value)
+    if match:
+        year, month, day, version = match.groups()
+        if version_match := re.match(r"(V\d+)", version, re.IGNORECASE):
+            version = version_match.group(1).upper()
+        return f"{year}-{month}-{day}_{version}"
+    return value or "Unknown"
+
+
 def active_release_text(db_path: Path, server_key: str) -> str:
     release = mc_metrics.active_release(db_path, server_key)
     if not release:
         return "No active release"
-    return release.get("release_id") or "No active release"
+    return display_release_version(release.get("release_id") or "")
 
 
 def minecraft_live_values(server_dir: Path, db_path: Path, server_key: str) -> dict[str, str]:
