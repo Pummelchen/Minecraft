@@ -128,8 +128,9 @@ build host before rebuilding a client package if
 - `scripts/build_purple_house_datapack.py` - reproducibly builds the custom
   Purple House server datapack, including the structure NBT and worldgen JSON.
 - `scripts/sync_custom_datapacks.py` - validates project-owned datapack zips,
-  installs them into the active server, mirrors them into the active world when
-  present, and registers them in the SQLite-backed mod collection.
+  installs them into the active server, mirrors them into the active
+  `level-name` world datapacks folder, and registers them in the SQLite-backed
+  mod collection.
 - `client-installer/` - Swift/AppKit progress runner and bootstrap script used
   inside the Mac installer DMG.
 - `scripts/fetch_client_runtime_assets.sh` - downloads third-party runtime

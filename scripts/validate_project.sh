@@ -53,6 +53,19 @@ done < <(find "$ROOT_DIR/scripts" "$ROOT_DIR/client-package" "$ROOT_DIR/client-i
 log "Custom server datapacks"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/build_purple_house_datapack.py" --check
 "$PYTHON_BIN" "$ROOT_DIR/scripts/sync_custom_datapacks.py" --project-dir "$ROOT_DIR" --check
+CUSTOM_DATAPACKS_SERVER="$TMP_DIR/custom-datapacks-server"
+mkdir -p "$CUSTOM_DATAPACKS_SERVER"
+printf 'level-name=custom-live-world\n' > "$CUSTOM_DATAPACKS_SERVER/server.properties"
+CUSTOM_DATAPACKS_OUTPUT="$("$PYTHON_BIN" "$ROOT_DIR/scripts/sync_custom_datapacks.py" \
+  --db "$TMP_DIR/custom-datapacks.sqlite" \
+  --project-dir "$ROOT_DIR" \
+  --server-dir "$CUSTOM_DATAPACKS_SERVER")"
+printf '%s\n' "$CUSTOM_DATAPACKS_OUTPUT" | grep -q 'custom_datapacks_changed=2' \
+  || fail "custom datapack sync did not install into server and active world"
+[ -f "$CUSTOM_DATAPACKS_SERVER/server-datapacks/pummelchen-purple-house.zip" ] \
+  || fail "custom datapack was not copied to server-datapacks"
+[ -f "$CUSTOM_DATAPACKS_SERVER/custom-live-world/datapacks/pummelchen-purple-house.zip" ] \
+  || fail "custom datapack was not copied to active level-name datapacks folder"
 
 log "Server config overrides"
 CONFIG_SOURCE="$TMP_DIR/config-overrides"

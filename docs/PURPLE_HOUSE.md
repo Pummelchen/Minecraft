@@ -103,8 +103,8 @@ courtyard pool, and intersecting gable roofs with gray trim and purple accents.
   `Purple House` in the SQLite-backed mod collection.
 - `scripts/build_purple_house_datapack.py` rebuilds and checks the zip.
 - `scripts/sync_custom_datapacks.py` installs the zip into
-  `server-datapacks`, mirrors it into the active world datapacks folder when
-  present, and upserts the tracker row.
+  `server-datapacks`, mirrors it into the active `level-name` world datapacks
+  folder, and upserts the tracker row.
 
 Quality gate:
 

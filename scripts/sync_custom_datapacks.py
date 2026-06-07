@@ -246,15 +246,33 @@ def copy_if_changed(src: Path, dst: Path) -> bool:
     return True
 
 
+def active_world_dir(server_dir: Path) -> Path:
+    level_name = "world"
+    properties = server_dir / "server.properties"
+    if properties.exists():
+        for raw in properties.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            if key.strip() == "level-name":
+                level_name = value.strip() or "world"
+                break
+    level_path = Path(level_name)
+    if level_path.is_absolute() or ".." in level_path.parts:
+        raise ValueError(f"unsafe level-name in {properties}: {level_name!r}")
+    return server_dir / level_path
+
+
 def install_entries(project_dir: Path, server_dir: Path, entries: list[dict[str, Any]]) -> int:
     changed = 0
+    world_datapacks = active_world_dir(server_dir) / "datapacks"
     for entry in entries:
         file_name = str(entry["file_name"])
         src = project_dir / "server-datapacks" / file_name
         if copy_if_changed(src, server_dir / "server-datapacks" / file_name):
             changed += 1
-        world_datapacks = server_dir / "world" / "datapacks"
-        if world_datapacks.exists() and copy_if_changed(src, world_datapacks / file_name):
+        if copy_if_changed(src, world_datapacks / file_name):
             changed += 1
     return changed
 
