@@ -80,6 +80,28 @@ SURFACE_IGNORE_BLOCKS = {
     "minecraft:hanging_roots",
     "minecraft:spore_blossom",
     "minecraft:glow_lichen",
+    "minecraft:oak_leaves",
+    "minecraft:spruce_leaves",
+    "minecraft:birch_leaves",
+    "minecraft:jungle_leaves",
+    "minecraft:acacia_leaves",
+    "minecraft:dark_oak_leaves",
+    "minecraft:mangrove_leaves",
+    "minecraft:cherry_leaves",
+    "minecraft:azalea_leaves",
+    "minecraft:flowering_azalea_leaves",
+    "minecraft:oak_log",
+    "minecraft:spruce_log",
+    "minecraft:birch_log",
+    "minecraft:jungle_log",
+    "minecraft:acacia_log",
+    "minecraft:dark_oak_log",
+    "minecraft:mangrove_log",
+    "minecraft:cherry_log",
+    "minecraft:crimson_stem",
+    "minecraft:stripped_crimson_stem",
+    "minecraft:warped_stem",
+    "minecraft:stripped_warped_stem",
 }
 
 PLACEMENT_STATE_SCORE = "ph_house_state"
@@ -100,7 +122,30 @@ SURFACE_IGNORE_CHECK_BLOCKS = (
     "minecraft:kelp_plant",
     "minecraft:seagrass",
     "minecraft:tall_seagrass",
+    "minecraft:oak_leaves",
+    "minecraft:spruce_leaves",
+    "minecraft:birch_leaves",
+    "minecraft:jungle_leaves",
+    "minecraft:acacia_leaves",
+    "minecraft:dark_oak_leaves",
+    "minecraft:mangrove_leaves",
+    "minecraft:cherry_leaves",
+    "minecraft:azalea_leaves",
+    "minecraft:flowering_azalea_leaves",
+    "minecraft:oak_log",
+    "minecraft:spruce_log",
+    "minecraft:birch_log",
+    "minecraft:jungle_log",
+    "minecraft:acacia_log",
+    "minecraft:dark_oak_log",
+    "minecraft:mangrove_log",
+    "minecraft:cherry_log",
+    "minecraft:crimson_stem",
+    "minecraft:stripped_crimson_stem",
+    "minecraft:warped_stem",
+    "minecraft:stripped_warped_stem",
 )
+SURFACE_IGNORE_CHECK_SUFFIXES = ("_leaves", "_log", "_wood", "_stem", "_hyphae", "_roots")
 DEFAULT_BOOT_WAIT = 180
 SERVICE_STOP_TIMEOUT = 45
 SERVICE_FORCE_TIMEOUT = 15
@@ -734,6 +779,35 @@ def _extract_data_get_block(block_report: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _is_surface_ignore_check_block(block_state: str | None) -> bool:
+    if not block_state:
+        return True
+    name = _block_state_name(block_state)
+    if _is_air_like_block(block_state):
+        return True
+    if name in SURFACE_IGNORE_CHECK_BLOCKS or name in SURFACE_IGNORE_BLOCKS:
+        return True
+    if any(name.endswith(suffix) for suffix in SURFACE_IGNORE_CHECK_SUFFIXES):
+        return True
+    return False
+
+
+def _probe_block_state(
+    host: str,
+    port: int,
+    password: str,
+    x: int,
+    y: int,
+    z: int,
+) -> str | None:
+    try:
+        return _extract_data_get_block(
+            rcon_command(host, port, password, f"data get block {x} {y} {z}", timeout=RCON_COMMAND_TIMEOUT)
+        )
+    except Exception:
+        return None
+
+
 def _probe_block_match(
     host: str,
     port: int,
@@ -793,13 +867,13 @@ def _surface_block_y(
     start_y: int,
 ) -> int | None:
     for y in range(start_y, WORLD_MIN_Y - 1, -1):
-        for block in SURFACE_IGNORE_CHECK_BLOCKS:
-            try:
-                if _probe_block_match(host, port, password, x, y, z, block):
-                    break
-            except Exception:
-                continue
-        else:
+        block_state = _probe_block_state(host, port, password, x, y, z)
+        if _is_surface_ignore_check_block(block_state):
+            continue
+        if y >= WORLD_MAX_Y:
+            return y
+        above_state = _probe_block_state(host, port, password, x, y + 1, z)
+        if _is_surface_ignore_check_block(above_state):
             return y
     return None
 
