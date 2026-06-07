@@ -33,6 +33,7 @@ site/public/
 __pycache__/
 *.py[cod]
 .DS_Store
+tmp/
 
 # Local editor/tooling
 .idea/
