@@ -34,6 +34,9 @@ STRUCTURE_NAME = "purple_house"
 PURPLE_HOUSE_ZIP = "pummelchen-purple-house.zip"
 PLACE_PACK_ZIP = "pummelchen-place-purple-house.zip"
 ZIP_DATE = (2026, 6, 7, 0, 0, 0)
+WORLD_MIN_Y = -64
+WORLD_MAX_Y = 319
+AIR_LIKE_BLOCKS = {"minecraft:air", "minecraft:cave_air", "minecraft:void_air"}
 PLACEMENT_STATE_SCORE = "ph_house_state"
 PLACEMENT_ATTEMPT_SCORE = "ph_house_attempt"
 PLACEMENT_STATUS_SCORE = "ph_house_status"
@@ -253,13 +256,14 @@ def place_house_via_rcon(
     origin: tuple[int, int, int],
     rcon_port: int,
     project_dir: Path = DEFAULT_PROJECT_DIR,
-) -> bool:
+    snap_to_surface: bool = True,
+) -> tuple[bool, tuple[int, int, int]]:
     _, values = read_properties(server_dir / "server.properties")
     if values.get("enable-rcon", "false").lower() != "true":
-        return False
+        return False, origin
     password = values.get("rcon.password", "").strip()
     if not password:
-        return False
+        return False, origin
     sx, sy, sz = spawn
     ox, oy, oz = origin
     nbt_zip = server_dir / "server-datapacks" / PURPLE_HOUSE_ZIP
@@ -268,15 +272,20 @@ def place_house_via_rcon(
     nbt_data = read_structure_nbt(nbt_zip)
     if nbt_data is None:
         print(f"placement_via_rcon_error=could_not_read_nbt from {nbt_zip}")
-        return False
+        return False, origin
     palette, blocks = nbt_data
+    if snap_to_surface:
+        ox, oy, oz = _align_origin_to_surface(
+            server_dir, project_dir, (ox, oy, oz), password, rcon_port, host=RCON_HOST
+        )
+        origin = (ox, oy, oz)
     fill_commands = generate_fill_commands(palette, blocks, origin)
     print(f"placement_via_rcon_fill_commands={len(fill_commands)}")
     min_chunk_x, min_chunk_z, max_chunk_x, max_chunk_z = _forceload_region_for_origin((ox, oy, oz), PLACEMENT_CLEAR_SIZE + 56)
     try:
         if not wait_for_rcon(rcon_port):
             print(f"placement_via_rcon_error=RCON unavailable on port {rcon_port}")
-            return False
+            return False, origin
         rcon_command(RCON_HOST, rcon_port, password, f"forceload add {min_chunk_x} {min_chunk_z} {max_chunk_x} {max_chunk_z}")
         print("placement_via_rcon_forceload=ok")
         time.sleep(10)
@@ -289,15 +298,15 @@ def place_house_via_rcon(
                 print(f"placement_via_rcon_batch={batch_idx + 1}/{total_batches}")
             except Exception as exc:
                 print(f"placement_via_rcon_batch_error={batch_idx + 1}/{total_batches}: {exc}")
-                return False
+                return False, origin
             time.sleep(1)
         rcon_command(RCON_HOST, rcon_port, password, f"setworldspawn {sx} {sy} {sz}")
         rcon_command(RCON_HOST, rcon_port, password, f"forceload remove {min_chunk_x} {min_chunk_z} {max_chunk_x} {max_chunk_z}")
     except Exception as exc:
         print(f"placement_via_rcon_error={exc.__class__.__name__}: {exc}")
-        return False
+        return False, origin
     print("placement_via_rcon_success=1")
-    return True
+    return True, origin
 
 
 def active_world_name(server_dir: Path) -> str:
@@ -528,6 +537,100 @@ def read_structure_nbt(zip_path: Path) -> tuple[list[dict[str, Any]], list[dict[
     return palette, blocks
 
 
+def _block_state_name(value: str) -> str:
+    return value.split("[", 1)[0].strip().lower()
+
+
+def _is_air_like_block(block_state: str | None) -> bool:
+    if not block_state:
+        return False
+    return _block_state_name(block_state) in AIR_LIKE_BLOCKS
+
+
+def _extract_data_get_block(block_report: str) -> str | None:
+    lower = block_report.lower()
+    match = re.search(r"(minecraft:[a-z0-9_]+(?:\[[^\]]+\])?)", lower)
+    return match.group(1) if match else None
+
+
+def _structure_bounds(blocks: list[dict[str, Any]]) -> tuple[int, int, int, int, int, int]:
+    min_x = 10**9
+    max_x = -10**9
+    min_y = 10**9
+    max_y = -10**9
+    min_z = 10**9
+    max_z = -10**9
+    for block in blocks:
+        pos = block.get("pos")
+        if not isinstance(pos, list) or len(pos) != 3:
+            continue
+        x, y, z = int(pos[0]), int(pos[1]), int(pos[2])
+        min_x = min(min_x, x)
+        max_x = max(max_x, x)
+        min_y = min(min_y, y)
+        max_y = max(max_y, y)
+        min_z = min(min_z, z)
+        max_z = max(max_z, z)
+    return min_x, max_x, min_y, max_y, min_z, max_z
+
+
+def _surface_block_y(
+    host: str,
+    port: int,
+    password: str,
+    x: int,
+    z: int,
+    start_y: int,
+) -> int | None:
+    for y in range(start_y, WORLD_MIN_Y - 1, -1):
+        try:
+            response = rcon_command(host, port, password, f"data get block {x} {y} {z}")
+        except Exception:
+            continue
+        block = _extract_data_get_block(response)
+        if _is_air_like_block(block):
+            continue
+        if block is None:
+            continue
+        return y
+    return None
+
+
+def _align_origin_to_surface(
+    server_dir: Path,
+    project_dir: Path,
+    origin: tuple[int, int, int],
+    password: str,
+    rcon_port: int,
+    host: str = RCON_HOST,
+) -> tuple[int, int, int]:
+    nbt_zip = server_dir / "server-datapacks" / PURPLE_HOUSE_ZIP
+    if not nbt_zip.exists():
+        nbt_zip = project_dir / "server-datapacks" / PURPLE_HOUSE_ZIP
+    nbt_data = read_structure_nbt(nbt_zip)
+    if nbt_data is None:
+        return origin
+    _palette, blocks = nbt_data
+    min_x, max_x, min_y, max_y, min_z, max_z = _structure_bounds(blocks)
+    ox, oy, oz = origin
+    if min_y > max_y:
+        return origin
+
+    probe_x = ox + ((min_x + max_x) // 2)
+    probe_z = oz + ((min_z + max_z) // 2)
+    structure_height = max_y - min_y + 1
+    start_y = min(max(oy + structure_height + 16, 0), WORLD_MAX_Y)
+    surface_y = _surface_block_y(host, rcon_port, password, probe_x, probe_z, start_y)
+    if surface_y is None:
+        return origin
+
+    aligned_y = surface_y + 1 - min_y
+    aligned_origin = (ox, max(aligned_y, WORLD_MIN_Y), oz)
+    if aligned_origin != origin:
+        print(f"placement_origin_aligned={aligned_origin[0]},{aligned_origin[1]},{aligned_origin[2]}")
+    return aligned_origin
+
+
 def _block_state_string(state: dict[str, Any]) -> str:
     name = str(state.get("Name", "minecraft:air"))
     if name == "minecraft:chain":
@@ -738,6 +841,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="derive placement spawn/origin from the booted level.dat during auto-place",
     )
+    parser.add_argument(
+        "--auto-place-no-surface-snap",
+        action="store_true",
+        help="skip automatic house surface alignment before placement",
+    )
     parser.add_argument("--auto-phase-timeout", type=int, default=DEFAULT_BOOT_WAIT)
     parser.add_argument("--wait-timeout", type=int, default=180)
     parser.add_argument("--no-restart", action="store_true")
@@ -818,7 +926,18 @@ def main() -> int:
             start_service(args.service, args.dry_run)
             second_done = False if args.dry_run else wait_for_done(args.service, time.time(), args.auto_phase_timeout)
             print(f"bootstrap_rcon_boot={int(second_done)}")
-            placement_ok = place_house_via_rcon(server_dir, spawn, origin, rcon_port, args.project_dir) if not args.dry_run else False
+            placement_ok = False
+            if not args.dry_run:
+                placement_ok, origin = place_house_via_rcon(
+                    server_dir,
+                    spawn,
+                    origin,
+                    rcon_port,
+                    args.project_dir,
+                    snap_to_surface=not args.auto_place_no_surface_snap,
+                )
+            else:
+                print("placement_via_rcon_skipped_dry_run=1")
 
             # Restore RCON settings to avoid leaving temporary credentials behind.
             if changed_rcon:
