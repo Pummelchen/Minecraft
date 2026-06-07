@@ -195,6 +195,8 @@ def rcon_command(host: str, port: int, password: str, command: str, timeout: flo
             response_id, _response_type, response = _read_rcon_packet(sock)
             if response_id != 2:
                 raise OSError("unexpected RCON response id")
+        if _is_rcon_command_failure(response):
+            raise RuntimeError(f"RCON command failed: {command}: {response}")
         return response
 
 
@@ -219,6 +221,8 @@ def run_rcon_commands(
             if response_id != next_request_id:
                 if response_id != 0:
                     raise OSError(f"unexpected RCON response id for {command}: {response_id}")
+            if _is_rcon_command_failure(response):
+                raise RuntimeError(f"RCON command failed: {command}: {response}")
             responses.append(response)
             next_request_id += 1
         return responses
@@ -226,6 +230,38 @@ def run_rcon_commands(
 
 def _clean_minecraft_output(text: str) -> str:
     return re.sub(r"\u00a7.", "", text).strip()
+
+
+def _is_rcon_command_failure(response: str) -> bool:
+    clean = _clean_minecraft_output(response).lower()
+    if not clean:
+        return True
+    if clean.startswith("done"):
+        return False
+    if clean == "ok":
+        return False
+    if clean.startswith("set "):
+        return False
+    if clean == "no player was found":
+        return False
+    return any(
+        token in clean
+        for token in (
+            "unknown or invalid command",
+            "unknown command",
+            "invalid command",
+            "permission",
+            "not enough arguments",
+            "incorrect argument",
+            "only players",
+            "failure",
+            "could not",
+            "cannot",
+            "not permitted",
+            "timed out",
+            "no such",
+        )
+    )
 
 
 def _extract_locate_coordinates(text: str) -> tuple[int, int] | None:
@@ -304,7 +340,7 @@ def place_house_via_rcon(
         rcon_command(RCON_HOST, rcon_port, password, f"forceload add {min_chunk_x} {min_chunk_z} {max_chunk_x} {max_chunk_z}")
         print("placement_via_rcon_forceload=ok")
         time.sleep(10)
-        batch_size = 100
+        batch_size = 60
         total_batches = (len(fill_commands) + batch_size - 1) // batch_size
         for batch_idx in range(total_batches):
             batch = fill_commands[batch_idx * batch_size : (batch_idx + 1) * batch_size]
@@ -682,6 +718,13 @@ def generate_fill_commands(
     commands: list[str] = []
     for y in sorted(by_layer):
         layer_blocks = by_layer[y]
+        clear_by_z: dict[int, tuple[int, int]] = {}
+        for x, z, _, _ in layer_blocks:
+            lo, hi = clear_by_z.get(z, (x, x))
+            clear_by_z[z] = (min(lo, x), max(hi, x))
+        for z in sorted(clear_by_z):
+            lo, hi = clear_by_z[z]
+            commands.append(f"fill {ox + lo} {oy + y} {oz + z} {ox + hi} {oy + y} {oz + z} minecraft:air")
         by_state: dict[int, list[tuple[int, int]]] = {}
         for x, z, state_idx, _ly in layer_blocks:
             by_state.setdefault(state_idx, []).append((x, z))
