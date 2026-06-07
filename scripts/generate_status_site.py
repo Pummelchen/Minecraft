@@ -974,8 +974,8 @@ def render_page(
           <span class="pill">Server: 91.99.176.243:25565</span>
           <span class="pill">Web: 91.99.176.243:7788</span>
           <span class="pill">Generated: {generated}</span>
-          <span class="pill">{server_count} server mods</span>
-          <span class="pill">{client_count} client-only extras</span>
+          <span class="pill">{server_count} Server Mods</span>
+          <span class="pill">{client_count} Client Mods</span>
         </div>
       </div>
     </div>
