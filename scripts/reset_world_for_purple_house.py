@@ -161,7 +161,6 @@ def placement_pack(origin: tuple[int, int, int], spawn: tuple[int, int, int]) ->
             "store success score #place_success pummelchen_ops "
             f"run place structure pummelchen:purple_house {ox} {oy} {oz}",
             f"execute if score #place_success pummelchen_ops matches 1 run setworldspawn {sx} {sy} {sz}",
-            "execute if score #place_success pummelchen_ops matches 1 run gamerule spawnRadius 2",
             "execute if score #place_success pummelchen_ops matches 1 run scoreboard players set #purple_house pummelchen_ops 1",
             "",
         ]
