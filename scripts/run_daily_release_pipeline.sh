@@ -13,5 +13,5 @@ exec /usr/bin/python3 "$PROJECT_DIR/scripts/daily_release_pipeline.py" \
   --site-output "$PROJECT_DIR/site/public" \
   --release-backup-dir "$PROJECT_DIR/release_backups" \
   --trigger cron \
-  --scan-limit 40 \
+  --scan-limit 200 \
   --apply-limit 5

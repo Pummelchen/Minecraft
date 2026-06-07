@@ -619,7 +619,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--minecraft-version", default=DEFAULT_MINECRAFT_VERSION)
     parser.add_argument("--neoforge-version", default=DEFAULT_NEOFORGE_VERSION)
     parser.add_argument("--trigger", default="cron")
-    parser.add_argument("--scan-limit", type=int, default=40)
+    parser.add_argument("--scan-limit", type=int, default=200)
     parser.add_argument("--apply-limit", type=int, default=5)
     parser.add_argument("--update-timeout", type=int, default=900)
     parser.add_argument("--bundle-size", type=int, default=10)

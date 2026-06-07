@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
 import datetime as dt
 import hashlib
@@ -232,6 +233,114 @@ def resolve_candidate(conn: sqlite3.Connection, mod: sqlite3.Row) -> tuple[dict[
     if not file_info:
         return None
     return project, file_info
+
+
+# ---------------------------------------------------------------------------
+# Parallel candidate resolution
+# ---------------------------------------------------------------------------
+
+MODRINTH_BATCH_SIZE = 20
+CF_MAX_WORKERS = 8
+
+
+def _resolve_cf(slug: str) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """Thread target: resolve a single CurseForge project + files."""
+    try:
+        project = curseforge_project(slug)
+        if project:
+            files = curseforge_files(int(project["id"]))
+            return project, files
+    except Exception:
+        pass
+    return None
+
+
+def resolve_candidates_parallel(
+    conn: sqlite3.Connection,
+    mods: list[sqlite3.Row],
+) -> dict[int, tuple[dict[str, Any], dict[str, Any]] | None]:
+    """Resolve candidates for all mods using bulk Modrinth + threaded CurseForge."""
+    modrinth_slugs: dict[int, str] = {}
+    cf_slugs: dict[int, str] = {}
+
+    for mod in mods:
+        source = primary_source(conn, int(mod["id"]))
+        if not source:
+            continue
+        slug = source["project_slug"] or mod["canonical_key"]
+        if source["source_kind"] == "modrinth":
+            modrinth_slugs[int(mod["id"])] = slug
+        elif source["source_kind"] == "curseforge":
+            cf_slugs[int(mod["id"])] = slug
+
+    modrinth_map: dict[str, tuple[dict[str, Any], dict[str, Any]] | None] = {}
+    cf_map: dict[str, tuple[dict[str, Any], list[dict[str, Any]]] | None] = {}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=CF_MAX_WORKERS) as pool:
+        # --- Modrinth bulk: batch projects + per-project versions -----------
+        def fetch_modrinth_all() -> None:
+            slug_list = list(set(modrinth_slugs.values()))
+            for batch_start in range(0, len(slug_list), MODRINTH_BATCH_SIZE):
+                batch = slug_list[batch_start : batch_start + MODRINTH_BATCH_SIZE]
+                try:
+                    projects = processor.api_json_bulk(batch)
+                except Exception:
+                    continue
+                for proj in projects:
+                    proj_slug = str(proj.get("slug") or "")
+                    if not proj_slug:
+                        continue
+                    proj["_source"] = "modrinth"
+                    try:
+                        versions = processor.modrinth_versions_bulk(proj_slug)
+                    except Exception:
+                        continue
+                    file_info = processor.choose_modrinth_file_from_versions(proj, versions)
+                    if file_info:
+                        modrinth_map[proj_slug] = (proj, file_info)
+
+        modrinth_future = pool.submit(fetch_modrinth_all)
+
+        # --- CurseForge threaded -------------------------------------------
+        cf_futures: dict[str, Any] = {}
+        for slug in set(cf_slugs.values()):
+            cf_futures[slug] = pool.submit(_resolve_cf, slug)
+
+        # Collect CurseForge results
+        for slug, future in cf_futures.items():
+            try:
+                cf_map[slug] = future.result(timeout=120)
+            except Exception:
+                cf_map[slug] = None
+
+        # Wait for Modrinth
+        try:
+            modrinth_future.result(timeout=300)
+        except Exception:
+            pass
+
+    # --- Build result dict --------------------------------------------------
+    result: dict[int, tuple[dict[str, Any], dict[str, Any]] | None] = {}
+    for mod in mods:
+        mod_id = int(mod["id"])
+        source = primary_source(conn, mod_id)
+        if not source:
+            result[mod_id] = None
+            continue
+        slug = source["project_slug"] or mod["canonical_key"]
+        if source["source_kind"] == "modrinth":
+            result[mod_id] = modrinth_map.get(slug)
+        elif source["source_kind"] == "curseforge":
+            cf_data = cf_map.get(slug)
+            if cf_data:
+                project, files = cf_data
+                file_info = choose_curseforge_file(project, source["url"])
+                result[mod_id] = (project, file_info) if file_info else None
+            else:
+                result[mod_id] = None
+        else:
+            result[mod_id] = None
+    return result
 
 
 def download_file(file_info: dict[str, Any], dest_dir: Path) -> Path:
@@ -939,10 +1048,16 @@ def scan_and_apply(args: argparse.Namespace) -> int:
             scan_statuses,
         ).fetchall()
         limit = args.limit or len(rows)
+        scan_rows = rows[:limit]
+        # Pre-resolve all candidates in parallel (bulk Modrinth + threaded CurseForge)
+        print(f"scan_phase=parallel_resolve mod_count={len(scan_rows)}", flush=True)
+        candidates_map = resolve_candidates_parallel(conn, scan_rows)
+        resolved_count = sum(1 for v in candidates_map.values() if v is not None)
+        print(f"scan_phase=resolved candidates={resolved_count}/{len(scan_rows)}", flush=True)
         try:
-            for mod in rows[:limit]:
+            for mod in scan_rows:
                 stats["scanned"] += 1
-                candidate = resolve_candidate(conn, mod)
+                candidate = candidates_map.get(int(mod["id"]))
                 if not candidate:
                     stats["skipped"] += 1
                     continue

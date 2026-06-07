@@ -280,6 +280,73 @@ def choose_modrinth_file(project: dict[str, Any]) -> dict[str, Any] | None:
     )[0]
 
 
+def api_json_bulk(project_ids_or_slugs: list[str]) -> list[dict[str, Any]]:
+    """Fetch multiple Modrinth projects in a single API call."""
+    if not project_ids_or_slugs:
+        return []
+    ids_param = json.dumps(project_ids_or_slugs)
+    return api_json_list(
+        f"{MODRINTH_API_BASE}/projects?ids={urllib.parse.quote(ids_param)}"
+    )
+
+
+def modrinth_versions_bulk(slug_or_id: str) -> list[dict[str, Any]]:
+    """Fetch all versions for a Modrinth project without loader/version filtering."""
+    return api_json_list(
+        f"{MODRINTH_API_BASE}/project/{urllib.parse.quote(str(slug_or_id))}/version"
+    )
+
+
+def choose_modrinth_file_from_versions(
+    project: dict[str, Any], versions: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Same as choose_modrinth_file but accepts pre-fetched versions."""
+    project_type = project.get("project_type") or "mod"
+    loader_allow = {
+        "mod": {"neoforge"},
+        "resourcepack": {"minecraft"},
+        "shader": {"iris", "minecraft"},
+        "datapack": {"minecraft", "datapack"},
+    }.get(str(project_type), {"neoforge", "minecraft", "iris"})
+    candidates: list[dict[str, Any]] = []
+    for version in versions:
+        if not (set(version.get("game_versions") or []) & set(COMPATIBLE_GAME_VERSIONS)):
+            continue
+        if not (set(version.get("loaders") or []) & loader_allow):
+            continue
+        files = version.get("files") or []
+        selected = ([f for f in files if f.get("primary")] or files or [None])[0]
+        if not selected:
+            continue
+        candidates.append(
+            {
+                "_source": "modrinth",
+                "_side": modrinth_project_side(project),
+                "id": version.get("id"),
+                "modId": project.get("id"),
+                "fileName": selected.get("filename"),
+                "downloadUrl": selected.get("url"),
+                "fileLength": selected.get("size") or 0,
+                "versionType": version.get("version_type") or "unknown",
+                "gameVersions": version.get("game_versions") or [],
+                "dependencies": version.get("dependencies") or [],
+                "datePublished": version.get("date_published") or "",
+            }
+        )
+    if not candidates:
+        return None
+    release_order = {"release": 0, "beta": 1, "alpha": 2}
+    return sorted(
+        candidates,
+        key=lambda fi: (
+            -release_order.get(str(fi.get("versionType")), 9),
+            str(fi.get("datePublished") or ""),
+            str(fi.get("id") or ""),
+        ),
+        reverse=True,
+    )[0]
+
+
 def download_file(file_info: dict[str, Any], dest_dir: Path) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
     filename = file_info["fileName"]
