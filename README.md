@@ -243,25 +243,17 @@ notes:
 
 ## Custom Server Datapacks
 
-- `Purple House` is a project-owned server datapack generated from
-  `scripts/build_purple_house_datapack.py` and registered through
-  `server-datapacks-src/custom_datapacks.json`.
-- It adds a rare overworld purple survival mansion for a lady who loves purple,
-  flowers, cats, birds, ducks, and chickens: spa-pool basement, large double
-  bed, big kitchen, lovely living room, front courtyard pool, side
-  staircases/decks, upper terrace farms, pet gardens, many flowers, and romantic
-  lighting.
-- Its structure-set spacing is `108` chunks, which yields one placement cell per
-  about `2.986 km2`, matching the requested one house per roughly 3 square
-  kilometers.
-- For a fresh world with Purple House placed near spawn, run the reset helper on
-  the server with `--yes`; it backs up the old world before replacing regions:
-
-```bash
-python3 /var/minecraft_mods/scripts/reset_world_for_purple_house.py --yes
-```
-- See `docs/PURPLE_HOUSE.md` for the 3D plan, reference-frame analysis, block
-  palette, and interior decoration notes for the active Pummelchen pack.
+- `Purple House` is a project-owned datapack registered through
+  `server-datapacks-src/custom_datapacks.json` and synchronized to
+  `server-datapacks/pummelchen-purple-house.zip` by `sync_custom_datapacks.py`.
+- Build flow for this pack is staged and local:
+  - `exterior` places the shell/outer build first.
+  - `interior` places rooms and finishing details second.
+  - `complete` runs both stages.
+- This package is targeted for **Minecraft Java 26.1.2** and uses namespace
+  `purple_house`. It includes an `erase` function for cleanup.
+- See `docs/PURPLE_HOUSE.md` and `docs/Purple_House_build_guide.md` for current
+  usage and build staging notes.
 
 ## Latest Batch Notes
 

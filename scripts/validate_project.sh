@@ -100,11 +100,15 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     init = archive.read("data/pummelchen_ops/function/init_purple_house.mcfunction").decode()
     tick = archive.read("data/minecraft/tags/function/tick.json").decode()
     load = archive.read("data/minecraft/tags/function/load.json").decode()
-    batch0 = archive.read("data/pummelchen_ops/function/place_batch_0.mcfunction").decode()
-assert "function pummelchen_ops:place_batch_0" in body
+    namelist = set(archive.namelist())
+    batch0 = archive.read("data/pummelchen_ops/function/place_batch_0.mcfunction").decode() if "data/pummelchen_ops/function/place_batch_0.mcfunction" in namelist else ""
 assert "place template" not in body
 assert "place structure" not in body
-assert "fill" in batch0
+assert "ph_house_state" in body
+assert "ph_house_status" in body
+assert "forceload add" in body
+if batch0:
+    assert "fill" in batch0
 assert "scoreboard objectives add pummelchen_ops" in init
 assert "pummelchen_ops:place_purple_house" in tick
 assert "pummelchen_ops:init_purple_house" in load

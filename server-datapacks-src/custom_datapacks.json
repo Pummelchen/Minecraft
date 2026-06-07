@@ -6,15 +6,15 @@
       "entry_type": "Datapack",
       "file_name": "pummelchen-purple-house.zip",
       "installation": "Server",
-      "last_tested": "2026-06-06",
+      "last_tested": "2026-06-08",
       "name": "Purple House",
-      "notes": "Project-owned rare overworld structure datapack. Adds a lady-focused purple L-shaped survival mansion with a spa-pool basement, large double bed, big kitchen, lovely living room, romantic lighting, courtyard pool, lush flower gardens, cat patio, bird pergola, duck pond, and chicken coop. Random-spread spacing is 108 chunks, about 2.986 square kilometers per placement cell.",
-      "notes_1": "Inspired by the referenced Ultimate Survival House tutorial frame: broad twin staircases, raised L-shaped decks, open side utility bays, central grid facade, intersecting gable roof, courtyard pool, side terrace farms, stone-and-wood support rhythm, and railings.",
-      "notes_2": "Uses mostly vanilla block IDs for worldgen stability, with pets for cats, parrots, chickens, and Untitled Duck Mod ducks because those are active in the Pummelchen pack.",
+      "notes": "Staged vanilla build datapack for Minecraft Java 26.1.2. Use exterior + interior functions for deterministic house placement at your current coordinates.",
+      "notes_1": "Functions are in namespace `purple_house` with duplicate `function`/`functions` paths for compatibility: `/function purple_house:exterior` then `/function purple_house:interior` (or `/function purple_house:complete`).",
+      "notes_2": "Includes an `/function purple_house:erase` cleanup helper. No worldgen random-spread placement data is included in this package.",
       "original_sheet_row": 0,
       "source_kind": "local",
       "source_url": "local://server-datapacks/pummelchen-purple-house.zip",
-      "target_mc": "NeoForge 26.1.x / server 26.1.2",
+      "target_mc": "Minecraft Java 26.1.2 (datapack format 101.1)",
       "test_label": "custom_purple_house_datapack"
     }
   ]

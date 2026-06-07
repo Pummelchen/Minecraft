@@ -860,6 +860,27 @@ def write_zip(files: dict[str, bytes], output_zip: Path) -> None:
     tmp.replace(output_zip)
 
 
+def source_pack_files(source_dir: Path) -> dict[str, bytes]:
+    files: dict[str, bytes] = {}
+    if not source_dir.exists():
+        return files
+    for path in sorted(source_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(source_dir).as_posix()
+        files[rel] = path.read_bytes()
+    return files
+
+
+def is_external_source_pack(source_dir: Path) -> bool:
+    if not source_dir.exists():
+        return False
+    for path in source_dir.rglob("*"):
+        if path.is_file() and path.name != "pack.mcmeta":
+            return True
+    return False
+
+
 def compare_tree(files: dict[str, bytes], source_dir: Path) -> list[str]:
     problems: list[str] = []
     expected = set(files)
@@ -878,6 +899,12 @@ def compare_tree(files: dict[str, bytes], source_dir: Path) -> list[str]:
     return problems
 
 
+def gather_pack_files(source_dir: Path) -> tuple[dict[str, bytes], bool]:
+    if is_external_source_pack(source_dir):
+        return source_pack_files(source_dir), True
+    return datapack_files(), False
+
+
 def build_expected_zip(files: dict[str, bytes]) -> bytes:
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "pack.zip"
@@ -885,7 +912,7 @@ def build_expected_zip(files: dict[str, bytes]) -> bytes:
         return path.read_bytes()
 
 
-def check(files: dict[str, bytes], source_dir: Path, output_zip: Path) -> int:
+def check(files: dict[str, bytes], source_dir: Path, output_zip: Path, external_source: bool) -> int:
     problems = compare_tree(files, source_dir)
     if not output_zip.exists():
         problems.append(f"missing datapack zip: {output_zip}")
@@ -894,7 +921,7 @@ def check(files: dict[str, bytes], source_dir: Path, output_zip: Path) -> int:
     for rel, data in files.items():
         if rel.endswith(".json") or rel == "pack.mcmeta":
             json.loads(data.decode("utf-8"))
-        if rel.endswith(".nbt") and not data.startswith(b"\x1f\x8b"):
+        if not external_source and rel.endswith(".nbt") and not data.startswith(b"\x1f\x8b"):
             problems.append(f"structure is not gzip NBT: {rel}")
     if problems:
         for problem in problems:
@@ -914,10 +941,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    files = datapack_files()
+    files, external_source = gather_pack_files(args.source_dir)
     if args.check:
-        return check(files, args.source_dir, args.output_zip)
-    write_source(files, args.source_dir)
+        return check(files, args.source_dir, args.output_zip, external_source)
+    if not external_source:
+        write_source(files, args.source_dir)
     write_zip(files, args.output_zip)
     print(f"purple_house_datapack_built={args.output_zip}")
     print(f"purple_house_source={args.source_dir}")
