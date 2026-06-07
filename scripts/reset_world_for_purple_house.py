@@ -37,6 +37,21 @@ ZIP_DATE = (2026, 6, 7, 0, 0, 0)
 WORLD_MIN_Y = -64
 WORLD_MAX_Y = 319
 AIR_LIKE_BLOCKS = {"minecraft:air", "minecraft:cave_air", "minecraft:void_air"}
+SURFACE_IGNORE_BLOCKS = {
+    "minecraft:air",
+    "minecraft:cave_air",
+    "minecraft:void_air",
+    "minecraft:water",
+    "minecraft:flowing_water",
+    "minecraft:lava",
+    "minecraft:flowing_lava",
+    "minecraft:powder_snow",
+    "minecraft:bubble_column",
+    "minecraft:kelp",
+    "minecraft:kelp_plant",
+    "minecraft:seagrass",
+    "minecraft:tall_seagrass",
+}
 PLACEMENT_STATE_SCORE = "ph_house_state"
 PLACEMENT_ATTEMPT_SCORE = "ph_house_attempt"
 PLACEMENT_STATUS_SCORE = "ph_house_status"
@@ -547,6 +562,12 @@ def _is_air_like_block(block_state: str | None) -> bool:
     return _block_state_name(block_state) in AIR_LIKE_BLOCKS
 
 
+def _is_surface_ignore_block(block_state: str | None) -> bool:
+    if not block_state:
+        return False
+    return _block_state_name(block_state) in SURFACE_IGNORE_BLOCKS
+
+
 def _extract_data_get_block(block_report: str) -> str | None:
     lower = block_report.lower()
     match = re.search(r"(minecraft:[a-z0-9_]+(?:\[[^\]]+\])?)", lower)
@@ -588,9 +609,7 @@ def _surface_block_y(
         except Exception:
             continue
         block = _extract_data_get_block(response)
-        if _is_air_like_block(block):
-            continue
-        if block is None:
+        if _is_surface_ignore_block(block):
             continue
         return y
     return None
