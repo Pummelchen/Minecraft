@@ -49,6 +49,7 @@ DEFAULT_SERVER_KEY = "minecraft_26_1_2"
 DEFAULT_DISPLAY_NAME = "Pummelchen Server"
 DEFAULT_BUNDLE_SIZE = 10
 DEFAULT_HEADLESS_BASE_DIR = Path("/var/minecraft_mods/headless_client_lab")
+DEFAULT_PUMMELCHEN_MODS_DIR = Path("/var/minecraft_mods/Pummelchen_Mods")
 IGNORED_DEPENDENCIES = {
     "java",
     "minecraft",
@@ -346,15 +347,29 @@ def build_mod_jar(path: Path, mapped: sqlite3.Row | None = None) -> ModJar:
     )
 
 
-def active_server_jars(server_dir: Path, conn: sqlite3.Connection) -> list[ModJar]:
-    mods_dir = server_dir / "mods"
+def active_server_jars(
+    server_dir: Path,
+    conn: sqlite3.Connection,
+    *,
+    custom_mods_dir: Path | None = None,
+) -> list[ModJar]:
     mapped = db_file_map(conn)
+    source_dirs: list[Path] = [server_dir / "mods"]
+    if custom_mods_dir:
+        source_dirs.append(custom_mods_dir)
     jars: list[ModJar] = []
-    if not mods_dir.exists():
-        return jars
-    for path in sorted(mods_dir.iterdir(), key=lambda item: item.name.lower()):
-        if path.is_file() and path.suffix.lower() in {".jar", ".zip"}:
-            jars.append(build_mod_jar(path, mapped.get(path.name.lower())))
+    seen: set[str] = set()
+    for mods_dir in source_dirs:
+        if not mods_dir.exists():
+            continue
+        for path in sorted(mods_dir.iterdir(), key=lambda item: item.name.lower()):
+            if not path.is_file() or path.suffix.lower() not in {".jar", ".zip"}:
+                continue
+            key = path.name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            jars.append(build_mod_jar(path, mapped.get(key)))
     return jars
 
 
@@ -999,7 +1014,7 @@ def run_singles(args: argparse.Namespace) -> int:
     run_label = args.run_label or now_label("single_mod_acceptance")
     with connect(args.db) as conn:
         init_db(conn)
-        active = active_server_jars(args.server_dir, conn)
+        active = active_server_jars(args.server_dir, conn, custom_mods_dir=args.custom_mods_dir)
         targets = selected_subset(active, args.limit, args.offset)
         if args.dry_run:
             print_plan(targets, args.bundle_size)
@@ -1075,7 +1090,7 @@ def run_bundles(args: argparse.Namespace) -> int:
     run_label = args.run_label or now_label("bundle_acceptance")
     with connect(args.db) as conn:
         init_db(conn)
-        active = active_server_jars(args.server_dir, conn)
+        active = active_server_jars(args.server_dir, conn, custom_mods_dir=args.custom_mods_dir)
         bundles = bundle_targets(active, args.bundle_size)
         selected = bundles[args.offset :]
         if args.limit:
@@ -1151,7 +1166,7 @@ def run_pyramid(args: argparse.Namespace) -> int:
     release_key = args.release_key
     with connect(args.db) as conn:
         init_db(conn)
-        active = active_server_jars(args.server_dir, conn)
+        active = active_server_jars(args.server_dir, conn, custom_mods_dir=args.custom_mods_dir)
         if not release_key:
             release_key = next_release_key(conn)
         if args.dry_run:
@@ -1317,7 +1332,11 @@ def run_files(args: argparse.Namespace) -> int:
         init_db(conn)
         targets = external_jars(args.files)
         available = list(targets)
-        active = active_server_jars(args.server_dir, conn) if args.include_active_deps or args.candidate_group_size else []
+        active = (
+            active_server_jars(args.server_dir, conn, custom_mods_dir=args.custom_mods_dir)
+            if args.include_active_deps or args.candidate_group_size
+            else []
+        )
         if active:
             available.extend(active)
         context: list[ModJar] = []
@@ -1891,7 +1910,7 @@ def run_block_client(args: argparse.Namespace) -> int:
     with connect(args.db) as conn:
         init_db(conn)
         row = block_row(conn, args)
-        active = active_server_jars(args.server_dir, conn)
+        active = active_server_jars(args.server_dir, conn, custom_mods_dir=args.custom_mods_dir)
     status = run_block_client_row(args, row, active)
     return 0 if status in {"passed", "dry_run"} else 1
 
@@ -1899,7 +1918,7 @@ def run_block_client(args: argparse.Namespace) -> int:
 def run_block_clients(args: argparse.Namespace) -> int:
     with connect(args.db) as conn:
         init_db(conn)
-        active = active_server_jars(args.server_dir, conn)
+        active = active_server_jars(args.server_dir, conn, custom_mods_dir=args.custom_mods_dir)
         query = """
             SELECT b.*, r.release_key
             FROM mod_acceptance_blocks b
@@ -1947,7 +1966,7 @@ def init_database(args: argparse.Namespace) -> int:
 def plan(args: argparse.Namespace) -> int:
     with connect(args.db) as conn:
         init_db(conn)
-        print_plan(active_server_jars(args.server_dir, conn), args.bundle_size)
+    print_plan(active_server_jars(args.server_dir, conn, custom_mods_dir=args.custom_mods_dir), args.bundle_size)
     return 0
 
 
@@ -1985,6 +2004,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--server-key", default=DEFAULT_SERVER_KEY)
     parser.add_argument("--lab-root", type=Path, default=DEFAULT_LAB_ROOT)
     parser.add_argument("--bundle-size", type=int, default=DEFAULT_BUNDLE_SIZE)
+    parser.add_argument("--custom-mods-dir", type=Path, default=DEFAULT_PUMMELCHEN_MODS_DIR)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("init")
     sub.add_parser("plan")

@@ -47,6 +47,7 @@ DEFAULT_SERVER_PORT = 25565
 DEFAULT_JAVA_BIN = Path("/usr/lib/jvm/java-25-openjdk-amd64/bin/java")
 HMC_SPECIFICS_BASE_URL = "https://github.com/headlesshq/hmc-specifics/releases/download"
 HMC_SPECIFICS_LEGACY_VERSION = "2.4.0"
+CLIENT_JVM_FLAGS = "-Xmx{heap_gb}G -Dio.netty.transport.noNative=true -Djava.net.preferIPv4Stack=true"
 FATAL_PATTERNS = re.compile(
     r"Minecraft has crashed|Reported exception|Crash report|Unknown loader:|"
     r"ModLoadingException|Loading errors encountered|has failed to load correctly|"
@@ -61,6 +62,8 @@ FATAL_PATTERNS = re.compile(
 )
 IGNORED_FATAL_PATTERNS = (
     re.compile(r"Realms.*Invalid session", re.IGNORECASE),
+    re.compile(r"io\.netty\.channel\.kqueue\.Native|Only supported on OSX/BSD", re.IGNORECASE),
+    re.compile(r"api\.minecraftservices\.com/publickeys|AccountProfileKeyPairManager", re.IGNORECASE),
 )
 
 
@@ -635,7 +638,8 @@ def run_smoke(args: argparse.Namespace) -> int:
         print(f"game_dir={game_dir}")
         print(
             "launch="
-            f"launch {args.loader}:{args.minecraft_version} -specifics --jvm \"-Xmx{args.heap_gb}G\" "
+            f"launch {args.loader}:{args.minecraft_version} -specifics "
+            f"--jvm \"{CLIENT_JVM_FLAGS.format(heap_gb=args.heap_gb)}\" "
             f"{'-offline ' if args.offline else ''}"
             f"--game-args \"--quickPlayMultiplayer {args.server_host}:{args.server_port}\""
         )
@@ -685,7 +689,7 @@ def run_smoke(args: argparse.Namespace) -> int:
             time.sleep(4)
             launch = (
                 f"launch {args.loader}:{args.minecraft_version} -specifics "
-                f'--jvm "-Xmx{args.heap_gb}G" '
+                f'--jvm "{CLIENT_JVM_FLAGS.format(heap_gb=args.heap_gb)}" '
                 f"{'-offline ' if args.offline else ''}"
                 f'--game-args "--quickPlayMultiplayer {args.server_host}:{args.server_port}"'
             )

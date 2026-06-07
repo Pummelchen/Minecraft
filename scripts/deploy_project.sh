@@ -144,6 +144,7 @@ python3 scripts/release_manager.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite
 python3 scripts/gameplay_load_lab.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" init
 python3 scripts/mod_acceptance_lab.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" init
 python3 scripts/headless_client_lab.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" init
+PUMMELCHEN_MODS_OUTPUT="$(python3 scripts/sync_pummelchen_mods.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR")"
 CUSTOM_DATAPACKS_OUTPUT="$(python3 scripts/sync_custom_datapacks.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --project-dir "$PROJECT_DIR" --server-dir "$SERVER_DIR")"
 
 PROPERTIES_OUTPUT="server_properties_changed=0"
@@ -237,6 +238,7 @@ CLIENT_EXCLUDED_FILES="$(find "$SERVER_DIR/client-package/mods" -maxdepth 1 -typ
 printf '%s\n' "$SERVER_SANITIZE_OUTPUT"
 printf '%s\n' "$CLIENT_SANITIZE_OUTPUT"
 printf '%s\n' "$SAFETY_OUTPUT"
+printf '%s\n' "$PUMMELCHEN_MODS_OUTPUT"
 printf '%s\n' "$CUSTOM_DATAPACKS_OUTPUT"
 printf '%s\n' "$PROPERTIES_OUTPUT"
 printf '%s\n' "$CONFIG_OUTPUT"
@@ -268,6 +270,7 @@ fi
 systemctl reload nginx
 if printf '%s\n' "$SERVER_SANITIZE_OUTPUT" | grep -Eq 'resource_pack_metadata_changes=[1-9]' \
   || printf '%s\n' "$SAFETY_OUTPUT" | grep -Eq 'server_removed=[1-9]' \
+  || printf '%s\n' "$PUMMELCHEN_MODS_OUTPUT" | grep -Eq 'pummelchen_mods_changed=[1-9]' \
   || printf '%s\n' "$CUSTOM_DATAPACKS_OUTPUT" | grep -Eq 'custom_datapacks_changed=[1-9]' \
   || printf '%s\n' "$PROPERTIES_OUTPUT" | grep -q 'server_properties_changed=1' \
   || printf '%s\n' "$CONFIG_OUTPUT" | grep -Eq 'config_overrides_changed=[1-9]'; then

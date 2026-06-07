@@ -53,6 +53,8 @@ done < <(find "$ROOT_DIR/scripts" "$ROOT_DIR/client-package" "$ROOT_DIR/client-i
 log "Custom server datapacks"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/build_purple_house_datapack.py" --check
 "$PYTHON_BIN" "$ROOT_DIR/scripts/sync_custom_datapacks.py" --project-dir "$ROOT_DIR" --check
+log "Project-owned custom mods"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/sync_pummelchen_mods.py" --db "$TMP_DIR/pummelchen-mods.sqlite" --server-dir "$TMP_DIR/project-mods-server" --mods-dir "$ROOT_DIR/Pummelchen_Mods" --check
 CUSTOM_DATAPACKS_SERVER="$TMP_DIR/custom-datapacks-server"
 mkdir -p "$CUSTOM_DATAPACKS_SERVER"
 printf 'level-name=custom-live-world\n' > "$CUSTOM_DATAPACKS_SERVER/server.properties"
@@ -179,6 +181,7 @@ printf '%s\n' "$PIPELINE_DRY" | grep -q 'daily_update.py' || fail "daily pipelin
 printf '%s\n' "$PIPELINE_DRY" | grep -q -- '--no-create-release' || fail "daily pipeline dry-run did not defer release creation"
 printf '%s\n' "$PIPELINE_DRY" | grep -q 'mod_acceptance_lab.py.*run-pyramid' || fail "daily pipeline dry-run did not call pyramid"
 printf '%s\n' "$PIPELINE_DRY" | grep -q 'mod_acceptance_lab.py.*run-block-clients' || fail "daily pipeline dry-run did not call headless client block test"
+printf '%s\n' "$PIPELINE_DRY" | grep -q 'sync_pummelchen_mods.py' || fail "daily pipeline dry-run did not sync project mods"
 printf '%s\n' "$PIPELINE_DRY" | grep -q 'release_manager.py.*create.*release_20260607_V9_daily' || fail "daily pipeline dry-run did not create versioned release"
 printf '%s\n' "$PIPELINE_DRY" | grep -q 'backup_releases_local.py' || fail "daily pipeline dry-run did not create release backups"
 grep -q 'run_daily_release_pipeline.sh' "$ROOT_DIR/cron/pummelchen-daily-update" || fail "daily cron does not call full release pipeline"
@@ -1005,6 +1008,24 @@ assert headless_client_lab.fatal_lines([stack_log]), "client StackOverflowError 
 class_log = tmp / "missing-client-class.log"
 class_log.write_text("java.lang.NoClassDefFoundError: com/example/MissingClass\n", encoding="utf-8")
 assert headless_client_lab.fatal_lines([class_log]), "client missing-class failures must be fatal"
+kqueue_log = tmp / "linux-headless-kqueue.log"
+kqueue_log.write_text(
+    "org.apache.logging.log4j.core.appender.AppenderLoggingException: "
+    "java.lang.NoClassDefFoundError: Could not initialize class io.netty.channel.kqueue.Native\n"
+    "Caused by: java.lang.IllegalStateException: Only supported on OSX/BSD\n",
+    encoding="utf-8",
+)
+assert headless_client_lab.fatal_lines([kqueue_log]) == []
+public_key_log = tmp / "offline-publickeys-timeout.log"
+public_key_log.write_text(
+    "com.mojang.authlib.exceptions.MinecraftClientException: "
+    "Failed to read from https://api.minecraftservices.com/publickeys due to Connect timed out\n",
+    encoding="utf-8",
+)
+assert headless_client_lab.fatal_lines([public_key_log]) == []
+server_timeout_log = tmp / "server-timeout.log"
+server_timeout_log.write_text("Failed to connect to the server: Timed out\n", encoding="utf-8")
+assert headless_client_lab.fatal_lines([server_timeout_log]), "server connection timeout must remain fatal"
 loading_error_log = tmp / "loading-error-screen.log"
 loading_error_log.write_text("Screen: net.neoforged.neoforge.client.gui.LoadingErrorScreen\n", encoding="utf-8")
 assert headless_client_lab.fatal_lines([loading_error_log]) == []

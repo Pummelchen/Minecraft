@@ -46,6 +46,18 @@ def run(cmd: Sequence[str], *, dry_run: bool) -> subprocess.CompletedProcess[str
     return subprocess.run(list(cmd), check=True, text=True)
 
 
+def run_capture(cmd: Sequence[str], *, dry_run: bool) -> subprocess.CompletedProcess[str]:
+    print("pipeline_cmd=" + " ".join(str(part) for part in cmd), flush=True)
+    if dry_run:
+        return subprocess.CompletedProcess(list(cmd), 0, "", "")
+    return subprocess.run(list(cmd), check=True, text=True, capture_output=True)
+
+
+def parse_metric(output: str, metric: str, default: int = 0) -> int:
+    match = re.search(rf"^{re.escape(metric)}=(\d+)", output, flags=re.MULTILINE)
+    return int(match.group(1)) if match else default
+
+
 def sqlite_row(db: Path, query: str, params: Sequence[object] = ()) -> sqlite3.Row | None:
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
@@ -161,7 +173,13 @@ def rollback_to_release(args: argparse.Namespace, release_id: str, reason: str) 
     )
 
 
-def create_release(args: argparse.Namespace, release_key: str, update_run: sqlite3.Row | None) -> str:
+def create_release(
+    args: argparse.Namespace,
+    release_key: str,
+    update_run: sqlite3.Row | None,
+    *,
+    local_mods_changed: int = 0,
+) -> str:
     release_id = release_id_from_key(release_key)
     applied = int(update_run["applied"] or 0) if update_run else 0
     failed = int(update_run["failed"] or 0) if update_run else 0
@@ -170,6 +188,8 @@ def create_release(args: argparse.Namespace, release_key: str, update_run: sqlit
         f"Daily full pipeline release {release_key}: {applied} update(s) applied, "
         f"{failed} failed candidate(s), {skipped} skipped; server pyramid and top client block passed."
     )
+    if local_mods_changed:
+        notes += f" {local_mods_changed} project-local mod(s) synced from Pummelchen_Mods."
     run(
         [
             sys.executable,
@@ -262,7 +282,24 @@ def run_pipeline(args: argparse.Namespace) -> int:
                 flush=True,
             )
 
-        if applied <= 0:
+        sync_output = run_capture(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "sync_pummelchen_mods.py"),
+                "--db",
+                str(args.db),
+                "--project-dir",
+                str(args.project_root),
+                "--server-dir",
+                str(args.server_dir),
+                "--mods-dir",
+                str(args.pummelchen_mods_dir),
+            ],
+            dry_run=args.dry_run,
+        )
+        local_mods_changed = parse_metric(sync_output.stdout or "", "pummelchen_mods_changed")
+
+        if applied <= 0 and local_mods_changed <= 0:
             run(
                 [
                     sys.executable,
@@ -369,7 +406,12 @@ def run_pipeline(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
         )
 
-        release_id = create_release(args, release_key, update_run)
+        release_id = create_release(
+            args,
+            release_key,
+            update_run,
+            local_mods_changed=local_mods_changed,
+        )
         run(
             [
                 sys.executable,
@@ -443,6 +485,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--site-output", type=Path, default=Path("/var/minecraft_mods/site/public"))
     parser.add_argument("--release-backup-dir", type=Path, default=DEFAULT_RELEASE_BACKUPS)
     parser.add_argument("--lab-root", type=Path, default=Path("/var/minecraft_mods/mod_acceptance_lab"))
+    parser.add_argument("--pummelchen-mods-dir", type=Path, default=Path("/var/minecraft_mods/Pummelchen_Mods"))
     parser.add_argument("--public-url", default=DEFAULT_PUBLIC_URL)
     parser.add_argument("--minecraft-version", default=DEFAULT_MINECRAFT_VERSION)
     parser.add_argument("--neoforge-version", default=DEFAULT_NEOFORGE_VERSION)

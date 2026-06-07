@@ -131,6 +131,10 @@ build host before rebuilding a client package if
   installs them into the active server, mirrors them into the active
   `level-name` world datapacks folder, and registers them in the SQLite-backed
   mod collection.
+- `scripts/sync_pummelchen_mods.py` - validates and registers project-owned
+  custom jars from `Pummelchen_Mods`, extracts NeoForge/Fabric metadata, stores
+  release metadata in SQLite, and synchronizes them into `server/mods` and
+  `client-package/mods` for acceptance testing.
 - `scripts/reset_world_for_purple_house.py` - backup-first live reset helper:
   stops the Minecraft service, moves the active `level-name` world aside, writes
   a new seed, installs Purple House datapacks into the new world, places the
@@ -175,6 +179,8 @@ build host before rebuilding a client package if
   `/var/minecraft_26.1.2/server-datapacks`.
 - `server-datapacks-src/` - source metadata and generated datapack contents for
   project-owned custom server datapacks.
+- `Pummelchen_Mods/` - project-owned custom jars (eg. Purple House support mods)
+  that are synced directly into server/client acceptance and release pipelines.
 - `site/public/index.html` - generated static status page staging copy.
 
 For the production audit plan, hardening notes, 100-client readiness checklist,
