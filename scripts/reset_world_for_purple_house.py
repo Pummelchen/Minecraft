@@ -607,8 +607,14 @@ def placement_pack(
         files[f"data/pummelchen_ops/function/place_batch_{idx}.mcfunction"] = "\n".join(batch_lines).encode("utf-8")
         files[f"data/pummelchen_ops/functions/place_batch_{idx}.mcfunction"] = "\n".join(batch_lines).encode("utf-8")
     total_batches = len(batches)
-    lines = [
+    init_lines = [
         "scoreboard objectives add pummelchen_ops dummy",
+        f"scoreboard players set {PLACEMENT_STATE_SCORE} pummelchen_ops 0",
+        f"scoreboard players set {PLACEMENT_ATTEMPT_SCORE} pummelchen_ops 0",
+        f"scoreboard players set {PLACEMENT_STATUS_SCORE} pummelchen_ops 0",
+        "",
+    ]
+    lines = [
         f"execute if score {PLACEMENT_STATE_SCORE} pummelchen_ops matches 0 "
         "run scoreboard players add ph_house_attempt pummelchen_ops 1",
         f"execute if score {PLACEMENT_STATE_SCORE} pummelchen_ops matches 0 "
@@ -636,12 +642,16 @@ def placement_pack(
         f"run scoreboard players set {PLACEMENT_STATE_SCORE} pummelchen_ops 1",
         "",
     ]
+    init_body = "\n".join(init_lines).encode("utf-8")
     function_body = "\n".join(lines).encode("utf-8")
-    load_tag = b'{"replace":false,"values":["pummelchen_ops:place_purple_house"]}\n'
+    load_tag = b'{"replace":false,"values":["pummelchen_ops:init_purple_house"]}\n'
+    tick_tag = b'{"replace":false,"values":["pummelchen_ops:place_purple_house"]}\n'
     files["data/minecraft/tags/function/load.json"] = load_tag
-    files["data/minecraft/tags/function/tick.json"] = load_tag
+    files["data/minecraft/tags/function/tick.json"] = tick_tag
     files["data/minecraft/tags/functions/load.json"] = load_tag
-    files["data/minecraft/tags/functions/tick.json"] = load_tag
+    files["data/minecraft/tags/functions/tick.json"] = tick_tag
+    files["data/pummelchen_ops/function/init_purple_house.mcfunction"] = init_body
+    files["data/pummelchen_ops/functions/init_purple_house.mcfunction"] = init_body
     files["data/pummelchen_ops/function/place_purple_house.mcfunction"] = function_body
     files["data/pummelchen_ops/functions/place_purple_house.mcfunction"] = function_body
     return files

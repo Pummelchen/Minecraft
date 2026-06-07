@@ -97,13 +97,17 @@ import zipfile
 
 with zipfile.ZipFile(sys.argv[1]) as archive:
     body = archive.read("data/pummelchen_ops/function/place_purple_house.mcfunction").decode()
+    init = archive.read("data/pummelchen_ops/function/init_purple_house.mcfunction").decode()
     tick = archive.read("data/minecraft/tags/function/tick.json").decode()
+    load = archive.read("data/minecraft/tags/function/load.json").decode()
     batch0 = archive.read("data/pummelchen_ops/function/place_batch_0.mcfunction").decode()
 assert "function pummelchen_ops:place_batch_0" in body
 assert "place template" not in body
 assert "place structure" not in body
 assert "fill" in batch0
+assert "scoreboard objectives add pummelchen_ops" in init
 assert "pummelchen_ops:place_purple_house" in tick
+assert "pummelchen_ops:init_purple_house" in load
 PY
 
 log "Server config overrides"
