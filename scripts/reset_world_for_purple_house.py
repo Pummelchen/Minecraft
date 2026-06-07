@@ -40,6 +40,9 @@ ZIP_DATE = (2026, 6, 7, 0, 0, 0)
 WORLD_MIN_Y = -64
 WORLD_MAX_Y = 319
 AIR_LIKE_BLOCKS = {"minecraft:air", "minecraft:cave_air", "minecraft:void_air"}
+INVALID_BLOCK_FALLBACKS = {
+    "minecraft:chain": "minecraft:iron_bars",
+}
 SURFACE_IGNORE_BLOCKS = {
     "minecraft:air",
     "minecraft:cave_air",
@@ -752,62 +755,6 @@ def read_structure_nbt(zip_path: Path) -> tuple[list[dict[str, Any]], list[dict[
     return palette, blocks
 
 
-def _block_state_name(value: str) -> str:
-    return value.split("[", 1)[0].strip().lower()
-
-
-def _is_air_like_block(block_state: str | None) -> bool:
-    if not block_state:
-        return False
-    return _block_state_name(block_state) in AIR_LIKE_BLOCKS
-
-
-def _is_surface_ignore_block(block_state: str | None) -> bool:
-    if not block_state:
-        return True
-    if _is_air_like_block(block_state):
-        return True
-    name = _block_state_name(block_state)
-    if name in SURFACE_IGNORE_BLOCKS:
-        return True
-    return name.endswith("_leaves")
-
-
-def _extract_data_get_block(block_report: str) -> str | None:
-    lower = block_report.lower()
-    match = re.search(r"(minecraft:[a-z0-9_]+(?:\[[^\]]+\])?)", lower)
-    return match.group(1) if match else None
-
-
-def _is_surface_ignore_check_block(block_state: str | None) -> bool:
-    if not block_state:
-        return True
-    name = _block_state_name(block_state)
-    if _is_air_like_block(block_state):
-        return True
-    if name in SURFACE_IGNORE_CHECK_BLOCKS or name in SURFACE_IGNORE_BLOCKS:
-        return True
-    if any(name.endswith(suffix) for suffix in SURFACE_IGNORE_CHECK_SUFFIXES):
-        return True
-    return False
-
-
-def _probe_block_state(
-    host: str,
-    port: int,
-    password: str,
-    x: int,
-    y: int,
-    z: int,
-) -> str | None:
-    try:
-        return _extract_data_get_block(
-            rcon_command(host, port, password, f"data get block {x} {y} {z}", timeout=RCON_COMMAND_TIMEOUT)
-        )
-    except Exception:
-        return None
-
-
 def _probe_block_match(
     host: str,
     port: int,
@@ -824,7 +771,7 @@ def _probe_block_match(
             host,
             port,
             password,
-            f"execute store success {SURFACE_PROBE_SCORE} {SURFACE_PROBE_OBJECTIVE} if block {x} {y} {z} {block}",
+            f"execute if block {x} {y} {z} {block}",
             timeout=RCON_COMMAND_TIMEOUT,
         )
     ).lower()
@@ -835,6 +782,51 @@ def _probe_block_match(
     if response.startswith("test failed"):
         return False
     return None
+
+
+def _is_air_like_at(
+    host: str,
+    port: int,
+    password: str,
+    x: int,
+    y: int,
+    z: int,
+) -> bool | None:
+    for block in AIR_LIKE_BLOCKS:
+        result = _probe_block_match(host, port, password, x, y, z, block)
+        if result is None:
+            return None
+        if result:
+            return True
+    return False
+
+
+def _is_surface_ignore_block_at(
+    host: str,
+    port: int,
+    password: str,
+    x: int,
+    y: int,
+    z: int,
+) -> bool:
+    air_like = _is_air_like_at(host, port, password, x, y, z)
+    if air_like:
+        return True
+    if air_like is None:
+        return True
+    for block in SURFACE_IGNORE_BLOCKS:
+        result = _probe_block_match(host, port, password, x, y, z, block)
+        if result is None:
+            return True
+        if result:
+            return True
+    for block in SURFACE_IGNORE_CHECK_BLOCKS:
+        result = _probe_block_match(host, port, password, x, y, z, block)
+        if result is None:
+            return True
+        if result:
+            return True
+    return False
 
 
 def _structure_bounds(blocks: list[dict[str, Any]]) -> tuple[int, int, int, int, int, int]:
@@ -866,14 +858,13 @@ def _surface_block_y(
     z: int,
     start_y: int,
 ) -> int | None:
+    # Find a non-ignorable block with free air/ignorable space above.
     for y in range(start_y, WORLD_MIN_Y - 1, -1):
-        block_state = _probe_block_state(host, port, password, x, y, z)
-        if _is_surface_ignore_check_block(block_state):
+        if _is_surface_ignore_block_at(host, port, password, x, y, z):
             continue
         if y >= WORLD_MAX_Y:
             return y
-        above_state = _probe_block_state(host, port, password, x, y + 1, z)
-        if _is_surface_ignore_check_block(above_state):
+        if _is_surface_ignore_block_at(host, port, password, x, y + 1, z):
             return y
     return None
 
@@ -919,25 +910,44 @@ def _align_origin_to_surface(
     ]
 
     surface_candidates: list[int] = []
-    seen = set[tuple[int, int]]()
-    for dx, dz in probe_offsets:
-        probe_x = probe_center_x + dx
-        probe_z = probe_center_z + dz
-        key = (probe_x, probe_z)
-        if key in seen:
-            continue
-        seen.add(key)
-        surface = _surface_block_y(host, rcon_port, password, probe_x, probe_z, start_y)
-        if surface is not None:
-            surface_candidates.append(surface)
+    forceload_min_x, forceload_min_z, forceload_max_x, forceload_max_z = _forceload_region_for_origin(
+        (ox, oy, oz),
+        PLACEMENT_CLEAR_SIZE + 56,
+    )
+    rcon_command(
+        host,
+        rcon_port,
+        password,
+        f"forceload add {forceload_min_x} {forceload_min_z} {forceload_max_x} {forceload_max_z}",
+        timeout=RCON_COMMAND_TIMEOUT,
+    )
+    try:
+        seen = set[tuple[int, int]]()
+        for dx, dz in probe_offsets:
+            probe_x = probe_center_x + dx
+            probe_z = probe_center_z + dz
+            key = (probe_x, probe_z)
+            if key in seen:
+                continue
+            seen.add(key)
+            surface = _surface_block_y(host, rcon_port, password, probe_x, probe_z, start_y)
+            if surface is not None:
+                surface_candidates.append(surface)
+    finally:
+        rcon_command(
+            host,
+            rcon_port,
+            password,
+            f"forceload remove {forceload_min_x} {forceload_min_z} {forceload_max_x} {forceload_max_z}",
+            timeout=RCON_COMMAND_TIMEOUT,
+        )
 
     if not surface_candidates:
         return origin
 
-    # Use a conservative sample percentile so we don't place the house above nearby
-    # shallower terrain (which can cause floating placement in shoreline/ocean zones).
+    # Use the lowest sampled solid surface so we stay on the ground floor.
     surface_candidates.sort()
-    surface_y = surface_candidates[(len(surface_candidates) - 1) // 3]
+    surface_y = surface_candidates[0]
 
     aligned_y = surface_y + 1 - min_y
     aligned_origin = (ox, max(aligned_y, WORLD_MIN_Y), oz)
@@ -946,12 +956,17 @@ def _align_origin_to_surface(
     return aligned_origin
 
 
+def _block_state_name(value: str) -> str:
+    return value.split("[", 1)[0].strip().lower()
+
+
 def _block_state_string(state: dict[str, Any]) -> str:
     name = str(state.get("Name", "minecraft:air"))
-    if name == "minecraft:chain":
-        # Older chain block state payloads can include axis in this NBT source
-        # but current fill-command block parser for this server version rejects it.
-        return name
+    base_name = _block_state_name(name)
+    if base_name in INVALID_BLOCK_FALLBACKS:
+        # Older structure payloads used unsupported chain block variants.
+        # Replace with a stable equivalent that exists in this server runtime.
+        name = INVALID_BLOCK_FALLBACKS[base_name]
     props = state.get("Properties")
     if not props or not isinstance(props, dict):
         return name
@@ -1156,6 +1171,11 @@ def install_datapacks(
     server_datapacks = server_dir / "server-datapacks"
     world_datapacks = world_dir / "datapacks"
     world_datapacks.mkdir(parents=True, exist_ok=True)
+    if not install_place_pack:
+        for path in (world_datapacks / PLACE_PACK_ZIP, server_datapacks / PLACE_PACK_ZIP):
+            if path.exists():
+                path.unlink()
+                changed += 1
     for source in datapack_sources(project_dir, server_dir):
         if copy_if_changed(source, server_datapacks / source.name):
             changed += 1

@@ -307,7 +307,7 @@ def add_candle_cluster(structure: Structure, x: int, y: int, z: int, color: str 
 
 
 def add_chandelier(structure: Structure, x: int, y: int, z: int) -> None:
-    structure.set(x, y, z, st("minecraft:chain", axis="y"))
+    structure.set(x, y, z, st("minecraft:iron_bars"))
     structure.set(x, y - 1, z, st("minecraft:lantern", hanging="true", waterlogged="false"))
     structure.set(x - 1, y - 2, z, st("minecraft:sea_lantern"))
     structure.set(x + 1, y - 2, z, st("minecraft:sea_lantern"))
