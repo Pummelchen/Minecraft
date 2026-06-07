@@ -359,6 +359,19 @@ def fetch_active_release(conn: sqlite3.Connection) -> dict[str, Any]:
     return dict(row) if row else {}
 
 
+def display_release_version(release_id: str) -> str:
+    value = (release_id or "").strip()
+    match = re.fullmatch(r"release_(\d{4})(\d{2})(\d{2})_([^_]+)(?:_.*)?", value)
+    if match:
+        year, month, day, version = match.groups()
+        return f"{year}-{month}-{day}_{version}"
+    match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})_([^_]+)(?:_.*)?", value)
+    if match:
+        year, month, day, version = match.groups()
+        return f"{year}-{month}-{day}_{version}"
+    return value or "Unknown"
+
+
 def version_text(files: list[dict[str, Any]]) -> str:
     if not files:
         return "Tracked runtime entry"
@@ -635,6 +648,7 @@ def render_page(
     updates: list[dict[str, Any]],
 ) -> str:
     generated = escape(stats.get("Generated", ""))
+    release_label = display_release_version(stats.get("Active release", ""))
     client_zip_url = f"{public_url.rstrip('/')}/downloads/{CLIENT_ZIP_NAME}"
     client_dmg_url = f"{public_url.rstrip('/')}/downloads/{CLIENT_DMG_NAME}"
     server_count = len(server_mods)
@@ -774,7 +788,7 @@ def render_page(
       height: 88px;
       display: block;
     }}
-    .actions {{ display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }}
+    .actions {{ display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 14px 0; }}
     .button {{
       display: inline-flex;
       align-items: center;
@@ -792,17 +806,17 @@ def render_page(
       color: var(--green);
       border-color: var(--line);
     }}
-    .steps {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-      gap: 12px;
-      margin-top: 14px;
-    }}
-    .step {{
-      background: var(--panel);
+    .release-version {{
+      display: inline-flex;
+      align-items: center;
+      min-height: 42px;
       border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 14px;
+      border-radius: 999px;
+      padding: 0 12px;
+      color: var(--stone);
+      background: var(--panel);
+      font-weight: 700;
+      font-size: 14px;
     }}
     code, pre {{
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -992,26 +1006,7 @@ def render_page(
       <p class="note">For macOS Apple Silicon M2/M3 clients. The DMG is a small visual bootstrap installer; first run downloads the current verified client pack, about 1 GB, with a step counter and progress window. It reports each setup step, success timestamp, and failure log tail to the VPS, installs a user-local Java 25 runtime when needed, syncs the matching mods and visual packs, installs NeoForge, adds the server entry, and enables automatic background updates from the VPS.</p>
       <div class="actions">
         <a class="button" href="{escape(client_dmg_url)}">Download Small Mac Installer DMG</a>
-      </div>
-      <div class="steps">
-        <article class="step">
-          <h3>1. Open DMG</h3>
-          <p>Download the small DMG, open it, then open Pummelchen Installer.</p>
-          <pre>Installer:
-Pummelchen-Client-Installer.dmg</pre>
-        </article>
-        <article class="step">
-          <h3>2. Visual Install</h3>
-          <p>The installer shows and reports each step, the active release, how many mods/resource packs/shader packs are planned, and progress while it downloads, verifies, unpacks, installs Java 25, moves conflicting old mod jars aside, validates every installed file, and installs the Pummelchen background updater plus Client Doctor log uploader.</p>
-          <pre>Managed install:
-Java, NeoForge, mods, resource packs, shader packs, auto-updater, Client Doctor</pre>
-        </article>
-        <article class="step">
-          <h3>3. Ready</h3>
-          <p>When it finishes, Minecraft opens and the Pummelchen server entry is ready. A successful setup row is stored on the VPS with a timestamp. Future server-side mod updates sync from the VPS without downloading the DMG again; for an immediate pre-play sync, open Pummelchen Minecraft from the Mac Applications folder. To send crash logs, open Pummelchen Send Logs.</p>
-          <pre>Ready to play:
-Pummelchen Server</pre>
-        </article>
+        <span class="release-version">Latest version: {escape(release_label)}</span>
       </div>
     </section>
 
