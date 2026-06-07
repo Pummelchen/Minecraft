@@ -29,6 +29,103 @@ DEFAULT_SERVER_KEY = "minecraft_26_1_2"
 CLIENT_ZIP_NAME = "minecraft_26.1.2_client_macos_apple_silicon.zip"
 
 
+def normalize_interface_name(value: str | None) -> str | None:
+    if not value:
+        return None
+    iface = value.strip()
+    return iface if iface else None
+
+
+def detect_default_interface() -> str | None:
+    route_path = Path("/proc/net/route")
+    if not route_path.exists():
+        # Fallback to a best-effort local interface choice.
+        pass
+    else:
+        default_metric: int | None = None
+        default_iface: str | None = None
+        for line in route_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("Iface"):
+                continue
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            iface, destination, flags = parts[0], parts[1], parts[3]
+            if destination != "00000000":
+                continue
+            try:
+                if int(flags, 16) & 0x0002 == 0:
+                    continue
+                metric = int(parts[6]) if len(parts) > 6 else 0
+            except ValueError:
+                continue
+            if default_metric is None or metric < default_metric:
+                default_metric = metric
+                default_iface = iface
+        if default_iface is not None:
+            return default_iface
+    # Fallback when /proc/net/route is unavailable or has no default route.
+    dev_path = Path("/proc/net/dev")
+    if not dev_path.exists():
+        return None
+    for line in dev_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if ":" not in line:
+            continue
+        iface = line.split(":")[0].strip()
+        if iface and iface != "lo":
+            return iface
+    return None
+
+
+def interface_speed_mbps(interface: str | None) -> float:
+    if not interface:
+        return 1000.0
+    speed_path = Path(f"/sys/class/net/{interface}/speed")
+    if not speed_path.exists():
+        return 1000.0
+    try:
+        speed = float(speed_path.read_text(encoding="utf-8", errors="replace").strip())
+    except (OSError, ValueError):
+        return 1000.0
+    if speed <= 0:
+        return 1000.0
+    return speed
+
+
+def read_net_bytes(interface: str | None) -> tuple[int, int] | None:
+    if not interface:
+        return None
+    path = Path("/proc/net/dev")
+    if not path.exists():
+        return None
+    needle = f"{interface}:"
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip().startswith(needle):
+            continue
+        data = line.split(":")[-1].split()
+        if len(data) < 10:
+            return None
+        try:
+            rx_bytes = int(data[0])
+            tx_bytes = int(data[8])
+        except ValueError:
+            return None
+        return rx_bytes, tx_bytes
+    return None
+
+
+def human_bits_per_sec(bits_per_second: float) -> str:
+    if bits_per_second < 0:
+        return "0 bps"
+    units = ["bps", "Kbps", "Mbps", "Gbps"]
+    current = float(bits_per_second)
+    for unit in units:
+        if current < 1000:
+            return f"{current:.1f} {unit}"
+        current /= 1000
+    return f"{current:.1f} Tbps"
+
+
 def human_bytes(value: float) -> str:
     units = ["B", "KB", "MB", "GB", "TB"]
     size = float(value)
@@ -98,7 +195,14 @@ def cpu_usage_percent(previous: dict[str, int] | None, current: dict[str, int] |
 
 def normalize_history_sample(sample: dict[str, Any], disk_total_gb: float) -> dict[str, Any]:
     normalized = dict(sample)
-    for key in ("cpu_percent", "load1_percent", "ram_used_percent", "disk_used_percent", "disk_free_percent"):
+    for key in (
+        "cpu_percent",
+        "load1_percent",
+        "ram_used_percent",
+        "disk_used_percent",
+        "disk_free_percent",
+        "network_traffic_percent",
+    ):
         if key in normalized:
             try:
                 normalized[key] = round(clamp_percent(float(normalized[key])), 2)
@@ -225,6 +329,45 @@ def build_payload(
     disk_free_gb = disk.free / (1024 ** 3)
     disk_total_gb = disk.total / (1024 ** 3)
 
+    interface = normalize_interface_name(state.get("net_interface")) or detect_default_interface()
+    net_snapshot = read_net_bytes(interface)
+    network_percent = 0.0
+    network_text = "Missing"
+    if interface and net_snapshot is not None:
+        previous_net = state.get("previous_net")
+        if isinstance(previous_net, dict) and previous_net.get("interface") == interface:
+            prev_ts = float(previous_net.get("ts", 0.0) or 0.0)
+            interval = now.timestamp() - prev_ts
+            if interval > 0:
+                try:
+                    prev_rx = int(previous_net.get("rx_bytes", 0))
+                    prev_tx = int(previous_net.get("tx_bytes", 0))
+                    rx_bytes, tx_bytes = net_snapshot
+                    speed_mbps = interface_speed_mbps(interface)
+                    rx_delta = max(0, rx_bytes - prev_rx)
+                    tx_delta = max(0, tx_bytes - prev_tx)
+                    rx_bps = (rx_delta * 8) / interval
+                    tx_bps = (tx_delta * 8) / interval
+                    rx_pct = clamp_percent((rx_bps / 1_000_000.0 / speed_mbps) * 100) if speed_mbps > 0 else 0.0
+                    tx_pct = clamp_percent((tx_bps / 1_000_000.0 / speed_mbps) * 100) if speed_mbps > 0 else 0.0
+                    network_percent = round(max(rx_pct, tx_pct), 2)
+                    network_text = (
+                        f"{human_bits_per_sec(rx_bps)} in / "
+                        f"{human_bits_per_sec(tx_bps)} out "
+                        f"({network_percent:.1f}% of {speed_mbps:.0f} Mbps)"
+                    )
+                except (TypeError, ValueError):
+                    network_text = "Unavailable"
+        current_net = {
+            "interface": interface,
+            "ts": now.timestamp(),
+            "rx_bytes": int(net_snapshot[0]),
+            "tx_bytes": int(net_snapshot[1]),
+        }
+    else:
+        network_text = "Unavailable"
+        current_net = {}
+
     sample = {
         "t": now.isoformat(timespec="seconds"),
         "cpu_percent": round(cpu_percent, 2),
@@ -233,6 +376,7 @@ def build_payload(
         "disk_used_percent": round(disk_used_percent, 2),
         "disk_free_gb": round(disk_free_gb, 2),
         "disk_free_percent": round(disk_free_percent, 2),
+        "network_traffic_percent": network_percent,
     }
     history = [
         normalize_history_sample(item, disk_total_gb)
@@ -255,6 +399,7 @@ def build_payload(
                 f"{human_bytes(disk.used)} / {human_bytes(disk.total)} "
                 f"({percent(disk.used, disk.total)}); {human_bytes(disk.free)} free"
             ),
+            "Network traffic": network_text,
             **client_pack_live_values(server_dir),
             **minecraft_live_values(server_dir, db_path, server_key),
         },
@@ -263,6 +408,8 @@ def build_payload(
     }
     next_state = {
         "previous_cpu": current_cpu,
+        "net_interface": interface or None,
+        "previous_net": current_net,
         "history": history,
     }
     return payload, next_state

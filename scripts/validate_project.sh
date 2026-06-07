@@ -1672,11 +1672,11 @@ assert stats["Client Mod Pack SHA256"] == expected_sha, "live stats missing clie
 assert stats["Client Mod Pack Generated"], "live stats missing client package generated timestamp"
 assert "Client Mod Pack Generated ISO" in stats, "live stats missing client package generated ISO timestamp"
 assert live_stats_feed.clamp_percent(138.1) == 100.0, "percent clamp does not cap overload values"
-for key in ("cpu_percent", "load1_percent", "ram_used_percent", "disk_used_percent", "disk_free_percent"):
+for key in ("cpu_percent", "ram_used_percent", "disk_used_percent", "disk_free_percent", "network_traffic_percent"):
     assert key in metrics, f"live stats missing {key}"
     assert 0 <= float(metrics[key]) <= 100, f"{key} is outside 0-100"
 for sample in payload["history"]:
-    for key in ("cpu_percent", "load1_percent", "ram_used_percent", "disk_used_percent", "disk_free_percent"):
+    for key in ("cpu_percent", "ram_used_percent", "disk_used_percent", "disk_free_percent", "network_traffic_percent"):
         if key in sample:
             assert 0 <= float(sample[key]) <= 100, f"history {key} is outside 0-100"
 PY

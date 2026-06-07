@@ -1015,8 +1015,8 @@ def render_page(
           <canvas data-live-chart="cpu_percent" width="520" height="176" aria-label="CPU usage graph"></canvas>
         </article>
         <article class="chart-card">
-          <div class="chart-head"><h3>Load 1m</h3><strong class="chart-value" data-live-metric="load1_percent">--</strong></div>
-          <canvas data-live-chart="load1_percent" width="520" height="176" aria-label="One minute load graph"></canvas>
+          <div class="chart-head"><h3>Network Traffic</h3><strong class="chart-value" data-live-metric="network_traffic_percent">--</strong></div>
+          <canvas data-live-chart="network_traffic_percent" width="520" height="176" aria-label="Network traffic graph"></canvas>
         </article>
         <article class="chart-card">
           <div class="chart-head"><h3>RAM Used</h3><strong class="chart-value" data-live-metric="ram_used_percent">--</strong></div>
@@ -1065,7 +1065,7 @@ def render_page(
   <script>
     const liveMetricConfig = {{
       cpu_percent: {{ suffix: '%', label: 'CPU Usage', min: 0, max: 100 }},
-      load1_percent: {{ suffix: '%', label: 'Load 1m', min: 0, max: 100 }},
+      network_traffic_percent: {{ suffix: '%', label: 'Network Traffic', min: 0, max: 100 }},
       ram_used_percent: {{ suffix: '%', label: 'RAM Used', min: 0, max: 100 }},
       disk_free_percent: {{ suffix: '%', label: 'Disk Free', min: 0, max: 100 }}
     }};
