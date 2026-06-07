@@ -431,13 +431,17 @@ python3 /var/minecraft_mods/scripts/release_manager.py cleanup --include-headles
 The daily noon UTC updater is a full release pipeline. Cron runs
 `scripts/run_daily_release_pipeline.sh`, which calls
 `scripts/daily_release_pipeline.py`. The pipeline scans and applies compatible
-updates with release creation disabled, runs the 10-mod pyramid server
+updates with release creation disabled, copies a staging server snapshot into
+`/var/minecraft_mods/.pipeline_staging`, runs the 10-mod pyramid server
 acceptance chain, runs the top accepted block through the headless client join
-test, rebuilds and validates the client package, creates and activates the
-release, regenerates the website, runs cleanup, and writes flat release backup
-ZIPs under `/var/minecraft_mods/release_backups`. If acceptance or packaging
-fails after an update is applied, it rolls the live files and DB back to the
-previous active immutable release.
+test, rebuilds and validates the client package in isolation, creates a tested
+immutable release from the staging snapshot, deploys that release to live and only
+then regenerates the website. Cleanup and release backup ZIP writes run after a
+successful deploy.
+
+Because the testing path is isolated, an update run does not mutate live server
+runtime files until deploy time. Rollback is only applied when deployment has
+already been executed and a later step fails.
 
 Clients see the new release pointer on their next launch or background sync.
 Newly generated release IDs use the `release_YYYYMMDD_VN_<label>` style so they

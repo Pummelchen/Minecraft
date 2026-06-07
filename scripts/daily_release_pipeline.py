@@ -7,6 +7,7 @@ import argparse
 import datetime as dt
 import json
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -23,6 +24,7 @@ DEFAULT_PUBLIC_URL = "http://91.99.176.243:7788"
 DEFAULT_SERVER_KEY = "minecraft_26_1_2"
 DEFAULT_MINECRAFT_VERSION = "26.1.2"
 DEFAULT_NEOFORGE_VERSION = "26.1.2.71"
+DEFAULT_STAGING_ROOT = Path("/var/minecraft_mods/.pipeline_staging")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -51,6 +53,80 @@ def run_capture(cmd: Sequence[str], *, dry_run: bool) -> subprocess.CompletedPro
     if dry_run:
         return subprocess.CompletedProcess(list(cmd), 0, "", "")
     return subprocess.run(list(cmd), check=True, text=True, capture_output=True)
+
+
+def default_pipeline_server_key(server_key: str) -> str:
+    return f"{server_key}_pipeline"
+
+
+def safe_stage_name(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("_")
+
+
+def prepare_staging_server(source_server: Path, stage_root: Path, release_key: str, started_at: str, *, dry_run: bool) -> Path:
+    stage_dir = stage_root / f"daily_{safe_stage_name(release_key)}_{safe_stage_name(started_at)}"
+    if dry_run:
+        print(f"pipeline_stage_server={stage_dir}")
+        return stage_dir
+
+    if not source_server.exists():
+        raise SystemExit(f"source server directory missing for staging: {source_server}")
+
+    if stage_dir.exists():
+        shutil.rmtree(stage_dir)
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    excluded = {
+        "data",
+        "logs",
+        "crash-reports",
+        "mods.failed",
+        "mods.rollback",
+        "mods.profiled-out",
+        "mods.backup",
+        "mods.disabled",
+        "mods.quarantine",
+        "client-package.rollback",
+        "client-package.failed",
+        "server-test-results",
+        "server-datapacks.rollback",
+        "server-datapacks.failed",
+        "world",
+        "world_nether",
+        "world_the_end",
+        "mods.test",
+        "mod_acceptance_lab",
+        "headless_client_lab",
+        "modpack_backups",
+        "codex-downloads",
+        "client_log_uploads",
+        "release_backups",
+        "tmp",
+        "tmpfs",
+    }
+
+    for item in sorted(source_server.iterdir()):
+        if item.name in excluded:
+            continue
+        destination = stage_dir / item.name
+        if item.is_dir() and not item.is_symlink():
+            shutil.copytree(item, destination, symlinks=True, dirs_exist_ok=True)
+        elif item.is_file():
+            if destination.exists():
+                destination.unlink()
+            shutil.copy2(item, destination)
+
+    # Ensure required runtime directories are available for isolated tests and packaging.
+    for name in ("mods", "server-datapacks", "client-package", "libraries", "config", "defaultconfigs"):
+        source = source_server / name
+        target = stage_dir / name
+        if source.exists() and not target.exists():
+            if source.is_dir() and not source.is_symlink():
+                shutil.copytree(source, target, symlinks=True, dirs_exist_ok=True)
+            elif source.is_file():
+                shutil.copy2(source, target)
+
+    print(f"pipeline_stage_server={stage_dir}")
+    return stage_dir
 
 
 def parse_metric(output: str, metric: str, default: int = 0) -> int:
@@ -178,6 +254,7 @@ def create_release(
     release_key: str,
     update_run: sqlite3.Row | None,
     *,
+    source_server_dir: Path,
     local_mods_changed: int = 0,
 ) -> str:
     release_id = release_id_from_key(release_key)
@@ -197,7 +274,7 @@ def create_release(
             "--db",
             str(args.db),
             "--server-dir",
-            str(args.server_dir),
+            str(source_server_dir),
             "--server-key",
             args.server_key,
             "--release-root",
@@ -211,7 +288,6 @@ def create_release(
             release_id,
             "--status",
             "tested",
-            "--activate",
             "--notes",
             notes,
         ],
@@ -224,11 +300,22 @@ def run_pipeline(args: argparse.Namespace) -> int:
     started_at = utc_now()
     original_release = active_release_id(args.db, args.server_key) if not args.dry_run else ""
     release_key = args.release_key or (next_release_key(args.db) if not args.dry_run else dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_V1"))
+    pipeline_server_key = args.pipeline_server_key or default_pipeline_server_key(args.server_key)
+    stage_server_dir = prepare_staging_server(
+        source_server=args.server_dir,
+        stage_root=args.pipeline_stage_root,
+        release_key=release_key,
+        started_at=started_at,
+        dry_run=args.dry_run,
+    )
     print(f"pipeline_started_at={started_at}", flush=True)
     print(f"pipeline_release_key={release_key}", flush=True)
+    print(f"pipeline_stage_server={stage_server_dir}", flush=True)
+    print(f"pipeline_server_key={pipeline_server_key}", flush=True)
     if original_release:
         print(f"pipeline_original_release={original_release}", flush=True)
 
+    deployed = False
     try:
         run(
             [
@@ -237,9 +324,9 @@ def run_pipeline(args: argparse.Namespace) -> int:
                 "--db",
                 str(args.db),
                 "--server-dir",
-                str(args.server_dir),
+                str(stage_server_dir),
                 "--server-key",
-                args.server_key,
+                pipeline_server_key,
                 "--timeout",
                 str(args.update_timeout),
                 "scan-apply",
@@ -291,7 +378,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
                 "--project-dir",
                 str(args.project_root),
                 "--server-dir",
-                str(args.server_dir),
+                str(stage_server_dir),
                 "--mods-dir",
                 str(args.pummelchen_mods_dir),
             ],
@@ -324,9 +411,9 @@ def run_pipeline(args: argparse.Namespace) -> int:
                 "--db",
                 str(args.db),
                 "--server-dir",
-                str(args.server_dir),
+                str(stage_server_dir),
                 "--server-key",
-                args.server_key,
+                pipeline_server_key,
                 "--lab-root",
                 str(args.lab_root),
                 "--bundle-size",
@@ -361,9 +448,9 @@ def run_pipeline(args: argparse.Namespace) -> int:
                 "--db",
                 str(args.db),
                 "--server-dir",
-                str(args.server_dir),
+                str(stage_server_dir),
                 "--server-key",
-                args.server_key,
+                pipeline_server_key,
                 "--lab-root",
                 str(args.lab_root),
                 "--bundle-size",
@@ -386,18 +473,29 @@ def run_pipeline(args: argparse.Namespace) -> int:
         )
 
         run(
-            [sys.executable, str(SCRIPT_DIR / "daily_update.py"), "--server-dir", str(args.server_dir), "rebuild-client"],
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "daily_update.py"),
+                "--server-dir",
+                str(stage_server_dir),
+                "rebuild-client",
+            ],
             dry_run=args.dry_run,
         )
         run(
-            [sys.executable, str(SCRIPT_DIR / "check_client_manifest.py"), str(args.server_dir / "client-package"), "--strict"],
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "check_client_manifest.py"),
+                str(stage_server_dir / "client-package"),
+                "--strict",
+            ],
             dry_run=args.dry_run,
         )
         run(
             [
                 sys.executable,
                 str(SCRIPT_DIR / "check_client_mod_dependencies.py"),
-                str(args.server_dir / "client-package"),
+                str(stage_server_dir / "client-package"),
                 "--minecraft-version",
                 args.minecraft_version,
                 "--neoforge-version",
@@ -410,8 +508,33 @@ def run_pipeline(args: argparse.Namespace) -> int:
             args,
             release_key,
             update_run,
+            source_server_dir=stage_server_dir,
             local_mods_changed=local_mods_changed,
         )
+
+        run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "release_manager.py"),
+                "--db",
+                str(args.db),
+                "--server-dir",
+                str(args.server_dir),
+                "--server-key",
+                args.server_key,
+                "--release-root",
+                str(args.release_root),
+                "--public-downloads",
+                str(args.public_downloads),
+                "deploy",
+                release_id,
+                "--notes",
+                f"Daily pipeline deployed {release_id}.",
+            ],
+            dry_run=args.dry_run,
+        )
+        deployed = True
+
         run(
             [
                 sys.executable,
@@ -470,8 +593,12 @@ def run_pipeline(args: argparse.Namespace) -> int:
     except Exception as exc:
         print(f"pipeline_status=failed\treason={type(exc).__name__}: {exc}", flush=True)
         if not args.dry_run:
-            rollback_to_release(args, original_release, type(exc).__name__)
+            if deployed:
+                rollback_to_release(args, original_release, type(exc).__name__)
         return 1
+    finally:
+        if not args.dry_run and stage_server_dir.exists():
+            shutil.rmtree(stage_server_dir)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -483,6 +610,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--release-root", type=Path, default=DEFAULT_RELEASE_ROOT)
     parser.add_argument("--public-downloads", type=Path, default=DEFAULT_PUBLIC_DOWNLOADS)
     parser.add_argument("--site-output", type=Path, default=Path("/var/minecraft_mods/site/public"))
+    parser.add_argument("--pipeline-stage-root", type=Path, default=DEFAULT_STAGING_ROOT)
+    parser.add_argument("--pipeline-server-key", default="")
     parser.add_argument("--release-backup-dir", type=Path, default=DEFAULT_RELEASE_BACKUPS)
     parser.add_argument("--lab-root", type=Path, default=Path("/var/minecraft_mods/mod_acceptance_lab"))
     parser.add_argument("--pummelchen-mods-dir", type=Path, default=Path("/var/minecraft_mods/Pummelchen_Mods"))

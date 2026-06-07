@@ -615,6 +615,43 @@ def rollback_release(args: argparse.Namespace) -> int:
     return result
 
 
+def deploy_release(args: argparse.Namespace) -> int:
+    rel_id = args.release_id
+    if validate_release(args, rel_id) != 0:
+        return 1
+    with connect(args.db) as conn:
+        init_db(conn)
+        row = release_row(conn, rel_id)
+        release_dir = Path(row["release_dir"])
+        if not release_dir.exists():
+            raise SystemExit(f"release directory missing for deploy: {release_dir}")
+
+        sync_directory_from_release(
+            release_dir / "server-files" / "mods",
+            args.server_dir / "mods",
+            ("*.jar", "*.zip"),
+        )
+        sync_directory_from_release(
+            release_dir / "server-files" / "server-datapacks",
+            args.server_dir / "server-datapacks",
+            ("*.jar", "*.zip"),
+        )
+        if (args.server_dir / "client-package").exists():
+            shutil.rmtree(args.server_dir / "client-package")
+        copy_tree_with_links(release_dir / "client-package", args.server_dir / "client-package")
+
+        for name in (CLIENT_ZIP_NAME, f"{CLIENT_ZIP_NAME}.sha256", MRPACK_NAME, DMG_NAME, f"{DMG_NAME}.sha256"):
+            source = release_dir / "artifacts" / name
+            if source.exists():
+                hardlink_or_copy(source, args.server_dir / name)
+
+        return_code = activate_release(args, rel_id)
+        if return_code != 0:
+            return return_code
+        print(f"deploy_released={rel_id}")
+        return 0
+
+
 def list_releases(args: argparse.Namespace) -> int:
     with connect(args.db) as conn:
         init_db(conn)
@@ -1105,6 +1142,10 @@ def build_parser() -> argparse.ArgumentParser:
     rollback.add_argument("--restore-db", action="store_true")
     rollback.add_argument("--notes", default="")
 
+    deploy = sub.add_parser("deploy")
+    deploy.add_argument("release_id")
+    deploy.add_argument("--notes", default="")
+
     list_parser = sub.add_parser("list")
     list_parser.add_argument("--limit", type=int, default=20)
 
@@ -1148,6 +1189,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return activate_release(args)
     if args.command == "rollback":
         return rollback_release(args)
+    if args.command == "deploy":
+        return deploy_release(args)
     if args.command == "list":
         return list_releases(args)
     if args.command == "show":

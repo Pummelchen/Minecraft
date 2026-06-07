@@ -17,8 +17,11 @@ Implemented:
   manifest instead of the moving legacy manifest.
 - `rollback` restores server mods/datapacks, client package artifacts, and can
   restore the DB snapshot with `--restore-db`.
-- `scripts/daily_update.py` creates and activates a release only after
-  successful applied updates.
+- `scripts/daily_release_pipeline.py` now stages the live server into
+  `/var/minecraft_mods/.pipeline_staging`, applies candidates in that isolated
+  snapshot, runs acceptance (server pyramid + top headless client block), creates
+  a tested immutable release from the snapshot, and deploys only the tested
+  release to live.
 - `systemd/pummelchen-minecraft.service` makes the game server an explicit
   managed service instead of an ad hoc shell process.
 
