@@ -190,6 +190,8 @@ install -m 0644 systemd/pummelchen-live-stats.timer /etc/systemd/system/pummelch
 install -m 0644 systemd/pummelchen-client-log-receiver.service /etc/systemd/system/pummelchen-client-log-receiver.service
 install -m 0644 systemd/pummelchen-minecraft-metrics.service /etc/systemd/system/pummelchen-minecraft-metrics.service
 install -m 0644 systemd/pummelchen-minecraft.service /etc/systemd/system/pummelchen-minecraft.service
+install -m 0644 cron/pummelchen-daily-update /etc/cron.d/pummelchen-daily-update
+install -m 0644 cron/pummelchen-status-site /etc/cron.d/pummelchen-status-site
 systemctl daemon-reload
 systemctl enable --now pummelchen-live-stats.timer pummelchen-client-log-receiver.service pummelchen-minecraft-metrics.service
 systemctl enable pummelchen-minecraft.service

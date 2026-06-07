@@ -411,11 +411,20 @@ python3 /var/minecraft_mods/scripts/release_manager.py cleanup --dry-run
 python3 /var/minecraft_mods/scripts/release_manager.py cleanup --include-headless-cache
 ```
 
-The daily noon UTC updater creates and activates a release only when at least
-one update was applied successfully. Clients then see the new release pointer on
-their next launch or background sync. Newly generated release IDs use the
-`release_YYYYMMDD_VN_<label>` style so they are eligible for the local flat ZIP
-backup process.
+The daily noon UTC updater is a full release pipeline. Cron runs
+`scripts/run_daily_release_pipeline.sh`, which calls
+`scripts/daily_release_pipeline.py`. The pipeline scans and applies compatible
+updates with release creation disabled, runs the 10-mod pyramid server
+acceptance chain, runs the top accepted block through the headless client join
+test, rebuilds and validates the client package, creates and activates the
+release, regenerates the website, runs cleanup, and writes flat release backup
+ZIPs under `/var/minecraft_mods/release_backups`. If acceptance or packaging
+fails after an update is applied, it rolls the live files and DB back to the
+previous active immutable release.
+
+Clients see the new release pointer on their next launch or background sync.
+Newly generated release IDs use the `release_YYYYMMDD_VN_<label>` style so they
+are eligible for flat ZIP backup names.
 
 Release pruning keeps the active release plus the requested number of inactive
 rollback releases, removes older generated release directories and public
@@ -446,9 +455,10 @@ Example output names:
 
 Timestamped deploy labels that do not map to `YYYY-MM-DD_VN` are skipped by
 default. Create or pass a version-style release ID before making a local backup.
-Deploys run with `--create-release` automatically call this backup step after
-the VPS release is created and activated; the command is idempotent and refreshes
-missing or existing version-style release ZIPs in `Backup/`.
+The VPS daily pipeline automatically creates the same flat ZIP pair under
+`/var/minecraft_mods/release_backups`. Deploys run from this Mac with
+`--create-release` additionally pull the ZIPs into local `Backup/`; the command
+is idempotent and refreshes missing or existing version-style release ZIPs.
 
 When SQLite says a jar is installed but the live server and active client
 manifest no longer contain it, use a targeted sync instead of a broad rewrite.

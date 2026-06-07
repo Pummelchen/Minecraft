@@ -116,6 +116,51 @@ DB="$TMP_DIR/minecraft_mods.sqlite"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/gameplay_load_lab.py" --db "$DB" init
 "$PYTHON_BIN" "$ROOT_DIR/scripts/mod_acceptance_lab.py" --db "$DB" init
 "$PYTHON_BIN" "$ROOT_DIR/scripts/headless_client_lab.py" --db "$DB" init
+
+log "Daily release pipeline dry run"
+PIPELINE_DRY="$("$PYTHON_BIN" "$ROOT_DIR/scripts/daily_release_pipeline.py" \
+  --db "$DB" \
+  --server-dir "$TMP_DIR/server" \
+  --project-root "$TMP_DIR/project" \
+  --release-root "$TMP_DIR/releases" \
+  --public-downloads "$TMP_DIR/public/downloads" \
+  --site-output "$TMP_DIR/site/public" \
+  --release-backup-dir "$TMP_DIR/release_backups" \
+  --release-key 2026-06-07_V9 \
+  --dry-run \
+  --simulate-applied)"
+printf '%s\n' "$PIPELINE_DRY" | grep -q 'daily_update.py' || fail "daily pipeline dry-run did not call daily updater"
+printf '%s\n' "$PIPELINE_DRY" | grep -q -- '--no-create-release' || fail "daily pipeline dry-run did not defer release creation"
+printf '%s\n' "$PIPELINE_DRY" | grep -q 'mod_acceptance_lab.py.*run-pyramid' || fail "daily pipeline dry-run did not call pyramid"
+printf '%s\n' "$PIPELINE_DRY" | grep -q 'mod_acceptance_lab.py.*run-block-clients' || fail "daily pipeline dry-run did not call headless client block test"
+printf '%s\n' "$PIPELINE_DRY" | grep -q 'release_manager.py.*create.*release_20260607_V9_daily' || fail "daily pipeline dry-run did not create versioned release"
+printf '%s\n' "$PIPELINE_DRY" | grep -q 'backup_releases_local.py' || fail "daily pipeline dry-run did not create release backups"
+grep -q 'run_daily_release_pipeline.sh' "$ROOT_DIR/cron/pummelchen-daily-update" || fail "daily cron does not call full release pipeline"
+grep -q '/etc/cron.d/pummelchen-daily-update' "$ROOT_DIR/scripts/deploy_project.sh" || fail "deploy does not install daily cron"
+"$PYTHON_BIN" - "$ROOT_DIR" "$DB" <<'PY' || fail "daily pipeline release key increment failed"
+import datetime as dt
+import sqlite3
+import sys
+from pathlib import Path
+
+root, db = sys.argv[1:3]
+sys.path.insert(0, root + "/scripts")
+import daily_release_pipeline
+
+today = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+conn = sqlite3.connect(db)
+conn.execute(
+    """
+    INSERT INTO mod_acceptance_releases(
+        release_key, created_at, status, bundle_size, active_file_count
+    ) VALUES (?, ?, 'passed', 10, 1)
+    """,
+    (f"{today}_V8", dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")),
+)
+conn.commit()
+conn.close()
+assert daily_release_pipeline.next_release_key(Path(db)) == f"{today}_V9"
+PY
 "$PYTHON_BIN" - "$DB" <<'PY'
 import datetime as dt
 import hashlib
