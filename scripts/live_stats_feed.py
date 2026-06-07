@@ -154,14 +154,6 @@ def active_release_text(db_path: Path, server_key: str) -> str:
 
 
 def minecraft_live_values(server_dir: Path, db_path: Path, server_key: str) -> dict[str, str]:
-    pid = mc_metrics.find_minecraft_pid(server_dir)
-    rss_text = "Offline"
-    if pid is not None:
-        try:
-            rss = mc_metrics.read_proc_stat(pid)["rss_bytes"]
-            rss_text = human_bytes(rss)
-        except Exception:
-            rss_text = "Unknown"
     players = "Offline"
     try:
         status = mc_metrics.minecraft_status("127.0.0.1", 25565, timeout=1.0)
@@ -170,9 +162,8 @@ def minecraft_live_values(server_dir: Path, db_path: Path, server_key: str) -> d
     except Exception:
         pass
     return {
-        "Active release": active_release_text(db_path, server_key),
-        "Minecraft players": players,
-        "Minecraft RSS": rss_text,
+        "Last Mod Version": active_release_text(db_path, server_key),
+        "Minecraft Players": players,
     }
 
 
@@ -191,9 +182,21 @@ def client_pack_live_values(server_dir: Path) -> dict[str, str]:
             size_text = human_bytes(zip_path.stat().st_size)
     except OSError:
         size_text = "Missing"
+    generated_text = "Missing"
+    generated_iso = ""
+    try:
+        if zip_path.exists():
+            mtime = dt.datetime.fromtimestamp(zip_path.stat().st_mtime, tz=dt.timezone.utc)
+            generated_text = mtime.strftime("%Y-%m-%d %H:%M UTC")
+            generated_iso = mtime.isoformat(timespec="seconds")
+    except OSError:
+        generated_text = "Missing"
+        generated_iso = ""
     return {
-        "Client pack": size_text,
-        "Client pack SHA256": sha or "Missing",
+        "Client Mod Pack": size_text,
+        "Client Mod Pack SHA256": sha or "Missing",
+        "Client Mod Pack Generated": generated_text,
+        "Client Mod Pack Generated ISO": generated_iso,
     }
 
 

@@ -198,13 +198,19 @@ def collect_stats(server_dir: Path) -> dict[str, str]:
     sha = ""
     if sha_path.exists():
         sha = sha_path.read_text(encoding="utf-8", errors="replace").split()[0]
+    client_pack_generated = "Missing"
+    client_pack_generated_iso = ""
+    if zip_path.exists():
+        mtime = dt.datetime.fromtimestamp(zip_path.stat().st_mtime, tz=dt.timezone.utc)
+        client_pack_generated = mtime.strftime("%Y-%m-%d %H:%M UTC")
+        client_pack_generated_iso = mtime.isoformat(timespec="seconds")
     return {
         "Generated": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-        "OS": os_release.get("PRETTY_NAME", platform.platform()),
-        "Kernel": platform.release(),
+        "Server OS": os_release.get("PRETTY_NAME", platform.platform()),
+        "OS Kernel": platform.release(),
         "Uptime": uptime_text(),
         "CPU": cpu.get("Model name") or cpu.get("Model") or "Unknown",
-        "CPU cores": cpu.get("CPU(s)", str(os.cpu_count() or "Unknown")),
+        "CPU Cores": cpu.get("CPU(s)", str(os.cpu_count() or "Unknown")),
         "CPU usage": "Waiting for live feed",
         "Load average": load_percent(load, cpu_count),
         "RAM total": human_bytes(total),
@@ -214,12 +220,14 @@ def collect_stats(server_dir: Path) -> dict[str, str]:
             f"{human_bytes(server_disk.used)} / {human_bytes(server_disk.total)} "
             f"({pct(server_disk.used, server_disk.total)}); {human_bytes(server_disk.free)} free"
         ),
-        "System Java": detect_java(),
-        "Minecraft server Java": detect_server_java(server_dir),
+        "Server Java": detect_java(),
+        "Minecraft Java": detect_server_java(server_dir),
         "Minecraft": "26.1.2",
         "NeoForge": detect_neoforge(server_dir),
-        "Client pack": human_bytes(zip_path.stat().st_size) if zip_path.exists() else "Missing",
-        "Client pack SHA256": sha or "Missing",
+        "Client Mod Pack": human_bytes(zip_path.stat().st_size) if zip_path.exists() else "Missing",
+        "Client Mod Pack SHA256": sha or "Missing",
+        "Client Mod Pack Generated": client_pack_generated,
+        "Client Mod Pack Generated ISO": client_pack_generated_iso,
     }
 
 
@@ -474,16 +482,24 @@ def clean_update_title(value: Any) -> str:
 
 def render_stat_cards(stats: dict[str, str]) -> str:
     preferred = [
-        "Active release", "Minecraft players", "Minecraft RSS",
-        "OS", "Kernel", "Uptime", "CPU", "CPU cores", "System Java",
-        "Minecraft server Java", "Minecraft",
-        "NeoForge", "Client pack", "Client pack SHA256", "Generated",
+        "Last Mod Version", "Minecraft Players",
+        "Server OS", "OS Kernel", "Uptime", "CPU", "CPU Cores", "Server Java",
+        "Minecraft Java", "Minecraft",
+        "NeoForge", "Client Mod Pack", "Client Mod Pack SHA256", "Client Mod Pack Generated",
     ]
     cards = []
     for key in preferred:
         value = stats.get(key, "")
+        iso_value = stats.get(f"{key} ISO", "")
+        if key == "Client Mod Pack Generated" and iso_value:
+            value_html = (
+                f'<strong data-live-stat>{escape(value)}</strong>'
+                f'<small class="stat-age" data-live-stat-age datetime="{escape(iso_value)}"></small>'
+            )
+        else:
+            value_html = f'<strong data-live-stat>{escape(value)}</strong>'
         cards.append(
-            f'<article class="stat" data-stat-key="{escape(key)}"><span>{escape(key)}</span><strong data-live-stat>{escape(value)}</strong></article>'
+            f'<article class="stat" data-stat-key="{escape(key)}"><span>{escape(key)}</span>{value_html}</article>'
         )
     return "\n".join(cards)
 
@@ -652,7 +668,7 @@ def render_page(
     updates: list[dict[str, Any]],
 ) -> str:
     generated = escape(stats.get("Generated", ""))
-    release_label = display_release_version(stats.get("Active release", ""))
+    release_label = display_release_version(stats.get("Last Mod Version", ""))
     client_zip_url = f"{public_url.rstrip('/')}/downloads/{CLIENT_ZIP_NAME}"
     client_dmg_url = f"{public_url.rstrip('/')}/downloads/{CLIENT_DMG_NAME}"
     server_count = len(server_mods)
@@ -741,6 +757,7 @@ def render_page(
     }}
     .stat span {{ display: block; color: var(--muted); font-size: 13px; }}
     .stat strong {{ display: block; margin-top: 6px; overflow-wrap: anywhere; }}
+    .stat-age {{ display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }}
     .live-status {{
       display: flex;
       align-items: center;
@@ -1071,6 +1088,12 @@ def render_page(
         const value = stats[key];
         const target = card.querySelector('[data-live-stat]');
         if (target && value !== undefined) target.textContent = value;
+        const ageTarget = card.querySelector('[data-live-stat-age]');
+        const isoValue = stats[`${{key}} ISO`];
+        if (ageTarget && isoValue) {{
+          ageTarget.setAttribute('datetime', isoValue);
+          ageTarget.textContent = relativeTimeLabel(isoValue);
+        }}
       }});
     }}
     function drawLiveChart(canvas, samples, key) {{
@@ -1173,6 +1196,9 @@ def render_page(
     function updateRelativeTimes() {{
       document.querySelectorAll('time.relative-time[datetime]').forEach(time => {{
         time.textContent = relativeTimeLabel(time.getAttribute('datetime') || '');
+      }});
+      document.querySelectorAll('[data-live-stat-age][datetime]').forEach(node => {{
+        node.textContent = relativeTimeLabel(node.getAttribute('datetime') || '');
       }});
     }}
     function wireSearch(inputId, sectionId) {{
@@ -1285,11 +1311,10 @@ def write_site(db_path: Path, output_dir: Path, server_dir: Path, public_url: st
 
     stats = collect_stats(server_dir)
     if active_release:
-        stats["Active release"] = display_release_version(str(active_release.get("release_id") or ""))
+        stats["Last Mod Version"] = display_release_version(str(active_release.get("release_id") or ""))
     else:
-        stats["Active release"] = "No active release"
-    stats["Minecraft players"] = "Waiting for live feed"
-    stats["Minecraft RSS"] = "Waiting for live feed"
+        stats["Last Mod Version"] = "No active release"
+    stats["Minecraft Players"] = "Waiting for live feed"
     html_text = render_page(stats=stats, server_mods=server_mods, client_mods=client_mods, public_url=public_url, updates=updates)
     (output_dir / "index.html").write_text(html_text, encoding="utf-8")
     installer = downloads / INSTALLER_NAME

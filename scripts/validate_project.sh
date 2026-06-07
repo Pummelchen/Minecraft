@@ -1427,10 +1427,16 @@ SITE_OUT="$TMP_DIR/site"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/generate_status_site.py" --db "$DB" --server-dir "$SERVER" --output-dir "$SITE_OUT" --public-url "http://127.0.0.1:7788"
 [ -f "$SITE_OUT/index.html" ] || fail "status site was not generated"
 grep -q "Pummelchen Server" "$SITE_OUT/index.html" || fail "status site title missing"
+grep -q "Last Mod Version" "$SITE_OUT/index.html" || fail "status site release label missing"
+grep -q "Minecraft Players" "$SITE_OUT/index.html" || fail "status site player label missing"
+grep -q "Client Mod Pack Generated" "$SITE_OUT/index.html" || fail "status site client pack generated label missing"
+if grep -q "Minecraft RSS" "$SITE_OUT/index.html"; then
+  fail "status site still exposes Minecraft RSS"
+fi
 
 log "Live stats and exporter"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/live_stats_feed.py" --db "$DB" --server-dir "$SERVER" --output "$TMP_DIR/live-stats.json" --state "$TMP_DIR/live-state.json"
-grep -q "Active release" "$TMP_DIR/live-stats.json" || fail "live stats missing release data"
+grep -q "Last Mod Version" "$TMP_DIR/live-stats.json" || fail "live stats missing release data"
 "$PYTHON_BIN" - "$TMP_DIR/live-stats.json" "$CLIENT_ZIP_SHA" "$ROOT_DIR/scripts" <<'PY'
 import json
 import sys
@@ -1442,8 +1448,10 @@ import live_stats_feed
 payload = json.loads(open(stats_path, encoding="utf-8").read())
 stats = payload["stats"]
 metrics = payload["metrics"]
-assert stats["Client pack"] == "11 B", "live stats missing client package size"
-assert stats["Client pack SHA256"] == expected_sha, "live stats missing client package checksum"
+assert stats["Client Mod Pack"] == "11 B", "live stats missing client package size"
+assert stats["Client Mod Pack SHA256"] == expected_sha, "live stats missing client package checksum"
+assert stats["Client Mod Pack Generated"], "live stats missing client package generated timestamp"
+assert "Client Mod Pack Generated ISO" in stats, "live stats missing client package generated ISO timestamp"
 assert live_stats_feed.clamp_percent(138.1) == 100.0, "percent clamp does not cap overload values"
 for key in ("cpu_percent", "load1_percent", "ram_used_percent", "disk_used_percent", "disk_free_percent"):
     assert key in metrics, f"live stats missing {key}"
