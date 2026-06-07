@@ -23,10 +23,13 @@ DEFAULT_SERVER_DIR = Path("/var/minecraft_26.1.2")
 DEFAULT_SERVICE = "pummelchen-minecraft.service"
 RCON_HOST = "127.0.0.1"
 RCON_TIMEOUT = 2.5
+RCON_COMMAND_TIMEOUT = 90.0
 RCON_AUTH = 3
 RCON_COMMAND = 2
 RCON_AUTH_FAIL = -1
 RCON_CONNECT_TIMEOUT = 0.5
+RCON_RESPONSE_ATTEMPTS = 4
+RCON_BOOT_TIMEOUT = 120
 PACK_FORMAT = 81
 SUPPORTED_FORMATS = [81, 94]
 NAMESPACE = "pummelchen"
@@ -51,12 +54,56 @@ SURFACE_IGNORE_BLOCKS = {
     "minecraft:kelp_plant",
     "minecraft:seagrass",
     "minecraft:tall_seagrass",
+    "minecraft:fern",
+    "minecraft:tall_grass",
+    "minecraft:short_grass",
+    "minecraft:lilac",
+    "minecraft:rose_bush",
+    "minecraft:peony",
+    "minecraft:azure_bluet",
+    "minecraft:oxeye_daisy",
+    "minecraft:allium",
+    "minecraft:dandelion",
+    "minecraft:poppy",
+    "minecraft:blue_orchid",
+    "minecraft:cornflower",
+    "minecraft:lily_of_the_valley",
+    "minecraft:torchflower",
+    "minecraft:large_fern",
+    "minecraft:small_dripleaf",
+    "minecraft:big_dripleaf",
+    "minecraft:flowering_azalea",
+    "minecraft:torchflower_seeds",
+    "minecraft:torchflower_crop",
+    "minecraft:vine",
+    "minecraft:dead_bush",
+    "minecraft:hanging_roots",
+    "minecraft:spore_blossom",
+    "minecraft:glow_lichen",
 }
+
 PLACEMENT_STATE_SCORE = "ph_house_state"
 PLACEMENT_ATTEMPT_SCORE = "ph_house_attempt"
 PLACEMENT_STATUS_SCORE = "ph_house_status"
 PLACEMENT_CLEAR_SIZE = 40
+SURFACE_PROBE_OBJECTIVE = "ph_house_probe"
+SURFACE_PROBE_SCORE = "ph_house_probe"
+SURFACE_IGNORE_CHECK_BLOCKS = (
+    "minecraft:air",
+    "minecraft:cave_air",
+    "minecraft:void_air",
+    "minecraft:water",
+    "minecraft:flowing_water",
+    "minecraft:lava",
+    "minecraft:flowing_lava",
+    "minecraft:kelp",
+    "minecraft:kelp_plant",
+    "minecraft:seagrass",
+    "minecraft:tall_seagrass",
+)
 DEFAULT_BOOT_WAIT = 180
+SERVICE_STOP_TIMEOUT = 45
+SERVICE_FORCE_TIMEOUT = 15
 
 TAG_END = 0
 TAG_BYTE = 1
@@ -179,20 +226,38 @@ def _read_rcon_packet(sock: socket.socket) -> tuple[int, int, str]:
     return request_id, packet_type, payload
 
 
+def _read_matching_rcon_packet(sock: socket.socket, expected_request_id: int) -> tuple[int, int, str]:
+    last_error: Exception | None = None
+    for _ in range(RCON_RESPONSE_ATTEMPTS):
+        try:
+            response_id, response_type, response = _read_rcon_packet(sock)
+        except Exception as exc:
+            last_error = exc
+            continue
+        if response_id == expected_request_id or response_id == RCON_AUTH_FAIL:
+            return response_id, response_type, response
+        if response_id == 0:
+            # A short heartbeat packet without a useful payload.
+            continue
+    if last_error:
+        raise last_error
+    raise OSError(f"unexpected RCON response id for request {expected_request_id}")
+
+
 def rcon_command(host: str, port: int, password: str, command: str, timeout: float = RCON_TIMEOUT) -> str:
     with socket.create_connection((host, port), timeout=timeout) as sock:
         sock.settimeout(timeout)
         sock.sendall(_rcon_packet(1, RCON_AUTH, password))
-        auth_id, _auth_type, _auth_payload = _read_rcon_packet(sock)
+        auth_id, _auth_type, _auth_payload = _read_matching_rcon_packet(sock, 1)
         if auth_id == RCON_AUTH_FAIL:
             raise PermissionError("RCON authentication failed")
         sock.sendall(_rcon_packet(2, RCON_COMMAND, command))
-        response_id, _response_type, response = _read_rcon_packet(sock)
+        response_id, _response_type, response = _read_matching_rcon_packet(sock, 2)
         if response_id != 2:
             # Some servers send an empty response followed by an id=0 heartbeat; retry once.
             if response_id != 0:
                 raise OSError("unexpected RCON response id")
-            response_id, _response_type, response = _read_rcon_packet(sock)
+            response_id, _response_type, response = _read_matching_rcon_packet(sock, 2)
             if response_id != 2:
                 raise OSError("unexpected RCON response id")
         if _is_rcon_command_failure(response):
@@ -210,14 +275,14 @@ def run_rcon_commands(
     with socket.create_connection((host, port), timeout=timeout) as sock:
         sock.settimeout(timeout)
         sock.sendall(_rcon_packet(1, RCON_AUTH, password))
-        auth_id, _auth_type, _auth_payload = _read_rcon_packet(sock)
+        auth_id, _auth_type, _auth_payload = _read_matching_rcon_packet(sock, 1)
         if auth_id == RCON_AUTH_FAIL:
             raise PermissionError("RCON authentication failed")
         responses: list[str] = []
         next_request_id = 2
         for command in commands:
             sock.sendall(_rcon_packet(next_request_id, RCON_COMMAND, command))
-            response_id, _response_type, response = _read_rcon_packet(sock)
+            response_id, _response_type, response = _read_matching_rcon_packet(sock, next_request_id)
             if response_id != next_request_id:
                 if response_id != 0:
                     raise OSError(f"unexpected RCON response id for {command}: {response_id}")
@@ -235,7 +300,7 @@ def _clean_minecraft_output(text: str) -> str:
 def _is_rcon_command_failure(response: str) -> bool:
     clean = _clean_minecraft_output(response).lower()
     if not clean:
-        return True
+        return False
     if clean.startswith("done"):
         return False
     if clean == "ok":
@@ -326,6 +391,13 @@ def place_house_via_rcon(
         return False, origin
     palette, blocks = nbt_data
     if snap_to_surface:
+        rcon_command(
+            RCON_HOST,
+            rcon_port,
+            password,
+            f"scoreboard objectives add {SURFACE_PROBE_OBJECTIVE} dummy",
+            timeout=RCON_COMMAND_TIMEOUT,
+        )
         ox, oy, oz = _align_origin_to_surface(
             server_dir, project_dir, (ox, oy, oz), password, rcon_port, host=RCON_HOST
         )
@@ -334,25 +406,37 @@ def place_house_via_rcon(
     print(f"placement_via_rcon_fill_commands={len(fill_commands)}")
     min_chunk_x, min_chunk_z, max_chunk_x, max_chunk_z = _forceload_region_for_origin((ox, oy, oz), PLACEMENT_CLEAR_SIZE + 56)
     try:
-        if not wait_for_rcon(rcon_port):
+        if not wait_for_rcon(rcon_port, timeout=RCON_BOOT_TIMEOUT):
             print(f"placement_via_rcon_error=RCON unavailable on port {rcon_port}")
             return False, origin
         rcon_command(RCON_HOST, rcon_port, password, f"forceload add {min_chunk_x} {min_chunk_z} {max_chunk_x} {max_chunk_z}")
         print("placement_via_rcon_forceload=ok")
         time.sleep(10)
-        batch_size = 60
+        batch_size = 20
         total_batches = (len(fill_commands) + batch_size - 1) // batch_size
         for batch_idx in range(total_batches):
             batch = fill_commands[batch_idx * batch_size : (batch_idx + 1) * batch_size]
             try:
-                run_rcon_commands(RCON_HOST, rcon_port, password, batch, timeout=30)
+                run_rcon_commands(RCON_HOST, rcon_port, password, batch, timeout=RCON_COMMAND_TIMEOUT)
                 print(f"placement_via_rcon_batch={batch_idx + 1}/{total_batches}")
             except Exception as exc:
                 print(f"placement_via_rcon_batch_error={batch_idx + 1}/{total_batches}: {exc}")
                 return False, origin
-            time.sleep(1)
-        rcon_command(RCON_HOST, rcon_port, password, f"setworldspawn {sx} {sy} {sz}")
-        rcon_command(RCON_HOST, rcon_port, password, f"forceload remove {min_chunk_x} {min_chunk_z} {max_chunk_x} {max_chunk_z}")
+            time.sleep(0.75)
+        rcon_command(
+            RCON_HOST,
+            rcon_port,
+            password,
+            f"setworldspawn {sx} {sy} {sz}",
+            timeout=RCON_COMMAND_TIMEOUT,
+        )
+        rcon_command(
+            RCON_HOST,
+            rcon_port,
+            password,
+            f"forceload remove {min_chunk_x} {min_chunk_z} {max_chunk_x} {max_chunk_z}",
+            timeout=RCON_COMMAND_TIMEOUT,
+        )
     except Exception as exc:
         print(f"placement_via_rcon_error={exc.__class__.__name__}: {exc}")
         return False, origin
@@ -383,7 +467,42 @@ def stop_service(service: str, dry_run: bool) -> None:
     if dry_run:
         print(f"DRY-RUN systemctl stop {service}")
         return
-    subprocess.run(["systemctl", "stop", service], check=True)
+    try:
+        subprocess.run(["systemctl", "stop", service], check=False, timeout=SERVICE_STOP_TIMEOUT)
+        deadline = time.time() + SERVICE_STOP_TIMEOUT
+        while time.time() < deadline:
+            if not _service_transitioning(service):
+                return
+            time.sleep(1)
+    except subprocess.TimeoutExpired:
+        print(f"warning=systemctl_stop_timeout service={service}")
+    # Fall back to a targeted kill if stop hangs (often caused by shutdown hooks blocking forever).
+    subprocess.run(
+        ["systemctl", "kill", "--kill-whom=main", "--signal=SIGKILL", service],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.time() + SERVICE_FORCE_TIMEOUT
+    while time.time() < deadline:
+        if not _service_transitioning(service):
+            break
+        time.sleep(1)
+    if _service_transitioning(service):
+        subprocess.run(
+            ["systemctl", "kill", "--kill-whom=all", "--signal=SIGKILL", service],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        deadline = time.time() + SERVICE_FORCE_TIMEOUT
+        while time.time() < deadline:
+            if not _service_transitioning(service):
+                break
+            time.sleep(1)
+    if _service_transitioning(service):
+        print(f"warning=systemctl_stop_failed service={service}")
+    subprocess.run(["systemctl", "reset-failed", service], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def start_service(service: str, dry_run: bool) -> None:
@@ -599,17 +718,49 @@ def _is_air_like_block(block_state: str | None) -> bool:
 
 
 def _is_surface_ignore_block(block_state: str | None) -> bool:
+    if not block_state:
+        return True
     if _is_air_like_block(block_state):
         return True
-    if not block_state:
-        return False
-    return _block_state_name(block_state) in SURFACE_IGNORE_BLOCKS
+    name = _block_state_name(block_state)
+    if name in SURFACE_IGNORE_BLOCKS:
+        return True
+    return name.endswith("_leaves")
 
 
 def _extract_data_get_block(block_report: str) -> str | None:
     lower = block_report.lower()
     match = re.search(r"(minecraft:[a-z0-9_]+(?:\[[^\]]+\])?)", lower)
     return match.group(1) if match else None
+
+
+def _probe_block_match(
+    host: str,
+    port: int,
+    password: str,
+    x: int,
+    y: int,
+    z: int,
+    block: str,
+) -> bool | None:
+    if not block:
+        return None
+    response = _clean_minecraft_output(
+        rcon_command(
+            host,
+            port,
+            password,
+            f"execute store success {SURFACE_PROBE_SCORE} {SURFACE_PROBE_OBJECTIVE} if block {x} {y} {z} {block}",
+            timeout=RCON_COMMAND_TIMEOUT,
+        )
+    ).lower()
+    if not response:
+        return None
+    if response.startswith("test passed"):
+        return True
+    if response.startswith("test failed"):
+        return False
+    return None
 
 
 def _structure_bounds(blocks: list[dict[str, Any]]) -> tuple[int, int, int, int, int, int]:
@@ -642,14 +793,14 @@ def _surface_block_y(
     start_y: int,
 ) -> int | None:
     for y in range(start_y, WORLD_MIN_Y - 1, -1):
-        try:
-            response = rcon_command(host, port, password, f"data get block {x} {y} {z}")
-        except Exception:
-            continue
-        block = _extract_data_get_block(response)
-        if _is_surface_ignore_block(block):
-            continue
-        return y
+        for block in SURFACE_IGNORE_CHECK_BLOCKS:
+            try:
+                if _probe_block_match(host, port, password, x, y, z, block):
+                    break
+            except Exception:
+                continue
+        else:
+            return y
     return None
 
 
@@ -673,13 +824,46 @@ def _align_origin_to_surface(
     if min_y > max_y:
         return origin
 
-    probe_x = ox + ((min_x + max_x) // 2)
-    probe_z = oz + ((min_z + max_z) // 2)
     structure_height = max_y - min_y + 1
-    start_y = min(max(oy + structure_height + 16, 0), WORLD_MAX_Y)
-    surface_y = _surface_block_y(host, rcon_port, password, probe_x, probe_z, start_y)
-    if surface_y is None:
+    start_y = min(max(oy + structure_height + 16, WORLD_MIN_Y), WORLD_MAX_Y)
+    probe_center_x = ox + ((min_x + max_x) // 2)
+    probe_center_z = oz + ((min_z + max_z) // 2)
+    half_span_x = max_x - min_x
+    half_span_z = max_z - min_z
+    probe_step_x = max(1, half_span_x // 2)
+    probe_step_z = max(1, half_span_z // 2)
+    probe_offsets = [
+        (0, 0),
+        (-probe_step_x, 0),
+        (probe_step_x, 0),
+        (0, -probe_step_z),
+        (0, probe_step_z),
+        (-probe_step_x, -probe_step_z),
+        (-probe_step_x, probe_step_z),
+        (probe_step_x, -probe_step_z),
+        (probe_step_x, probe_step_z),
+    ]
+
+    surface_candidates: list[int] = []
+    seen = set[tuple[int, int]]()
+    for dx, dz in probe_offsets:
+        probe_x = probe_center_x + dx
+        probe_z = probe_center_z + dz
+        key = (probe_x, probe_z)
+        if key in seen:
+            continue
+        seen.add(key)
+        surface = _surface_block_y(host, rcon_port, password, probe_x, probe_z, start_y)
+        if surface is not None:
+            surface_candidates.append(surface)
+
+    if not surface_candidates:
         return origin
+
+    # Use a conservative sample percentile so we don't place the house above nearby
+    # shallower terrain (which can cause floating placement in shoreline/ocean zones).
+    surface_candidates.sort()
+    surface_y = surface_candidates[(len(surface_candidates) - 1) // 3]
 
     aligned_y = surface_y + 1 - min_y
     aligned_origin = (ox, max(aligned_y, WORLD_MIN_Y), oz)
@@ -699,6 +883,43 @@ def _block_state_string(state: dict[str, Any]) -> str:
         return name
     parts = ",".join(f"{k}={v}" for k, v in sorted(props.items()))
     return f"{name}[{parts}]"
+
+
+def _service_is_active(service: str) -> bool:
+    return (
+        subprocess.run(
+            ["systemctl", "is-active", "--quiet", service],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+        == 0
+    )
+
+
+def _service_state(service: str) -> tuple[str, str]:
+    result = subprocess.run(
+        ["systemctl", "show", "-p", "ActiveState", "-p", "SubState", service],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    active_state = ""
+    sub_state = ""
+    if result.returncode != 0:
+        return active_state, sub_state
+    for line in result.stdout.splitlines():
+        if line.startswith("ActiveState="):
+            active_state = line.partition("=")[2].strip()
+        elif line.startswith("SubState="):
+            sub_state = line.partition("=")[2].strip()
+    return active_state, sub_state
+
+
+def _service_transitioning(service: str) -> bool:
+    active_state, _sub_state = _service_state(service)
+    return active_state in {"active", "activating", "deactivating", "reloading"}
 
 
 def generate_fill_commands(
@@ -878,7 +1099,11 @@ def install_datapacks(
             palette, blocks = nbt_data
             fill_commands = generate_fill_commands(palette, blocks, origin)
             print(f"fill_commands_generated={len(fill_commands)}")
-        write_zip(world_datapacks / PLACE_PACK_ZIP, placement_pack(origin, spawn, fill_commands))
+        pack_contents = placement_pack(origin, spawn, fill_commands)
+        place_pack_path = world_datapacks / PLACE_PACK_ZIP
+        write_zip(place_pack_path, pack_contents)
+        if copy_if_changed(place_pack_path, server_datapacks / PLACE_PACK_ZIP):
+            changed += 1
         changed += 1
     return changed
 
