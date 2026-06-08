@@ -1,6 +1,12 @@
-view-distance=6
-simulation-distance=4
+view-distance=5
+simulation-distance=3
 sync-chunk-writes=false
 max-tick-time=-1
 op-permission-level=4
 function-permission-level=4
+max-players=100
+network-compression-threshold=512
+entity-broadcast-range-percentage=75
+rcon.port=25575
+rcon.password=codex-temp-pass
+enable-rcon=true
