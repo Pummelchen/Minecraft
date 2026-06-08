@@ -336,6 +336,49 @@ def fetch_updates(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str, A
     ]
 
 
+def fetch_update_checks(conn: sqlite3.Connection, limit: int = 3) -> list[dict[str, Any]]:
+    if not table_exists(conn, "update_runs"):
+        return []
+    runs = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT *
+            FROM update_runs
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+    ]
+    if not runs:
+        return []
+    run_ids = [run["id"] for run in runs]
+    placeholders = ",".join("?" for _ in run_ids)
+    events = [
+        dict(row)
+        for row in conn.execute(
+            f"""
+            SELECT
+                ue.*, m.name AS mod_name,
+                COALESCE(NULLIF(ue.source_url, ''), su.url, m.primary_url) AS homepage_url
+            FROM update_events ue
+            LEFT JOIN mods m ON m.id = ue.mod_id
+            LEFT JOIN source_urls su ON su.mod_id = ue.mod_id AND su.is_primary = 1
+            WHERE ue.update_run_id IN ({placeholders})
+            ORDER BY ue.update_run_id DESC, ue.id ASC
+            """,
+            run_ids,
+        )
+    ]
+    events_by_run: dict[int, list[dict[str, Any]]] = {}
+    for event in events:
+        events_by_run.setdefault(event["update_run_id"], []).append(event)
+    for run in runs:
+        run["events"] = events_by_run.get(run["id"], [])
+    return runs
+
+
 def fetch_active_release(conn: sqlite3.Connection) -> dict[str, Any]:
     if not table_exists(conn, "pack_releases"):
         return {}
@@ -644,6 +687,101 @@ def render_updates(updates: list[dict[str, Any]]) -> str:
     return '<div class="update-grid">' + "\n".join(cards) + "</div>"
 
 
+def render_update_checks(runs: list[dict[str, Any]]) -> str:
+    countdown_html = """
+<div class="update-countdown">
+  <span class="countdown-label">Next automatic update check:</span>
+  <strong id="updateCountdown" class="countdown-value" data-next-run-hour="12">--</strong>
+</div>
+"""
+    if not runs:
+        return countdown_html + '<p class="note">No update runs recorded yet.</p>'
+    blocks = []
+    for run in runs:
+        started = escape(run.get("started_at") or "")
+        completed = escape(run.get("completed_at") or "")
+        trigger = escape(run.get("trigger_type") or "")
+        status = escape(run.get("status") or "")
+        scanned = run.get("scanned_mods") or 0
+        applied = run.get("applied") or 0
+        failed = run.get("failed") or 0
+        skipped = run.get("skipped") or 0
+        run_label = escape(run.get("run_label") or "")
+        status_class = "run-pass" if status == "complete" and applied > 0 and failed == 0 else ("run-fail" if failed > 0 else "run-neutral")
+        summary_parts = [f"{scanned} scanned", f"{applied} applied"]
+        if failed:
+            summary_parts.append(f"{failed} failed")
+        if skipped:
+            summary_parts.append(f"{skipped} skipped")
+        summary = ", ".join(summary_parts)
+        events = run.get("events", [])
+        if events:
+            rows = []
+            for event in events:
+                mod_name = escape(clean_update_title(event.get("mod_name") or "Unknown mod"))
+                homepage_url = safe_external_url(event.get("homepage_url"))
+                name_html = (
+                    f'<a href="{escape(homepage_url)}" target="_blank" rel="noopener noreferrer">{mod_name}</a>'
+                    if homepage_url
+                    else mod_name
+                )
+                event_status = event.get("status") or ""
+                event_type = event.get("event_type") or ""
+                if event_status == "applied":
+                    badge_class = "badge-applied"
+                    badge_text = "applied"
+                elif event_status == "failed":
+                    badge_class = "badge-failed"
+                    badge_text = "failed"
+                elif event_status == "dry_run":
+                    badge_class = "badge-dryrun"
+                    badge_text = "dry run"
+                else:
+                    badge_class = ""
+                    badge_text = escape(event_status)
+                new_file = escape(event.get("new_file_name") or "")
+                notes = escape(event.get("notes") or "")
+                detail_parts = []
+                if new_file:
+                    detail_parts.append(new_file)
+                if notes:
+                    detail_parts.append(notes)
+                detail = " — ".join(detail_parts)
+                rows.append(
+                    f"""<tr>
+  <td>{name_html}</td>
+  <td><span class="run-badge {badge_class}">{badge_text}</span></td>
+  <td class="run-detail">{detail}</td>
+</tr>"""
+                )
+            table_html = f"""<table class="run-events-table">
+<thead><tr><th>Mod</th><th>Result</th><th>Details</th></tr></thead>
+<tbody>{"".join(rows)}</tbody>
+</table>"""
+        else:
+            table_html = '<p class="note">No per-mod events recorded for this run.</p>'
+        blocks.append(
+            f"""<details class="run-block {status_class}" open>
+  <summary>
+    <span class="run-summary-title">
+      <time class="relative-time" datetime="{started}" title="{started}">{started}</time>
+      <span class="run-trigger">{trigger}</span>
+    </span>
+    <span class="run-summary-stats">{summary}</span>
+  </summary>
+  <div class="run-body">
+    <p class="run-meta">
+      <strong>Started:</strong> <time class="relative-time" datetime="{started}" title="{started}">{started}</time>
+      &middot; <strong>Completed:</strong> <time class="relative-time" datetime="{completed}" title="{completed}">{completed}</time>
+      &middot; <strong>Label:</strong> {run_label}
+    </p>
+    {table_html}
+  </div>
+</details>"""
+        )
+    return countdown_html + "\n".join(blocks)
+
+
 def render_page(
     *,
     stats: dict[str, str],
@@ -651,6 +789,7 @@ def render_page(
     client_mods: list[dict[str, Any]],
     public_url: str,
     updates: list[dict[str, Any]],
+    update_checks: list[dict[str, Any]] | None = None,
 ) -> str:
     generated = escape(stats.get("Generated", ""))
     release_label = display_release_version(stats.get("Last Mod Version", ""))
@@ -952,6 +1091,98 @@ def render_page(
       max-width: 58%;
       overflow-wrap: anywhere;
     }}
+    .update-countdown {{
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 18px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      margin-bottom: 16px;
+    }}
+    .countdown-label {{ color: var(--muted); font-size: 14px; }}
+    .countdown-value {{ color: var(--green); font-size: 20px; font-variant-numeric: tabular-nums; }}
+    .run-block {{
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      margin-bottom: 10px;
+      overflow: hidden;
+    }}
+    .run-block summary {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      cursor: pointer;
+      list-style: none;
+    }}
+    .run-block summary::-webkit-details-marker {{ display: none; }}
+    .run-block summary::before {{
+      content: '';
+      display: inline-block;
+      width: 0;
+      height: 0;
+      border-left: 6px solid var(--muted);
+      border-top: 5px solid transparent;
+      border-bottom: 5px solid transparent;
+      flex-shrink: 0;
+      transition: transform 0.15s;
+    }}
+    .run-block[open] summary::before {{ transform: rotate(90deg); }}
+    .run-summary-title {{ display: flex; gap: 10px; align-items: center; min-width: 0; }}
+    .run-trigger {{
+      font-size: 12px;
+      color: var(--muted);
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 2px 8px;
+    }}
+    .run-summary-stats {{ font-size: 13px; color: var(--muted); white-space: nowrap; }}
+    .run-body {{ padding: 0 16px 14px; }}
+    .run-meta {{ font-size: 13px; color: var(--muted); margin: 0 0 10px; }}
+    .run-events-table {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }}
+    .run-events-table th {{
+      text-align: left;
+      color: var(--muted);
+      font-weight: 500;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--line);
+    }}
+    .run-events-table td {{
+      padding: 6px 8px;
+      border-bottom: 1px solid #1a211a;
+      overflow-wrap: anywhere;
+    }}
+    .run-events-table tr:last-child td {{ border-bottom: none; }}
+    .run-events-table a {{
+      color: var(--accent);
+      text-decoration: underline;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+    }}
+    .run-detail {{ color: var(--muted); font-size: 12px; }}
+    .run-badge {{
+      display: inline-block;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 500;
+      white-space: nowrap;
+    }}
+    .badge-applied {{ color: #b9efc8; background: #0d2414; border: 1px solid #285d3c; }}
+    .badge-failed {{ color: #f5b8b8; background: #2a0d0d; border: 1px solid #6d2828; }}
+    .badge-dryrun {{ color: #d4c89a; background: #1f1c0d; border: 1px solid #5d5428; }}
+    .run-block.run-pass {{ border-left: 3px solid var(--green); }}
+    .run-block.run-fail {{ border-left: 3px solid #d45f5f; }}
+    .run-block.run-neutral {{ border-left: 3px solid var(--muted); }}
     dl {{ margin: 12px 0; display: grid; gap: 6px; }}
     dl div {{ display: grid; grid-template-columns: 96px 1fr; gap: 8px; }}
     dt {{ color: var(--muted); }}
@@ -1017,6 +1248,12 @@ def render_page(
         <a class="button" href="{escape(client_dmg_url)}">Download Small Mac Installer DMG</a>
         <span class="release-version">Latest version: {escape(release_label)}</span>
       </div>
+    </section>
+
+    <section id="update-checks">
+      <h2>Update Checks</h2>
+      <p class="note">The daily updater runs at 12:00 UTC. Below are the most recent runs with per-mod results.</p>
+      {render_update_checks(update_checks or [])}
     </section>
 
     <section id="updates">
@@ -1209,6 +1446,31 @@ def render_page(
         }});
       }});
     }}
+    function updateCountdown() {{
+      const el = document.getElementById('updateCountdown');
+      if (!el) return;
+      const hour = parseInt(el.dataset.nextRunHour || '12', 10);
+      const now = new Date();
+      const utcNow = new Date(now.getTime() + now.getTimezoneOffset() * 60000);
+      const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, 0, 0));
+      if (utcNow >= next) next.setUTCDate(next.getUTCDate() + 1);
+      const diffMs = next.getTime() - now.getTime();
+      if (diffMs <= 0) {{
+        el.textContent = 'Running now...';
+        return;
+      }}
+      const totalMinutes = Math.floor(diffMs / 60000);
+      const days = Math.floor(totalMinutes / 1440);
+      const hours = Math.floor((totalMinutes % 1440) / 60);
+      const minutes = totalMinutes % 60;
+      const parts = [];
+      if (days > 0) parts.push(`${{days}}d`);
+      if (hours > 0) parts.push(`${{hours}}h`);
+      parts.push(`${{minutes}}m`);
+      el.textContent = parts.join(' ');
+    }}
+    updateCountdown();
+    window.setInterval(updateCountdown, 60000);
     updateRelativeTimes();
     window.setInterval(updateRelativeTimes, 60000);
     refreshLiveStats();
@@ -1291,6 +1553,7 @@ def write_site(db_path: Path, output_dir: Path, server_dir: Path, public_url: st
     with connect(db_path) as conn:
         mods = fetch_mods(conn)
         updates = fetch_updates(conn)
+        update_checks = fetch_update_checks(conn)
         active_release = fetch_active_release(conn)
 
     server_mods = [mod for mod in mods if is_server_mod(mod)]
@@ -1302,7 +1565,7 @@ def write_site(db_path: Path, output_dir: Path, server_dir: Path, public_url: st
     else:
         stats["Last Mod Version"] = "No active release"
     stats["Minecraft Players"] = "Waiting for live feed"
-    html_text = render_page(stats=stats, server_mods=server_mods, client_mods=client_mods, public_url=public_url, updates=updates)
+    html_text = render_page(stats=stats, server_mods=server_mods, client_mods=client_mods, public_url=public_url, updates=updates, update_checks=update_checks)
     (output_dir / "index.html").write_text(html_text, encoding="utf-8")
     installer = downloads / INSTALLER_NAME
     installer.write_text(make_installer_script(public_url), encoding="utf-8")
