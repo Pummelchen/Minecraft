@@ -188,6 +188,29 @@ PY
 )"
 fi
 
+RCON_SECRET="$PROJECT_DIR/secrets/rcon.password"
+if [ -f "$RCON_SECRET" ]; then
+  RCON_PASS="$(cat "$RCON_SECRET")"
+  python3 - "$SERVER_DIR/server.properties" "$RCON_PASS" <<'RCONPY'
+import sys
+from pathlib import Path
+target = Path(sys.argv[1])
+password = sys.argv[2]
+lines = target.read_text(encoding="utf-8", errors="replace").splitlines() if target.exists() else []
+seen = False
+merged = []
+for raw in lines:
+    if raw.startswith("rcon.password="):
+        merged.append(f"rcon.password={password}")
+        seen = True
+    else:
+        merged.append(raw)
+if not seen:
+    merged.append(f"rcon.password={password}")
+target.write_text("\n".join(merged) + "\n", encoding="utf-8")
+RCONPY
+fi
+
 CONFIG_OUTPUT="$(python3 scripts/apply_config_overrides.py --source "$PROJECT_DIR/server-config/config-overrides" --target "$SERVER_DIR/config")"
 
 install -m 0644 systemd/pummelchen-live-stats.service /etc/systemd/system/pummelchen-live-stats.service

@@ -582,6 +582,8 @@ def wait_for_done(service: str, started_at: float, timeout: int) -> bool:
 def backup_world(world_dir: Path, backup_root: Path, dry_run: bool) -> Path | None:
     if not world_dir.exists():
         return None
+    if not world_dir.name or world_dir.resolve() == world_dir.parent.resolve():
+        raise SystemExit(f"refusing to move directory that resolves to its parent: {world_dir}")
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     backup = backup_root / f"{world_dir.name}-{stamp}"
     index = 1
@@ -1246,6 +1248,8 @@ def main() -> int:
     server_dir = args.server_dir
     world_name = active_world_name(server_dir)
     world_dir = server_dir / world_name
+    if not world_name or world_dir.resolve() == server_dir.resolve():
+        raise SystemExit(f"refusing to reset server directory as world: level-name={world_name!r}")
     seed = str(args.seed).strip() or str(secrets.randbelow(2**63))
     spawn = (args.spawn_x, args.spawn_y, args.spawn_z)
     origin = (args.origin_x, args.origin_y, args.origin_z)
@@ -1306,26 +1310,25 @@ def main() -> int:
             props_path = server_dir / "server.properties"
             restored_contents, changed_rcon, rcon_port = ensure_rcon_enabled(props_path, args.rcon_port, args.dry_run)
             placement_ok = False
-            start_service(args.service, args.dry_run)
-            second_done = False if args.dry_run else wait_for_done(args.service, time.time(), args.auto_phase_timeout)
-            print(f"bootstrap_rcon_boot={int(second_done)}")
-            placement_ok = False
-            if not args.dry_run:
-                placement_ok, origin = place_house_via_rcon(
-                    server_dir,
-                    spawn,
-                    origin,
-                    rcon_port,
-                    args.project_dir,
-                    snap_to_surface=not args.auto_place_no_surface_snap,
-                )
-            else:
-                print("placement_via_rcon_skipped_dry_run=1")
-
-            # Restore RCON settings to avoid leaving temporary credentials behind.
-            if changed_rcon:
-                stop_service(args.service, args.dry_run)
-                restore_file(props_path, restored_contents)
+            try:
+                start_service(args.service, args.dry_run)
+                second_done = False if args.dry_run else wait_for_done(args.service, time.time(), args.auto_phase_timeout)
+                print(f"bootstrap_rcon_boot={int(second_done)}")
+                if not args.dry_run:
+                    placement_ok, origin = place_house_via_rcon(
+                        server_dir,
+                        spawn,
+                        origin,
+                        rcon_port,
+                        args.project_dir,
+                        snap_to_surface=not args.auto_place_no_surface_snap,
+                    )
+                else:
+                    print("placement_via_rcon_skipped_dry_run=1")
+            finally:
+                if changed_rcon:
+                    stop_service(args.service, args.dry_run)
+                    restore_file(props_path, restored_contents)
 
             if not placement_ok:
                 print("warning=placement_via_rcon_failed_falling_back_to_datapack")

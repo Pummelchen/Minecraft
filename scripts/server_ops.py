@@ -647,6 +647,8 @@ def run_profile(
     safe_label = re.sub(r"[^A-Za-z0-9._-]+", "_", label).strip("_")
     log_path = results_dir / f"{safe_label}.profile.log"
     world_dir = server_dir / PROFILE_WORLD
+    if world_dir.resolve() == server_dir.resolve() or not world_dir.name:
+        raise SystemExit(f"refusing to remove server directory as profile world: {world_dir}")
     if world_dir.exists():
         shutil.rmtree(world_dir)
     datapacks_dir = server_dir / "server-datapacks"

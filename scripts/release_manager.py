@@ -376,7 +376,10 @@ def publish_release(
 def create_release(args: argparse.Namespace) -> int:
     ensure_release_schema(args.db)
     rel_id = args.release_id or next_versioned_release_id(args.release_root, args.db, args.server_key, args.label)
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", rel_id):
+        raise SystemExit(f"invalid release id (only alphanumeric, dot, dash, underscore allowed): {rel_id!r}")
     release_dir = args.release_root / rel_id
+    ensure_path_inside(release_dir, args.release_root, "release directory")
     if release_dir.exists():
         raise SystemExit(f"release directory already exists: {release_dir}")
     release_dir.mkdir(parents=True)

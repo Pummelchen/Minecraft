@@ -1975,7 +1975,7 @@ def init_database(args: argparse.Namespace) -> int:
 def plan(args: argparse.Namespace) -> int:
     with connect(args.db) as conn:
         init_db(conn)
-    print_plan(active_server_jars(args.server_dir, conn, custom_mods_dir=args.custom_mods_dir), args.bundle_size)
+        print_plan(active_server_jars(args.server_dir, conn, custom_mods_dir=args.custom_mods_dir), args.bundle_size)
     return 0
 
 

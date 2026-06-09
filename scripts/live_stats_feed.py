@@ -48,7 +48,7 @@ def detect_default_interface() -> str | None:
             if line.startswith("Iface"):
                 continue
             parts = line.split()
-            if len(parts) < 3:
+            if len(parts) < 4:
                 continue
             iface, destination, flags = parts[0], parts[1], parts[3]
             if destination != "00000000":
