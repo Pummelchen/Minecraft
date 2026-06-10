@@ -894,8 +894,19 @@ def write_release_report_pages(
             test_totals=test_totals,
             public_url=public_url,
         )
-        target = (output_dir / "downloads" / "releases" / release_id / RELEASE_REPORT_FILE)
-        target.parent.mkdir(parents=True, exist_ok=True)
+        release_dir_link = output_dir / "downloads" / "releases" / release_id
+        # If a symlink already exists here (created by release_manager to
+        # expose the full release public/ tree via nginx), do NOT replace it
+        # with a plain directory — that would hide the manifest, client-files,
+        # and zip from the web server.  Write the report through the symlink
+        # instead so it lands inside the release public/ directory.
+        if release_dir_link.is_symlink() or release_dir_link.is_dir():
+            target = release_dir_link / RELEASE_REPORT_FILE
+            if not release_dir_link.is_symlink():
+                release_dir_link.mkdir(parents=True, exist_ok=True)
+        else:
+            target = release_dir_link / RELEASE_REPORT_FILE
+            target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(report_html, encoding="utf-8")
 
         release_public = Path(row["release_dir"]) / "public" / RELEASE_REPORT_FILE if row["release_dir"] else None
