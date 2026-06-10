@@ -20,6 +20,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from minecraft_metrics_exporter import rcon_command, rcon_settings
 from moddb import connect, init_db, utc_now
 from pummelchen_utils import MRPACK_NAME, sha256_file, write_json_atomic
 
@@ -34,7 +35,283 @@ DEFAULT_SERVER_KEY = "minecraft_26_1_2"
 CLIENT_ZIP_NAME = "minecraft_26.1.2_client_macos_apple_silicon.zip"
 DMG_NAME = "Pummelchen-Client-Installer.dmg"
 LEGACY_SERVER_BACKUP = Path("/var/minecraft")
+DEFAULT_RELEASE_SERVICE = "pummelchen-minecraft.service"
+DEFAULT_RCON_HOST = "127.0.0.1"
+DEFAULT_RCON_PORT = 25575
+DEFAULT_RCON_TIMEOUT = 2.5
+DEFAULT_PLAYER_WAIT_TIMEOUT = 300
+DEFAULT_PLAYER_CHECK_INTERVAL = 15.0
+DEFAULT_PLAYER_WARNING_INTERVAL = 60.0
+SERVICE_STOP_TIMEOUT = 45
+SERVICE_FORCE_TIMEOUT = 15
+SERVICE_START_TIMEOUT = 120
 
+RELEASE_PLAYERS_RE = re.compile(r"there are\s+(\d+)\s+of a max of", re.IGNORECASE)
+
+
+def record_release_event(
+    conn: sqlite3.Connection,
+    rel_id: str,
+    event_type: str,
+    status: str,
+    actor: str,
+    notes: str = "",
+) -> None:
+    conn.execute(
+        "INSERT INTO release_events(release_id, event_at, event_type, status, actor, notes) VALUES (?, ?, ?, ?, ?, ?)",
+        (rel_id, utc_now(), event_type, status, actor, notes),
+    )
+
+
+def _rcon_settings(args: argparse.Namespace) -> tuple[str, int, str] | None:
+    settings = rcon_settings(args.server_dir, args.rcon_password_file, args.rcon_port)
+    if not settings:
+        return None
+    return args.rcon_host, settings[0], settings[1]
+
+
+def _rcon_send_command(host: str, port: int, password: str, command: str, timeout: float) -> bool:
+    rcon_command(host, port, password, command, timeout)
+    return True
+
+
+def _extract_player_count(text: str) -> int | None:
+    for line in text.splitlines():
+        match = RELEASE_PLAYERS_RE.search(line.strip())
+        if match:
+            return int(match.group(1))
+    lowered = text.lower()
+    if "no players are currently online" in lowered or "there are 0 of a max of" in lowered:
+        return 0
+    return None
+
+
+def _query_players(host: str, port: int, password: str, timeout: float) -> int | None:
+    response = rcon_command(host, port, "list", timeout)
+    return _extract_player_count(response)
+
+
+def _broadcast_update_message(host: str, port: int, password: str, message: str, timeout: float) -> bool:
+    return _rcon_send_command(host, port, password, f"say {message}", timeout)
+
+
+def _save_world_state(host: str, port: int, password: str, timeout: float) -> None:
+    try:
+        _rcon_send_command(host, port, password, "save-all flush", timeout)
+    except Exception:
+        _rcon_send_command(host, port, password, "save-all", timeout)
+
+
+def _service_is_running(service: str) -> bool:
+    return (
+        subprocess.run(
+            ["systemctl", "is-active", "--quiet", service],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+        == 0
+    )
+
+
+def _wait_for_service_state(service: str, target_running: bool, timeout_seconds: int) -> bool:
+    end_at = time.time() + timeout_seconds
+    while time.time() < end_at:
+        if _service_is_running(service) == target_running:
+            return True
+        time.sleep(1)
+    return _service_is_running(service) == target_running
+
+
+def _stop_service(service: str, dry_run: bool) -> bool:
+    if dry_run:
+        print(f"DRY-RUN systemctl stop {service}")
+        return True
+    subprocess.run(["systemctl", "stop", service], check=False, timeout=SERVICE_STOP_TIMEOUT)
+    if _wait_for_service_state(service, False, SERVICE_STOP_TIMEOUT):
+        return True
+    subprocess.run(
+        ["systemctl", "kill", "--kill-whom=main", "--signal=SIGKILL", service],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if _wait_for_service_state(service, False, SERVICE_FORCE_TIMEOUT):
+        return True
+    subprocess.run(
+        ["systemctl", "kill", "--kill-whom=all", "--signal=SIGKILL", service],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if _wait_for_service_state(service, False, SERVICE_FORCE_TIMEOUT):
+        return True
+    return False
+
+
+def _start_service(service: str, dry_run: bool) -> bool:
+    if dry_run:
+        print(f"DRY-RUN systemctl start {service}")
+        return True
+    subprocess.run(["systemctl", "start", service], check=True)
+    return _wait_for_service_state(service, True, SERVICE_START_TIMEOUT)
+
+
+def _send_restart_notice(
+    conn: sqlite3.Connection,
+    rel_id: str,
+    actor: str,
+    status: str,
+    notes: str,
+) -> None:
+    record_release_event(conn, rel_id, "restart", status, actor, notes)
+    if status == "ok":
+        print(f"release_restart={status}\trelease={rel_id}\tnotes={notes}")
+    elif status == "warn":
+        print(f"release_restart={status}\trelease={rel_id}\twarning={notes}")
+    else:
+        print(f"release_restart={status}\trelease={rel_id}\t{notes}")
+
+
+def coordinate_release_restart(conn: sqlite3.Connection, rel_id: str, args: argparse.Namespace, payload: dict[str, Any]) -> bool:
+    actor = getattr(args, "actor", "release_manager")
+    service = args.service
+    dry_run = getattr(args, "dry_run", False)
+    timeout = float(args.rcon_timeout)
+    settings = _rcon_settings(args)
+    host: str | None = None
+    port: int | None = None
+    password: str | None = None
+
+    if settings:
+        host, port, password = settings
+    if host and port and password:
+        try:
+            release_id = payload.get("release_id", rel_id)
+            message = f"New release ready: {release_id}. Server will save, then restart after everyone logs out."
+            _broadcast_update_message(host, port, password, message, timeout)
+            players = _query_players(host, port, password, timeout)
+            if players and players > 0 and args.player_wait_timeout > 0:
+                record_release_event(
+                    conn,
+                    rel_id,
+                    "announce",
+                    "ok",
+                    actor,
+                    f"players_online={players}; waiting up_to={args.player_wait_timeout}s for release {release_id}",
+                )
+                until = time.time() + args.player_wait_timeout
+                next_warning = 0.0
+                while time.time() < until:
+                    if players <= 0:
+                        break
+                    remaining = int(until - time.time())
+                    warning = (
+                        f"Server update: {remaining}s to log out for release {release_id}. "
+                        "You may disconnect now to finish the update."
+                    )
+                    if time.time() >= next_warning:
+                        _broadcast_update_message(host, port, password, warning, timeout)
+                        next_warning = time.time() + max(1.0, args.player_warning_interval)
+                    time.sleep(max(1.0, args.player_check_interval))
+                    current = _query_players(host, port, password, timeout)
+                    if current is None:
+                        break
+                    players = current
+                if players and players > 0:
+                    record_release_event(
+                        conn,
+                        rel_id,
+                        "announce",
+                        "warn",
+                        actor,
+                        f"player_wait_timeout_expired release={release_id}; players_still_online={players}",
+                    )
+            else:
+                record_release_event(
+                    conn,
+                    rel_id,
+                    "announce",
+                    "ok",
+                    actor,
+                    f"players_online={players or 0}" if players is not None else "players_unknown",
+                )
+            _save_world_state(host, port, password, timeout)
+            if _stop_service(service, dry_run):
+                if _start_service(service, dry_run):
+                    _send_restart_notice(
+                        conn,
+                        rel_id,
+                        actor,
+                        "ok",
+                        f"service_restart_complete service={service} release={release_id}",
+                    )
+                    return True
+                _send_restart_notice(
+                    conn,
+                    rel_id,
+                    actor,
+                    "failed",
+                    f"service_start_failed service={service} release={release_id}",
+                )
+                return False
+            _send_restart_notice(
+                conn,
+                rel_id,
+                actor,
+                "failed",
+                f"service_stop_failed service={service} release={release_id}",
+            )
+            return False
+        except Exception as exc:
+            record_release_event(
+                conn,
+                rel_id,
+                "announce",
+                "warn",
+                actor,
+                f"rcon_path_failed release={payload.get('release_id', rel_id)} error={exc}",
+            )
+            host = None
+            port = None
+            password = None
+    if not (host and port and password):
+        return _coordinate_release_restart_without_rcon(conn, rel_id, args, payload)
+
+
+def _coordinate_release_restart_without_rcon(
+    conn: sqlite3.Connection, rel_id: str, args: argparse.Namespace, payload: dict[str, Any]
+) -> bool:
+    release_id = payload.get("release_id", rel_id)
+    actor = getattr(args, "actor", "release_manager")
+    service = args.service
+    dry_run = getattr(args, "dry_run", False)
+    record_release_event(
+        conn,
+        rel_id,
+        "announce",
+        "warn",
+        actor,
+        "rcon_unavailable; applying update without player drain notification",
+    )
+    if _stop_service(service, dry_run):
+        if _start_service(service, dry_run):
+            _send_restart_notice(
+                conn,
+                rel_id,
+                actor,
+                "ok",
+                f"service_restart_complete service={service} release={release_id}",
+            )
+            return True
+    _send_restart_notice(
+        conn,
+        rel_id,
+        actor,
+        "failed",
+        f"service_restart_failed service={service} release={release_id}",
+    )
+    return False
 
 def path_size(path: Path) -> int:
     if not path.exists() and not path.is_symlink():
@@ -541,6 +818,7 @@ def activate_release(args: argparse.Namespace, rel_id: str | None = None) -> int
     rel_id = rel_id or args.release_id
     if validate_release(args, rel_id) != 0:
         return 1
+    actor = getattr(args, "actor", "release_manager")
     with connect(args.db) as conn:
         init_db(conn)
         row = release_row(conn, rel_id)
@@ -551,10 +829,24 @@ def activate_release(args: argparse.Namespace, rel_id: str | None = None) -> int
         )
         conn.execute(
             "INSERT INTO release_events(release_id, event_at, event_type, status, actor, notes) VALUES (?, ?, 'activate', 'ok', ?, ?)",
-            (rel_id, utc_now(), getattr(args, "actor", "release_manager"), getattr(args, "notes", "") or ""),
+            (rel_id, utc_now(), actor, getattr(args, "notes", "") or ""),
         )
         conn.commit()
         payload = publish_release(conn, rel_id, public_downloads=args.public_downloads)
+        if getattr(args, "no_restart", False):
+            record_release_event(
+                conn,
+                rel_id,
+                "restart",
+                "skipped",
+                actor,
+                "skip requested via --no-restart",
+            )
+        else:
+            if not coordinate_release_restart(conn, rel_id, args, payload):
+                conn.commit()
+                return 1
+        conn.commit()
     print(json.dumps(payload, sort_keys=True))
     return 0
 
@@ -1111,6 +1403,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--release-root", type=Path, default=DEFAULT_RELEASE_ROOT)
     parser.add_argument("--public-downloads", type=Path, default=DEFAULT_PUBLIC_DOWNLOADS)
     parser.add_argument("--actor", default="release_manager")
+    parser.add_argument("--service", default=DEFAULT_RELEASE_SERVICE, help="systemd service to restart after activation")
+    parser.add_argument("--no-restart", action="store_true", help="activate release only, skip server restart")
+    parser.add_argument("--rcon-host", default=DEFAULT_RCON_HOST)
+    parser.add_argument("--rcon-port", type=int, default=DEFAULT_RCON_PORT)
+    parser.add_argument("--rcon-password-file", type=Path, default=None)
+    parser.add_argument("--rcon-timeout", type=float, default=DEFAULT_RCON_TIMEOUT)
+    parser.add_argument(
+        "--player-wait-timeout",
+        type=int,
+        default=DEFAULT_PLAYER_WAIT_TIMEOUT,
+        help="max seconds to wait for players before forced restart",
+    )
+    parser.add_argument(
+        "--player-check-interval",
+        type=float,
+        default=DEFAULT_PLAYER_CHECK_INTERVAL,
+        help="seconds between player count checks while waiting",
+    )
+    parser.add_argument(
+        "--player-warning-interval",
+        type=float,
+        default=DEFAULT_PLAYER_WARNING_INTERVAL,
+        help="seconds between in-game warning broadcasts while waiting",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init")
