@@ -285,6 +285,8 @@ def create_release(
             "--db",
             str(args.db),
             "--server-dir",
+            str(args.server_dir),
+            "--artifact-source-dir",
             str(source_server_dir),
             "--server-key",
             args.server_key,
@@ -313,7 +315,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
 
     started_at = utc_now()
     clear_activity(activity_path=args.activity_path)
-    TOTAL_STEPS = 13
+    TOTAL_STEPS = 14
     emit(f"Step 1/{TOTAL_STEPS}: Daily pipeline started", stage="init", status="running")
     original_release = active_release_id(args.db, args.server_key) if not args.dry_run else ""
     release_key = args.release_key or (next_release_key(args.db) if not args.dry_run else dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_V1"))
@@ -539,7 +541,29 @@ def run_pipeline(args: argparse.Namespace) -> int:
         )
         emit(f"Step 7/{TOTAL_STEPS}: Client validation passed", stage="validate", status="ok")
 
-        emit(f"Step 8/{TOTAL_STEPS}: Creating release {release_key}", stage="release", status="running")
+        if sys.platform == "darwin" and shutil.which("hdiutil") and shutil.which("swiftc"):
+            emit(f"Step 8/{TOTAL_STEPS}: Building installer DMG", stage="dmg", status="running")
+            run(
+                [
+                    str(SCRIPT_DIR / "build_mac_client_dmg.sh"),
+                    str(stage_server_dir),
+                ],
+                dry_run=args.dry_run,
+            )
+            if not args.dry_run:
+                if not (stage_server_dir / "Pummelchen-Client-Installer.dmg").exists():
+                    raise SystemExit("DMG was not created in stage directory.")
+                if not (stage_server_dir / "Pummelchen-Client-Installer.dmg.sha256").exists():
+                    raise SystemExit("DMG checksum file was not created in stage directory.")
+            emit(f"Step 8/{TOTAL_STEPS}: Installer DMG created", stage="dmg", status="ok")
+        else:
+            print(
+                "pipeline_dmg_skipped=1\treason=non_macos_or_missing_builder_tools",
+                flush=True,
+            )
+            emit(f"Step 8/{TOTAL_STEPS}: Skipping DMG rebuild in pipeline", stage="dmg", status="warn")
+
+        emit(f"Step 9/{TOTAL_STEPS}: Creating release {release_key}", stage="release", status="running")
         release_id = create_release(
             args,
             release_key,
@@ -548,8 +572,8 @@ def run_pipeline(args: argparse.Namespace) -> int:
             local_mods_changed=local_mods_changed,
         )
 
-        emit(f"Step 8/{TOTAL_STEPS}: Release created", stage="release", status="ok")
-        emit(f"Step 9/{TOTAL_STEPS}: Deploying release {release_id}", stage="deploy", status="running")
+        emit(f"Step 9/{TOTAL_STEPS}: Release created", stage="release", status="ok")
+        emit(f"Step 10/{TOTAL_STEPS}: Deploying release {release_id}", stage="deploy", status="running")
         run(
             [
                 sys.executable,
@@ -572,9 +596,9 @@ def run_pipeline(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
         )
         deployed = True
-        emit(f"Step 9/{TOTAL_STEPS}: Release deployed", stage="deploy", status="ok")
+        emit(f"Step 10/{TOTAL_STEPS}: Release deployed", stage="deploy", status="ok")
 
-        emit(f"Step 10/{TOTAL_STEPS}: Regenerating status site", stage="site")
+        emit(f"Step 11/{TOTAL_STEPS}: Regenerating status site", stage="site")
         run(
             [
                 sys.executable,
@@ -590,8 +614,8 @@ def run_pipeline(args: argparse.Namespace) -> int:
             ],
             dry_run=args.dry_run,
         )
-        emit(f"Step 10/{TOTAL_STEPS}: Status site regenerated", stage="site", status="ok")
-        emit(f"Step 11/{TOTAL_STEPS}: Cleanup", stage="cleanup")
+        emit(f"Step 11/{TOTAL_STEPS}: Status site regenerated", stage="site", status="ok")
+        emit(f"Step 12/{TOTAL_STEPS}: Cleanup", stage="cleanup")
         run(
             [
                 sys.executable,
@@ -617,7 +641,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
             ],
             dry_run=args.dry_run,
         )
-        emit(f"Step 12/{TOTAL_STEPS}: Backing up release", stage="backup")
+        emit(f"Step 13/{TOTAL_STEPS}: Backing up release", stage="backup")
         run(
             [
                 sys.executable,
@@ -631,7 +655,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
             ],
             dry_run=args.dry_run,
         )
-        emit(f"Step 13/{TOTAL_STEPS}: Pipeline complete — release {release_id} deployed", stage="done", status="ok")
+        emit(f"Step 14/{TOTAL_STEPS}: Pipeline complete — release {release_id} deployed", stage="done", status="ok")
         print(f"pipeline_status=released\trelease_id={release_id}", flush=True)
         return 0
     except Exception as exc:

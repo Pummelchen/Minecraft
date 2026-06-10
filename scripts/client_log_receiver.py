@@ -25,6 +25,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from pummelchen_utils import sha256_file
 
 DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
+DEFAULT_SERVER_KEY = "minecraft_26_1_2"
 DEFAULT_UPLOAD_DIR = Path("/var/minecraft_mods/client_log_uploads")
 DEFAULT_TOKEN_FILE = Path("/var/minecraft_mods/secrets/client-log-upload.token")
 DEFAULT_HOST = "127.0.0.1"
@@ -60,6 +61,25 @@ def parse_int(value: Any) -> int | None:
         return int(str(value).strip())
     except ValueError:
         return None
+
+
+def active_release_id(db_path: Path, server_key: str) -> str:
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT release_id
+                FROM pack_releases
+                WHERE server_key = ? AND active = 1
+                ORDER BY activated_at DESC, created_at DESC
+                LIMIT 1
+                """,
+                (server_key,),
+            ).fetchone()
+            return str(row["release_id"]) if row and row["release_id"] else ""
+    except sqlite3.Error:
+        return ""
 
 
 def session_status_for_event(event_type: str, status: str) -> str:
@@ -580,6 +600,9 @@ class UploadHandler(BaseHTTPRequestHandler):
         remote_addr = self.headers.get("X-Real-IP") or self.client_address[0]
         user_agent = clean_text(self.headers.get("User-Agent", ""), 300)
         received_at = utc_now()
+        server_target = active_release_id(self.server.db_path, self.server.server_key)
+        if server_target:
+            target_release_id = server_target
         require_update = int(
             bool(target_release_id) and (not installed_release_id or installed_release_id != target_release_id)
         )
@@ -686,6 +709,7 @@ class UploadServer(ThreadingHTTPServer):
         upload_token: str,
         max_upload_bytes: int,
         max_event_bytes: int,
+        server_key: str,
     ) -> None:
         super().__init__(server_address, handler_class)
         self.db_path = db_path
@@ -693,11 +717,13 @@ class UploadServer(ThreadingHTTPServer):
         self.upload_token = upload_token
         self.max_upload_bytes = max_upload_bytes
         self.max_event_bytes = max_event_bytes
+        self.server_key = server_key
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument("--server-key", default=DEFAULT_SERVER_KEY)
     parser.add_argument("--upload-dir", type=Path, default=DEFAULT_UPLOAD_DIR)
     parser.add_argument("--token-file", type=Path, default=DEFAULT_TOKEN_FILE)
     parser.add_argument("--host", default=DEFAULT_HOST)
@@ -725,6 +751,7 @@ def main() -> None:
         upload_token=token,
         max_upload_bytes=args.max_mb * 1024 * 1024,
         max_event_bytes=args.max_event_kb * 1024,
+        server_key=args.server_key,
     )
     print(f"client_log_receiver listening on {args.host}:{args.port}", flush=True)
     server.serve_forever()

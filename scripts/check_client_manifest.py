@@ -14,7 +14,17 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from pummelchen_utils import sha256_file
 
-MANAGED_SECTIONS = {"mods", "resourcepacks", "shaderpacks"}
+MANAGED_SECTIONS = {"mods", "resourcepacks", "shaderpacks", "tools"}
+
+
+def _is_managed_tool(path: Path) -> bool:
+    if path.name in {"upload-token.txt", "upload-token.txt.example"}:
+        return False
+    if path.name.startswith("."):
+        return False
+    if path.suffix.lower() not in {".sh", ".java", ".txt", ".md", ".json"}:
+        return False
+    return True
 
 
 def parse_manifest(path: Path) -> list[tuple[str, str, int, str]]:
@@ -79,7 +89,11 @@ def validate_manifest(package_dir: Path, *, strict: bool) -> list[str]:
             if not folder.exists():
                 continue
             for path in sorted(folder.iterdir(), key=lambda item: item.name.lower()):
-                if path.is_file() and (section, path.name) not in seen:
+                if not path.is_file():
+                    continue
+                if section == "tools" and not _is_managed_tool(path):
+                    continue
+                if (section, path.name) not in seen:
                     problems.append(f"untracked client file: {section}/{path.name}")
     return problems
 

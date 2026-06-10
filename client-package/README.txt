@@ -25,7 +25,10 @@ What the installer does:
 
 Automatic updates:
 - The background updater checks the VPS sync manifest at login and every 1 minute.
-- It downloads only missing or changed mod, resource-pack, shader-pack, and tooling files.
+- The server can also force a fast-track update by returning a fast window so clients
+  poll every 120 seconds when an update is required.
+- The background updater downloads only missing or changed mod, resource-pack,
+  shader-pack, and tooling files.
 - The updater reports current/target release status on each run so the server can track client update state.
 - Each downloaded file is SHA256-verified before it replaces the local copy.
 - Stale managed files are removed, and unmanaged managed files are moved aside to keep the client in sync with the server.
@@ -33,7 +36,10 @@ Automatic updates:
   ~/Applications/Pummelchen Minecraft.command
 - Manual diagnostic upload is available at:
   ~/Applications/Pummelchen Send Logs.command
-- If a new Minecraft crash report appears, the background updater uploads a redacted diagnostic bundle automatically.
+- If a new Minecraft crash report appears, the background updater uploads a
+  redacted diagnostic bundle automatically.
+- During staged server deploys, clients are instructed to update as soon as possible
+  and the server broadcasts an in-game warning when a hotfix/quickfix window is active.
 - Logs and status are written under:
   ~/Library/Logs/Pummelchen
   ~/Library/Application Support/minecraft/.pummelchen

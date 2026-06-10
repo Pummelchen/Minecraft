@@ -676,9 +676,10 @@ def create_release(args: argparse.Namespace) -> int:
     changelog = args.changelog or f"# {rel_id}\n\nStatus: {args.status}\n\n{args.notes or 'No changelog notes provided.'}\n"
     (release_dir / "CHANGELOG.md").write_text(changelog.rstrip() + "\n", encoding="utf-8")
 
-    copy_tree_with_links(args.server_dir / "mods", release_dir / "server-files" / "mods")
-    copy_tree_with_links(args.server_dir / "server-datapacks", release_dir / "server-files" / "server-datapacks")
-    copy_tree_with_links(args.server_dir / "client-package", release_dir / "client-package")
+    source_dir = getattr(args, "artifact_source_dir", args.server_dir) or args.server_dir
+    copy_tree_with_links(source_dir / "mods", release_dir / "server-files" / "mods")
+    copy_tree_with_links(source_dir / "server-datapacks", release_dir / "server-files" / "server-datapacks")
+    copy_tree_with_links(source_dir / "client-package", release_dir / "client-package")
 
     server_manifest_rows: list[tuple[str, Path, Path]] = []
     for role, root, patterns in (
@@ -700,11 +701,11 @@ def create_release(args: argparse.Namespace) -> int:
     artifacts = release_dir / "artifacts"
     artifacts.mkdir(exist_ok=True)
     artifact_sources = [
-        (args.server_dir / CLIENT_ZIP_NAME, CLIENT_ZIP_NAME),
-        (args.server_dir / f"{CLIENT_ZIP_NAME}.sha256", f"{CLIENT_ZIP_NAME}.sha256"),
-        (args.server_dir / MRPACK_NAME, MRPACK_NAME),
-        (args.server_dir / DMG_NAME, DMG_NAME),
-        (args.server_dir / f"{DMG_NAME}.sha256", f"{DMG_NAME}.sha256"),
+        (source_dir / CLIENT_ZIP_NAME, CLIENT_ZIP_NAME),
+        (source_dir / f"{CLIENT_ZIP_NAME}.sha256", f"{CLIENT_ZIP_NAME}.sha256"),
+        (source_dir / MRPACK_NAME, MRPACK_NAME),
+        (source_dir / DMG_NAME, DMG_NAME),
+        (source_dir / f"{DMG_NAME}.sha256", f"{DMG_NAME}.sha256"),
     ]
     for src, name in artifact_sources:
         if src.exists():
@@ -1421,6 +1422,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     parser.add_argument("--server-dir", type=Path, default=DEFAULT_SERVER_DIR)
+    parser.add_argument("--artifact-source-dir", type=Path, default=None)
     parser.add_argument("--server-key", default=DEFAULT_SERVER_KEY)
     parser.add_argument("--release-root", type=Path, default=DEFAULT_RELEASE_ROOT)
     parser.add_argument("--public-downloads", type=Path, default=DEFAULT_PUBLIC_DOWNLOADS)

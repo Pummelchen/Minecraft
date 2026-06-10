@@ -384,6 +384,7 @@ def write_manifest(root: Path, output_path: Path) -> None:
         ("mods", root / "mods", ("*.jar", "*.zip")),
         ("resourcepacks", root / "resourcepacks", ("*.zip", "*.jar")),
         ("shaderpacks", root / "shaderpacks", ("*.zip", "*.jar")),
+        ("tools", root / "tools", ("*.sh", "*.java", "*.txt", "*.md", "*.json")),
     ]
     with output_path.open("w", encoding="utf-8") as handle:
         for section, folder, patterns in sections:
@@ -393,6 +394,9 @@ def write_manifest(root: Path, output_path: Path) -> None:
                 for pattern in patterns:
                     files.extend(folder.glob(pattern))
             for path in sorted(set(files), key=lambda p: p.name.lower()):
+                relative_path = path.relative_to(root)
+                if not should_publish_client_file(relative_path):
+                    continue
                 handle.write(f"{path.name}\t{path.stat().st_size}\tsha256:{sha256_file(path)}\n")
             handle.write("\n")
 
