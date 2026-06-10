@@ -219,6 +219,9 @@ DB="$TMP_DIR/minecraft_mods.sqlite"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/headless_client_lab.py" --db "$DB" init
 
 log "Daily release pipeline dry run"
+TODAY_RELEASE_KEY="$(date -u +%Y-%m-%d)_V9"
+TODAY_RELEASE_ID="release_$(date -u +%Y%m%d)_V9_daily"
+PIPELINE_ACTIVITY_DRY="$TMP_DIR/update-activity.json"
 PIPELINE_DRY="$("$PYTHON_BIN" "$ROOT_DIR/scripts/daily_release_pipeline.py" \
   --db "$DB" \
   --server-dir "$TMP_DIR/server" \
@@ -227,7 +230,8 @@ PIPELINE_DRY="$("$PYTHON_BIN" "$ROOT_DIR/scripts/daily_release_pipeline.py" \
   --public-downloads "$TMP_DIR/public/downloads" \
   --site-output "$TMP_DIR/site/public" \
   --release-backup-dir "$TMP_DIR/release_backups" \
-  --release-key 2026-06-07_V9 \
+  --release-key "$TODAY_RELEASE_KEY" \
+  --activity-path "$PIPELINE_ACTIVITY_DRY" \
   --dry-run \
   --simulate-applied)"
 printf '%s\n' "$PIPELINE_DRY" | grep -q 'daily_update.py' || fail "daily pipeline dry-run did not call daily updater"
@@ -235,7 +239,7 @@ printf '%s\n' "$PIPELINE_DRY" | grep -q -- '--no-create-release' || fail "daily 
 printf '%s\n' "$PIPELINE_DRY" | grep -q 'mod_acceptance_lab.py.*run-pyramid' || fail "daily pipeline dry-run did not call pyramid"
 printf '%s\n' "$PIPELINE_DRY" | grep -q 'mod_acceptance_lab.py.*run-block-clients' || fail "daily pipeline dry-run did not call headless client block test"
 printf '%s\n' "$PIPELINE_DRY" | grep -q 'sync_pummelchen_mods.py' || fail "daily pipeline dry-run did not sync project mods"
-printf '%s\n' "$PIPELINE_DRY" | grep -q 'release_manager.py.*create.*release_20260607_V9_daily' || fail "daily pipeline dry-run did not create versioned release"
+printf '%s\n' "$PIPELINE_DRY" | grep -q "release_manager.py.*create.*$TODAY_RELEASE_ID" || fail "daily pipeline dry-run did not create versioned release"
 printf '%s\n' "$PIPELINE_DRY" | grep -q 'backup_releases_local.py' || fail "daily pipeline dry-run did not create release backups"
 grep -q 'run_daily_release_pipeline.sh' "$ROOT_DIR/cron/pummelchen-daily-update" || fail "daily cron does not call full release pipeline"
 grep -q '/etc/cron.d/pummelchen-daily-update' "$ROOT_DIR/scripts/deploy_project.sh" || fail "deploy does not install daily cron"
