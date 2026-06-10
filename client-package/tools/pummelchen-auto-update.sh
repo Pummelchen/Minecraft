@@ -3,10 +3,12 @@ set -euo pipefail
 
 CHECK_ONLY=0
 QUIET=0
+FORCE_UPDATE=0
 LOCAL_RELEASE_ID=""
 for arg in "$@"; do
   case "$arg" in
     --check-only) CHECK_ONLY=1 ;;
+    --force) FORCE_UPDATE=1 ;;
     --quiet) QUIET=1 ;;
   esac
 done
@@ -56,6 +58,8 @@ CLIENT_ID_FILE="${PUMMELCHEN_HOME}/client-id"
 FORCED_UPDATE_WINDOW_SECONDS=60
 SERVER_REQUIRES_UPDATE=1
 SERVER_UPDATE_WINDOW_SECONDS="$FORCED_UPDATE_WINDOW_SECONDS"
+SERVER_REQUIREMENT_NOTE=""
+FORCED_TRIGGER_NOTE=""
 LOCK_DIR="$PUMMELCHEN_HOME/update.lock"
 INSTALLED_RELEASE_FILE="$STATE_DIR/installed-release.txt"
 
@@ -95,6 +99,21 @@ installed_release_id=${installed_release:-unknown}
 target_release_id=${target_release:-legacy}
 log_file=$LOG_FILE
 EOF
+}
+
+normalize_update_window() {
+  local value="$1"
+  case "$value" in
+    ''|*[!0-9]*) echo "$FORCED_UPDATE_WINDOW_SECONDS" ;;
+    0) echo "$FORCED_UPDATE_WINDOW_SECONDS" ;;
+    *)
+      if [ "$value" -lt 1 ] || [ "$value" -gt 3600 ]; then
+        echo "$FORCED_UPDATE_WINDOW_SECONDS"
+      else
+        echo "$value"
+      fi
+      ;;
+  esac
 }
 
 client_id() {
@@ -211,7 +230,15 @@ query_server_update_state() {
     SERVER_REQUIRES_UPDATE=1
   fi
   if [ -n "$parsed_window" ]; then
-    SERVER_UPDATE_WINDOW_SECONDS="$parsed_window"
+    SERVER_UPDATE_WINDOW_SECONDS="$(normalize_update_window "$parsed_window")"
+  fi
+  SERVER_REQUIREMENT_NOTE=""
+  FORCED_TRIGGER_NOTE=""
+  if [ "$SERVER_REQUIRES_UPDATE" = "1" ]; then
+    SERVER_REQUIREMENT_NOTE="Update required now; window=${SERVER_UPDATE_WINDOW_SECONDS}s"
+    if [ "$SERVER_UPDATE_WINDOW_SECONDS" -lt "$FORCED_UPDATE_WINDOW_SECONDS" ]; then
+      FORCED_TRIGGER_NOTE="server requested fast-track sync window"
+    fi
   fi
 }
 
@@ -584,7 +611,19 @@ fi
 
 
 query_server_update_state "$CURRENT_STATUS" "$LOCAL_RELEASE_ID" "${TARGET_RELEASE_ID:-legacy}"
-if [ "$SERVER_REQUIRES_UPDATE" = "0" ] && [ -n "${LOCAL_RELEASE_ID:-}" ] && [ "$LOCAL_RELEASE_ID" = "${TARGET_RELEASE_ID:-legacy}" ]; then
+if [ -n "$SERVER_STATUS_MESSAGE" ]; then
+  log "Server status: $SERVER_STATUS_MESSAGE"
+fi
+if [ -n "$SERVER_REQUIREMENT_NOTE" ]; then
+  log "$SERVER_REQUIREMENT_NOTE"
+fi
+if [ -n "$FORCED_TRIGGER_NOTE" ]; then
+  log "$FORCED_TRIGGER_NOTE"
+fi
+if [ "$FORCE_UPDATE" = "1" ]; then
+  log "FORCE_UPDATE is enabled; forcing full sync check."
+fi
+if [ "$FORCE_UPDATE" != "1" ] && [ "$SERVER_REQUIRES_UPDATE" = "0" ] && [ -n "${LOCAL_RELEASE_ID:-}" ] && [ "$LOCAL_RELEASE_ID" = "${TARGET_RELEASE_ID:-legacy}" ]; then
   log "Server status check says this client is up to date; skipping full sync."
   write_status "up_to_date" "no changes required" "$LOCAL_RELEASE_ID" "${TARGET_RELEASE_ID:-legacy}"
   report_update_status "up_to_date" "$LOCAL_RELEASE_ID" "${TARGET_RELEASE_ID:-legacy}" "0" "$ENTRY_COUNT" "server reported up-to-date"

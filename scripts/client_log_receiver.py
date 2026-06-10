@@ -33,6 +33,7 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_INSTALLER_EVENT_BYTES = 96 * 1024
 REQUEST_TIMEOUT_SECONDS = 35
 DEFAULT_UPDATE_POLL_SECONDS = 60
+FAST_TRACK_UPDATE_SECONDS = 120
 TERMINAL_SESSION_STATUSES = {"ok", "failed", "cancelled"}
 
 
@@ -579,10 +580,15 @@ class UploadHandler(BaseHTTPRequestHandler):
         remote_addr = self.headers.get("X-Real-IP") or self.client_address[0]
         user_agent = clean_text(self.headers.get("User-Agent", ""), 300)
         received_at = utc_now()
-        require_update = int(installed_release_id and target_release_id and installed_release_id != target_release_id)
+        require_update = int(
+            bool(target_release_id) and (not installed_release_id or installed_release_id != target_release_id)
+        )
+        update_window_seconds = (
+            FAST_TRACK_UPDATE_SECONDS if require_update else DEFAULT_UPDATE_POLL_SECONDS
+        )
         server_message = (
             f"Update required now: release {target_release_id}. "
-            f"Client currently at {installed_release_id}."
+            f"Client currently at {installed_release_id or '<none>'}."
             if require_update
             else "Client is already on the latest release."
         )
@@ -658,7 +664,7 @@ class UploadHandler(BaseHTTPRequestHandler):
                 "client_id": client_id,
                 "require_update": bool(require_update),
                 "event_id": event_id,
-                "update_window_seconds": DEFAULT_UPDATE_POLL_SECONDS,
+                "update_window_seconds": update_window_seconds,
                 "message": server_message,
                 "target_release_id": target_release_id,
                 "installed_release_id": installed_release_id,

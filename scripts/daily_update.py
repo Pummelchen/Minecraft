@@ -507,12 +507,16 @@ def should_publish_client_file(relative_path: Path) -> bool:
     if parts[0] in {"mods", "resourcepacks", "shaderpacks"}:
         return len(parts) == 2 and bool(relative_path.suffix)
     if parts[0] == "tools":
-        return len(parts) == 2 and relative_path.name in {
-            "AddPummelchenServer.java",
-            "pummelchen-auto-update.sh",
-            "pummelchen-client-doctor.sh",
-            "upload-token.txt.example",
-        }
+        if len(parts) != 2:
+            return False
+        name = relative_path.name
+        if name in {"upload-token.txt", "upload-token.txt.example"}:
+            return False
+        if name.startswith("."):
+            return False
+        if relative_path.suffix not in {".sh", ".java", ".txt", ".md", ".json"}:
+            return False
+        return True
     return len(parts) == 1 and relative_path.name in {
         "Install Mods.command",
         "README.txt",
@@ -1100,13 +1104,16 @@ def scan_and_apply(args: argparse.Namespace) -> int:
                 mod_id = int(mod["id"])
                 savepoint_counter += 1
                 savepoint_name = f"sp_{savepoint_counter}"
+                savepoint_active = False
                 conn.execute(f"SAVEPOINT {savepoint_name}")
+                savepoint_active = True
                 try:
                     stats["scanned"] += 1
                     candidate = candidates_map.get(mod_id)
                     if not candidate:
                         stats["skipped"] += 1
                         conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+                        savepoint_active = False
                         continue
                     project, file_info = candidate
                     new_name = str(file_info.get("fileName") or "")
@@ -1133,6 +1140,7 @@ def scan_and_apply(args: argparse.Namespace) -> int:
                             notes="Candidate only; dry run did not install or test.",
                         )
                         conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+                        savepoint_active = False
                         continue
                     stats["candidates"] += 1
                     candidate_progress += 1
@@ -1170,8 +1178,16 @@ def scan_and_apply(args: argparse.Namespace) -> int:
                     if args.apply_limit and stats["applied"] >= args.apply_limit:
                         break
                 except Exception as mod_exc:
-                    conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
-                    conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+                    if savepoint_active:
+                        try:
+                            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                        except sqlite3.OperationalError:
+                            pass
+                        try:
+                            conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+                        except sqlite3.OperationalError:
+                            pass
+                        savepoint_active = False
                     stats["failed"] += 1
                     log_event(
                         conn,

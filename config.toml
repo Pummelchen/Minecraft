@@ -36,7 +36,7 @@ dmg_name = "Pummelchen-Client-Installer.dmg"
 installer_name = "install-pummelchen.command"
 
 # Auto-updater
-auto_update_interval = 300
+auto_update_interval = 60
 installer_version = "1.2"
 
 # Java
