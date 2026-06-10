@@ -378,6 +378,110 @@ def fetch_active_release(conn: sqlite3.Connection) -> dict[str, Any]:
     return dict(row) if row else {}
 
 
+FAILED_MODS_PAGE = "failed-mods.html"
+
+
+def fetch_failed_mods(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT m.name, m.canonical_key, m.primary_url, m.server_status,
+               COALESCE(n.notes_1, '') AS notes_1, COALESCE(n.notes_2, '') AS notes_2
+        FROM mods m
+        LEFT JOIN mod_notes n ON n.mod_id = m.id
+        WHERE m.active_status = 'failed'
+          AND m.duplicate_of_id IS NULL
+        ORDER BY lower(m.name)
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def render_failed_mods_page(failed_mods: list[dict[str, Any]]) -> str:
+    rows_html = []
+    for mod in failed_mods:
+        name = escape(mod["name"])
+        url = escape(mod.get("primary_url") or "")
+        reason = escape(mod.get("server_status") or "Unknown")
+        notes = escape(mod.get("notes_1") or "")
+        extra = escape(mod.get("notes_2") or "")
+        detail_parts = [p for p in [reason, notes, extra] if p]
+        detail = escape(" — ".join(detail_parts)) if detail_parts else "Unknown"
+        link = f'<a href="{url}" target="_blank" rel="noreferrer">{name}</a>' if url else name
+        rows_html.append(f"<tr><td>{link}</td><td>{detail}</td></tr>")
+    table_rows = "\n        ".join(rows_html) if rows_html else "<tr><td colspan=\"2\">No failed mods</td></tr>"
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Failed Mods — Pummelchen Server</title>
+  <style>
+    :root {{
+      --bg: #000000; --ink: #f4f7f2; --muted: #a5afa6; --line: #273127;
+      --panel: #0b0f0c; --green: #5fd286; --blue: #8fc7ff; --red: #f5b8b8;
+      --shadow: rgba(0,0,0,0.62);
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0; background: var(--bg); color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }}
+    a {{ color: var(--blue); text-decoration: none; }}
+    a:hover {{ color: #b8dcff; text-decoration: underline; }}
+    .wrap {{ max-width: 1180px; margin: 0 auto; padding: 24px; }}
+    header {{ border-bottom: 1px solid var(--line); padding: 28px 0 24px; }}
+    h1 {{ margin: 0; font-size: 32px; }}
+    .subtitle {{ margin: 8px 0 0; color: var(--muted); }}
+    .back {{ display: inline-block; margin-bottom: 16px; color: var(--muted); font-size: 14px; }}
+    .back:hover {{ color: var(--blue); }}
+    table {{
+      width: 100%; border-collapse: collapse; margin-top: 16px;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+      overflow: hidden;
+    }}
+    th {{
+      text-align: left; padding: 12px 16px; background: #111711;
+      color: var(--muted); font-size: 13px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--line);
+    }}
+    td {{
+      padding: 10px 16px; border-bottom: 1px solid var(--line);
+      font-size: 14px; vertical-align: top;
+    }}
+    tr:last-child td {{ border-bottom: none; }}
+    tr:hover td {{ background: #0f150f; }}
+    td:first-child {{ font-weight: 600; white-space: nowrap; }}
+    td:last-child {{ color: var(--muted); }}
+    .count {{ color: var(--red); font-weight: 700; }}
+    footer {{ padding: 24px 0 42px; color: var(--muted); font-size: 13px; }}
+    @media (max-width: 640px) {{
+      .wrap {{ padding: 16px; }}
+      h1 {{ font-size: 26px; }}
+      td:first-child {{ white-space: normal; }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <a class="back" href="index.html">&larr; Back to status page</a>
+    <header>
+      <h1>Failed Mods</h1>
+      <p class="subtitle"><span class="count">{len(failed_mods)}</span> mods that failed acceptance testing or server boot and were not installed.</p>
+    </header>
+    <table>
+      <thead><tr><th>Mod</th><th>Failure Reason</th></tr></thead>
+      <tbody>
+        {table_rows}
+      </tbody>
+    </table>
+    <footer>Pummelchen Server — mod tracker failure report</footer>
+  </div>
+</body>
+</html>"""
+
+
 def version_text(files: list[dict[str, Any]]) -> str:
     if not files:
         return "Tracked runtime entry"
@@ -1017,6 +1121,7 @@ def render_page(
     public_url: str,
     updates: list[dict[str, Any]],
     update_checks: list[dict[str, Any]] | None = None,
+    failed_count: int = 0,
     active_release: dict[str, Any] | None = None,
 ) -> str:
     release_label = display_release_version(stats.get("Last Mod Version", ""))
@@ -1101,6 +1206,9 @@ def render_page(
       font-size: 14px;
       white-space: nowrap;
     }}
+    a.pill:hover {{ color: var(--blue); border-color: var(--blue); text-decoration: none; }}
+    .pill-failed {{ color: #f5b8b8; border-color: #6d2828; background: #2a0d0d; }}
+    a.pill-failed:hover {{ color: #ffcaca; border-color: #f5b8b8; }}
     section {{ padding: 24px 0; border-bottom: 1px solid var(--line); }}
     h2 {{ margin: 0 0 14px; font-size: 24px; }}
     h3 {{ margin: 20px 0 10px; font-size: 18px; }}
@@ -1459,6 +1567,7 @@ def render_page(
           <span class="pill">Web: {SERVER_HOST}:7788</span>
           <span class="pill">{server_count} Server Mods</span>
           <span class="pill">{client_count} Client Mods</span>
+          <a class="pill pill-failed" href="{FAILED_MODS_PAGE}">{failed_count} Failed Mods</a>
         </div>
       </div>
     </div>
@@ -1809,6 +1918,7 @@ def write_site(db_path: Path, output_dir: Path, server_dir: Path, public_url: st
         mods = fetch_mods(conn)
         update_checks = fetch_update_checks(conn)
         active_release = fetch_active_release(conn)
+        failed_mods = fetch_failed_mods(conn)
         write_release_report_pages(conn, output_dir, public_url)
 
     # Use the comprehensive tested updates feed from the independent worker
@@ -1823,8 +1933,9 @@ def write_site(db_path: Path, output_dir: Path, server_dir: Path, public_url: st
     else:
         stats["Last Mod Version"] = "No active release"
     stats["Minecraft Players"] = "Waiting for live feed"
-    html_text = render_page(stats=stats, server_mods=server_mods, client_mods=client_mods, public_url=public_url, updates=updates, update_checks=update_checks, active_release=active_release)
+    html_text = render_page(stats=stats, server_mods=server_mods, client_mods=client_mods, public_url=public_url, updates=updates, update_checks=update_checks, failed_count=len(failed_mods), active_release=active_release)
     (output_dir / "index.html").write_text(html_text, encoding="utf-8")
+    (output_dir / FAILED_MODS_PAGE).write_text(render_failed_mods_page(failed_mods), encoding="utf-8")
     installer = downloads / INSTALLER_NAME
     installer.write_text(make_installer_script(public_url), encoding="utf-8")
     installer.chmod(0o755)
