@@ -52,6 +52,10 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 LOG_FILE="${PUMMELCHEN_LOG_FILE:-$LOG_DIR/auto-update-$STAMP.log}"
 UPDATE_STATUS_URL="${PUMMELCHEN_UPDATE_STATUS_URL:-${BASE_URL%/}/client-logs/update-status}"
 CLIENT_ID_FILE="${PUMMELCHEN_HOME}/client-id"
+
+FORCED_UPDATE_WINDOW_SECONDS=60
+SERVER_REQUIRES_UPDATE=1
+SERVER_UPDATE_WINDOW_SECONDS="$FORCED_UPDATE_WINDOW_SECONDS"
 LOCK_DIR="$PUMMELCHEN_HOME/update.lock"
 INSTALLED_RELEASE_FILE="$STATE_DIR/installed-release.txt"
 
@@ -168,6 +172,47 @@ report_update_status() {
     --data-urlencode "message=$message"
   )
   curl "${curl_args[@]}" "$UPDATE_STATUS_URL" >/dev/null 2>&1 || true
+}
+
+query_server_update_state() {
+  local status="$1"
+  local installed_release="$2"
+  local target_release="$3"
+  SERVER_REQUIRES_UPDATE=1
+  SERVER_UPDATE_WINDOW_SECONDS="$FORCED_UPDATE_WINDOW_SECONDS"
+  SERVER_STATUS_MESSAGE=""
+  local parsed_window=""
+  [ -n "$UPDATE_STATUS_URL" ] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  local cid os_summary arch
+  cid="$(client_id || true)"
+  [ -n "$cid" ] || return 0
+  os_summary="$(sw_vers -productName 2>/dev/null || printf macOS) $(sw_vers -productVersion 2>/dev/null || true)"
+  arch="$(uname -m 2>/dev/null || true)"
+  local response
+  response="$(curl     --silent --show-error --fail --location     --retry 1 --retry-delay 1     --connect-timeout 3 --max-time 8     -X POST     -H "Content-Type: application/x-www-form-urlencoded; charset=utf-8"     -H "User-Agent: PummelchenAutoUpdater/1.0"     --data-urlencode "client_id=$cid"     --data-urlencode "installed_release_id=$installed_release"     --data-urlencode "target_release_id=$target_release"     --data-urlencode "status=$status"     --data-urlencode "manifest_entries=0"     --data-urlencode "changed_files=0"     --data-urlencode "os=$os_summary"     --data-urlencode "arch=$arch"     --data-urlencode "message=pre-check status" "$UPDATE_STATUS_URL" 2>/dev/null || true)"
+  if [ -z "$response" ]; then
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    SERVER_REQUIRES_UPDATE="$(printf "%s" "$response" | python3 -c 'import json,sys; payload=json.loads(sys.stdin.read() or "{}"); print(str(payload.get("require_update", True)).lower())' 2>/dev/null || echo "true")"
+    parsed_window="$(printf "%s" "$response" | python3 -c 'import json,sys; payload=json.loads(sys.stdin.read() or "{}"); print(payload.get("update_window_seconds", ""))' 2>/dev/null || true)"
+    SERVER_STATUS_MESSAGE="$(printf "%s" "$response" | python3 -c 'import json,sys; payload=json.loads(sys.stdin.read() or "{}"); print((payload.get("message") or ""), end="")' 2>/dev/null || true)"
+  else
+    SERVER_REQUIRES_UPDATE="$(printf "%s" "$response" | sed -n 's/.*"require_update"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' | head -n 1)"
+    parsed_window="$(printf "%s" "$response" | sed -n 's/.*"update_window_seconds"[[:space:]]*:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -n 1)"
+    SERVER_STATUS_MESSAGE="$(printf "%s" "$response" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' | head -n 1)"
+  fi
+  if [ "$SERVER_REQUIRES_UPDATE" = "true" ]; then
+    SERVER_REQUIRES_UPDATE=1
+  elif [ "$SERVER_REQUIRES_UPDATE" = "false" ]; then
+    SERVER_REQUIRES_UPDATE=0
+  else
+    SERVER_REQUIRES_UPDATE=1
+  fi
+  if [ -n "$parsed_window" ]; then
+    SERVER_UPDATE_WINDOW_SECONDS="$parsed_window"
+  fi
 }
 
 require_command() {
@@ -534,6 +579,19 @@ fi
 if [ "$CHECK_ONLY" = "1" ]; then
   log "Manifest is readable. Client file entries: $ENTRY_COUNT"
   report_update_status "$CURRENT_STATUS" "$LOCAL_RELEASE_ID" "${TARGET_RELEASE_ID:-legacy}" "" "$ENTRY_COUNT" "manifest check-only"
+  exit 0
+fi
+
+
+query_server_update_state "$CURRENT_STATUS" "$LOCAL_RELEASE_ID" "${TARGET_RELEASE_ID:-legacy}"
+if [ "$SERVER_REQUIRES_UPDATE" = "0" ] && [ -n "${LOCAL_RELEASE_ID:-}" ] && [ "$LOCAL_RELEASE_ID" = "${TARGET_RELEASE_ID:-legacy}" ]; then
+  log "Server status check says this client is up to date; skipping full sync."
+  write_status "up_to_date" "no changes required" "$LOCAL_RELEASE_ID" "${TARGET_RELEASE_ID:-legacy}"
+  report_update_status "up_to_date" "$LOCAL_RELEASE_ID" "${TARGET_RELEASE_ID:-legacy}" "0" "$ENTRY_COUNT" "server reported up-to-date"
+  log "Pummelchen client is current."
+  if [ -n "$SERVER_STATUS_MESSAGE" ]; then
+    log "Server status note: $SERVER_STATUS_MESSAGE"
+  fi
   exit 0
 fi
 

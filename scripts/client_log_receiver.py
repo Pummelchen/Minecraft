@@ -580,6 +580,12 @@ class UploadHandler(BaseHTTPRequestHandler):
         user_agent = clean_text(self.headers.get("User-Agent", ""), 300)
         received_at = utc_now()
         require_update = int(installed_release_id and target_release_id and installed_release_id != target_release_id)
+        server_message = (
+            f"Update required now: release {target_release_id}. "
+            f"Client currently at {installed_release_id}."
+            if require_update
+            else "Client is already on the latest release."
+        )
 
         with sqlite3.connect(self.server.db_path) as conn:
             conn.execute(
@@ -653,6 +659,9 @@ class UploadHandler(BaseHTTPRequestHandler):
                 "require_update": bool(require_update),
                 "event_id": event_id,
                 "update_window_seconds": DEFAULT_UPDATE_POLL_SECONDS,
+                "message": server_message,
+                "target_release_id": target_release_id,
+                "installed_release_id": installed_release_id,
             },
         )
 
