@@ -40,6 +40,7 @@ import server_ops
 from moddb import ACTIVE_STATUS_RANKS, connect, init_db, row_hash, slugify, utc_now
 from neoforge_metadata import load_neoforge_metadata
 from pummelchen_utils import read_properties, sha256_file
+from update_activity import log_activity
 
 
 DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
@@ -1181,11 +1182,19 @@ def run_pyramid(args: argparse.Namespace) -> int:
         final_status = "passed"
         level = 0
         bundles = bundle_targets(active, args.bundle_size)
+        # Calculate max expected levels
+        max_levels = 1
+        block_count = len(bundles)
+        while block_count > 1:
+            block_count = (block_count + 1) // 2
+            max_levels += 1
+        log_activity(f"Pyramid started — {len(bundles)} base blocks, up to {max_levels} levels", stage="pyramid")
         selected_bundles = bundles[args.offset :]
         if args.limit:
             selected_bundles = selected_bundles[: args.limit]
         tested_all_level0 = args.offset == 0 and (not args.limit or args.limit >= len(bundles))
         for ordinal, bundle in enumerate(selected_bundles, start=1 + args.offset):
+            log_activity(f"Pyramid Level 0 — Block {ordinal}/{len(bundles)} testing ({len(bundle)} mods)", stage="pyramid", status="running")
             status, included, missing, result, notes = run_pyramid_block(
                 args=args,
                 release_key=release_key,
@@ -1211,6 +1220,7 @@ def run_pyramid(args: argparse.Namespace) -> int:
                 notes=notes,
             )
             print(f"{release_key} L0 block {ordinal}/{len(bundles)} {status} targets={len(bundle)} included={len(included)}", flush=True)
+            log_activity(f"Pyramid Level 0 — Block {ordinal}/{len(bundles)} {status}", stage="pyramid", status="ok" if status == "passed" else "failed")
             if status == "passed":
                 row = conn.execute("SELECT * FROM mod_acceptance_blocks WHERE id = ?", (block_id,)).fetchone()
                 current_blocks.append(block_from_db(row, active_by_name))
@@ -1222,6 +1232,7 @@ def run_pyramid(args: argparse.Namespace) -> int:
         while len(current_blocks) > 1 and (not args.max_level or level + 1 <= args.max_level):
             level += 1
             level_count = level + 1
+            log_activity(f"Pyramid Level {level} — testing {len(current_blocks)} blocks", stage="pyramid", status="running")
             next_blocks: list[AcceptanceBlock] = []
             ordinal = 1
             index = 0
@@ -1282,6 +1293,7 @@ def run_pyramid(args: argparse.Namespace) -> int:
                     f"targets={len(targets)} included={len(included)}",
                     flush=True,
                 )
+                log_activity(f"Pyramid Level {level} — Block {ordinal} {status}", stage="pyramid", status="ok" if status == "passed" else "failed")
                 if status == "passed":
                     row = conn.execute("SELECT * FROM mod_acceptance_blocks WHERE id = ?", (block_id,)).fetchone()
                     next_blocks.append(block_from_db(row, active_by_name))

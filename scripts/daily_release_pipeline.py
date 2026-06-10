@@ -310,7 +310,8 @@ def create_release(
 def run_pipeline(args: argparse.Namespace) -> int:
     started_at = utc_now()
     clear_activity()
-    log_activity("Daily pipeline started", stage="init", status="running")
+    TOTAL_STEPS = 13
+    log_activity(f"Step 1/{TOTAL_STEPS}: Daily pipeline started", stage="init", status="running")
     original_release = active_release_id(args.db, args.server_key) if not args.dry_run else ""
     release_key = args.release_key or (next_release_key(args.db) if not args.dry_run else dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_V1"))
     pipeline_server_key = args.pipeline_server_key or default_pipeline_server_key(args.server_key)
@@ -323,7 +324,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
         simulate_all=args.simulate_all,
     )
     print(f"pipeline_started_at={started_at}", flush=True)
-    log_activity(f"Release key: {release_key}", stage="init")
+    log_activity(f"Step 1/{TOTAL_STEPS}: Staging server prepared — {release_key}", stage="init")
     print(f"pipeline_release_key={release_key}", flush=True)
     print(f"pipeline_stage_server={stage_server_dir}", flush=True)
     print(f"pipeline_server_key={pipeline_server_key}", flush=True)
@@ -332,7 +333,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
 
     deployed = False
     try:
-        log_activity("Scanning for compatible mod updates", stage="daily_update", status="running")
+        log_activity(f"Step 2/{TOTAL_STEPS}: Scanning for compatible mod updates", stage="daily_update", status="running")
         run(
             [
                 sys.executable,
@@ -385,7 +386,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
                 flush=True,
             )
 
-        log_activity(f"Daily update finished: {applied} applied, {int(update_run['failed'] or 0) if update_run else 0} failed", stage="daily_update", status="ok" if applied > 0 else "info")
+        log_activity(f"Step 2/{TOTAL_STEPS}: Daily update finished — {applied} applied, {int(update_run['failed'] or 0) if update_run else 0} failed", stage="daily_update", status="ok" if applied > 0 else "info")
         sync_output = run_capture(
             [
                 sys.executable,
@@ -401,7 +402,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
             ],
             dry_run=args.dry_run,
         )
-        log_activity("Syncing project-local mods", stage="sync_mods")
+        log_activity(f"Step 3/{TOTAL_STEPS}: Syncing project-local mods", stage="sync_mods")
         local_mods_changed = parse_metric(sync_output.stdout or "", "pummelchen_mods_changed")
 
         if applied <= 0 and local_mods_changed <= 0:
@@ -419,10 +420,11 @@ def run_pipeline(args: argparse.Namespace) -> int:
                 ],
                 dry_run=args.dry_run,
             )
+            log_activity(f"Step 3/{TOTAL_STEPS}: No updates needed", stage="done", status="ok")
             print("pipeline_status=no_updates", flush=True)
             return 0
 
-        log_activity("Running pyramid acceptance tests", stage="pyramid", status="running")
+        log_activity(f"Step 4/{TOTAL_STEPS}: Running pyramid acceptance tests", stage="pyramid", status="running")
         run(
             [
                 sys.executable,
@@ -459,9 +461,9 @@ def run_pipeline(args: argparse.Namespace) -> int:
                 raise SystemExit(f"pyramid acceptance did not pass: {acceptance['status']}")
             top_level = max(int(acceptance["level_count"] or 1) - 1, 0)
             print(f"pyramid_passed=1\ttop_level={top_level}", flush=True)
-            log_activity(f"Pyramid passed — {top_level + 1} level(s) tested", stage="pyramid", status="ok")
+            log_activity(f"Step 4/{TOTAL_STEPS}: Pyramid passed — {top_level + 1} level(s) tested", stage="pyramid", status="ok")
 
-        log_activity("Running headless client block tests", stage="block_client", status="running")
+        log_activity(f"Step 5/{TOTAL_STEPS}: Running headless client block tests", stage="block_client", status="running")
         run(
             [
                 sys.executable,
@@ -493,7 +495,8 @@ def run_pipeline(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
         )
 
-        log_activity("Rebuilding client package", stage="rebuild")
+        log_activity(f"Step 5/{TOTAL_STEPS}: Client block tests passed", stage="block_client", status="ok")
+        log_activity(f"Step 6/{TOTAL_STEPS}: Rebuilding client package", stage="rebuild")
         run(
             [
                 sys.executable,
@@ -504,7 +507,8 @@ def run_pipeline(args: argparse.Namespace) -> int:
             ],
             dry_run=args.dry_run,
         )
-        log_activity("Checking client manifest and dependencies", stage="validate")
+        log_activity(f"Step 6/{TOTAL_STEPS}: Client package rebuilt", stage="rebuild", status="ok")
+        log_activity(f"Step 7/{TOTAL_STEPS}: Checking client manifest", stage="validate")
         run(
             [
                 sys.executable,
@@ -526,8 +530,9 @@ def run_pipeline(args: argparse.Namespace) -> int:
             ],
             dry_run=args.dry_run,
         )
+        log_activity(f"Step 7/{TOTAL_STEPS}: Client validation passed", stage="validate", status="ok")
 
-        log_activity(f"Creating release {release_key}", stage="release", status="running")
+        log_activity(f"Step 8/{TOTAL_STEPS}: Creating release {release_key}", stage="release", status="running")
         release_id = create_release(
             args,
             release_key,
@@ -536,7 +541,8 @@ def run_pipeline(args: argparse.Namespace) -> int:
             local_mods_changed=local_mods_changed,
         )
 
-        log_activity(f"Deploying release {release_id}", stage="deploy", status="running")
+        log_activity(f"Step 8/{TOTAL_STEPS}: Release created", stage="release", status="ok")
+        log_activity(f"Step 9/{TOTAL_STEPS}: Deploying release {release_id}", stage="deploy", status="running")
         run(
             [
                 sys.executable,
@@ -559,8 +565,9 @@ def run_pipeline(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
         )
         deployed = True
+        log_activity(f"Step 9/{TOTAL_STEPS}: Release deployed", stage="deploy", status="ok")
 
-        log_activity("Regenerating status site", stage="site")
+        log_activity(f"Step 10/{TOTAL_STEPS}: Regenerating status site", stage="site")
         run(
             [
                 sys.executable,
@@ -576,7 +583,8 @@ def run_pipeline(args: argparse.Namespace) -> int:
             ],
             dry_run=args.dry_run,
         )
-        log_activity("Cleanup and backup", stage="cleanup")
+        log_activity(f"Step 10/{TOTAL_STEPS}: Status site regenerated", stage="site", status="ok")
+        log_activity(f"Step 11/{TOTAL_STEPS}: Cleanup", stage="cleanup")
         run(
             [
                 sys.executable,
@@ -602,6 +610,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
             ],
             dry_run=args.dry_run,
         )
+        log_activity(f"Step 12/{TOTAL_STEPS}: Backing up release", stage="backup")
         run(
             [
                 sys.executable,
@@ -615,11 +624,11 @@ def run_pipeline(args: argparse.Namespace) -> int:
             ],
             dry_run=args.dry_run,
         )
-        log_activity(f"Pipeline complete — release {release_id} deployed", stage="done", status="ok")
+        log_activity(f"Step 13/{TOTAL_STEPS}: Pipeline complete — release {release_id} deployed", stage="done", status="ok")
         print(f"pipeline_status=released\trelease_id={release_id}", flush=True)
         return 0
     except Exception as exc:
-        log_activity(f"Pipeline failed: {type(exc).__name__}: {exc}", stage="error", status="failed")
+        log_activity(f"Pipeline failed at step: {type(exc).__name__}: {exc}", stage="error", status="failed")
         print(f"pipeline_status=failed\treason={type(exc).__name__}: {exc}", flush=True)
         if not args.dry_run:
             if deployed:

@@ -1092,6 +1092,8 @@ def scan_and_apply(args: argparse.Namespace) -> int:
         resolved_count = sum(1 for v in candidates_map.values() if v is not None)
         print(f"scan_phase=resolved candidates={resolved_count}/{len(scan_rows)}", flush=True)
         log_activity(f"Resolved {resolved_count} candidate(s) out of {len(scan_rows)} mods scanned", stage="resolve")
+        total_candidates = resolved_count
+        candidate_progress = 0
         try:
             savepoint_counter = 0
             for mod in scan_rows:
@@ -1133,8 +1135,9 @@ def scan_and_apply(args: argparse.Namespace) -> int:
                         conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
                         continue
                     stats["candidates"] += 1
+                    candidate_progress += 1
                     mod_name = str(mod["name"] or mod["canonical_key"] or f"mod_{mod_id}")
-                    log_activity(f"Testing {mod_name} — {new_name}", stage="apply", status="running")
+                    log_activity(f"Candidate {candidate_progress}/{total_candidates}: Testing {mod_name} — {new_name}", stage="apply", status="running")
                     downloaded = download_file(file_info, processor.DOWNLOAD_DIR)
                     server_side = any(
                         int(row["installed_on_server"] or 0) == 1
