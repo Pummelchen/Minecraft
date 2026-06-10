@@ -32,6 +32,7 @@ import server_ops
 import sanitize_resource_pack_metadata
 from moddb import UPDATE_SCAN_ACTIVE_STATUSES, connect, init_db, slugify, source_kind, utc_now
 from pummelchen_utils import MRPACK_NAME, SERVER_PUBLIC_URL, sha256_file
+from update_activity import log_activity
 
 
 DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
@@ -1090,6 +1091,7 @@ def scan_and_apply(args: argparse.Namespace) -> int:
         candidates_map = resolve_candidates_parallel(conn, scan_rows)
         resolved_count = sum(1 for v in candidates_map.values() if v is not None)
         print(f"scan_phase=resolved candidates={resolved_count}/{len(scan_rows)}", flush=True)
+        log_activity(f"Resolved {resolved_count} candidate(s) out of {len(scan_rows)} mods scanned", stage="resolve")
         try:
             savepoint_counter = 0
             for mod in scan_rows:
@@ -1131,6 +1133,8 @@ def scan_and_apply(args: argparse.Namespace) -> int:
                         conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
                         continue
                     stats["candidates"] += 1
+                    mod_name = str(mod["name"] or mod["canonical_key"] or f"mod_{mod_id}")
+                    log_activity(f"Testing {mod_name} — {new_name}", stage="apply", status="running")
                     downloaded = download_file(file_info, processor.DOWNLOAD_DIR)
                     server_side = any(
                         int(row["installed_on_server"] or 0) == 1
@@ -1152,11 +1156,13 @@ def scan_and_apply(args: argparse.Namespace) -> int:
                         ok = apply_client_only(conn, run_id, mod, project, file_info, downloaded, args.server_dir)
                     if ok:
                         stats["applied"] += 1
+                        log_activity(f"Accepted {mod_name}", stage="apply", status="ok")
                         server_ops.backfill_metadata(conn)
                         server_ops.sync_instance_files(conn, server_id, args.server_dir)
                         server_ops.score_risks(conn, server_id)
                     else:
                         stats["failed"] += 1
+                        log_activity(f"Rejected {mod_name}", stage="apply", status="failed")
                     conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
                     if args.apply_limit and stats["applied"] >= args.apply_limit:
                         break

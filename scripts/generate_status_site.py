@@ -1109,6 +1109,10 @@ def render_update_checks(runs: list[dict[str, Any]]) -> str:
   <span class="countdown-label">Next automatic update check:</span>
   <strong id="updateCountdown" class="countdown-value" data-next-run-hour="12">--</strong>
 </div>
+<div id="updateActivity" class="update-activity" style="display:none;">
+  <h4 class="activity-title">Pipeline Activity</h4>
+  <ul id="activityList" class="activity-list"></ul>
+</div>
 """
     return countdown_html
 
@@ -1455,6 +1459,51 @@ def render_page(
     }}
     .countdown-label {{ color: var(--muted); font-size: 14px; }}
     .countdown-value {{ color: var(--green); font-size: 20px; font-variant-numeric: tabular-nums; }}
+    .update-activity {{
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      margin-bottom: 16px;
+      padding: 14px 18px;
+    }}
+    .activity-title {{
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 600;
+      margin: 0 0 10px 0;
+    }}
+    .activity-list {{
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }}
+    .activity-list li {{
+      display: flex;
+      gap: 10px;
+      padding: 5px 0;
+      font-size: 13px;
+      border-bottom: 1px solid var(--line);
+    }}
+    .activity-list li:last-child {{ border-bottom: none; }}
+    .activity-ts {{
+      color: var(--muted);
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+      min-width: 150px;
+    }}
+    .activity-msg {{ color: var(--text); }}
+    .activity-msg[data-status="running"] {{ color: var(--yellow); }}
+    .activity-msg[data-status="ok"] {{ color: var(--green); }}
+    .activity-msg[data-status="failed"] {{ color: #f87171; }}
+    .activity-stage {{
+      color: var(--muted);
+      font-size: 11px;
+      background: rgba(255,255,255,0.04);
+      padding: 1px 6px;
+      border-radius: 4px;
+      white-space: nowrap;
+      margin-left: auto;
+    }}
     .run-block {{
       background: var(--panel);
       border: 1px solid var(--line);
@@ -1809,6 +1858,7 @@ def render_page(
       const diffMs = next.getTime() - now.getTime();
       if (diffMs <= 0) {{
         el.textContent = 'Running now...';
+        fetchUpdateActivity();
         return;
       }}
       const totalMinutes = Math.floor(diffMs / 60000);
@@ -1820,9 +1870,34 @@ def render_page(
       if (hours > 0) parts.push(`${{hours}}h`);
       parts.push(`${{minutes}}m`);
       el.textContent = parts.join(' ');
+      document.getElementById('updateActivity').style.display = 'none';
+    }}
+    function fetchUpdateActivity() {{
+      const container = document.getElementById('updateActivity');
+      const list = document.getElementById('activityList');
+      if (!container || !list) return;
+      fetch('update-activity.json', {{ cache: 'no-store' }})
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {{
+          if (!data || !data.entries || data.entries.length === 0) {{
+            container.style.display = 'none';
+            return;
+          }}
+          container.style.display = '';
+          const entries = data.entries.slice(-5).reverse();
+          list.innerHTML = entries.map(e => {{
+            const ts = e.timestamp || '';
+            const msg = e.message || '';
+            const stage = e.stage || '';
+            const status = e.status || 'info';
+            const stageHtml = stage ? `<span class="activity-stage">${{stage}}</span>` : '';
+            return `<li><span class="activity-ts">${{ts}}</span><span class="activity-msg" data-status="${{status}}">${{msg}}</span>${{stageHtml}}</li>`;
+          }}).join('');
+        }})
+        .catch(() => {{}});
     }}
     updateCountdown();
-    window.setInterval(updateCountdown, 60000);
+    window.setInterval(updateCountdown, 15000);
     updateRelativeTimes();
     window.setInterval(updateRelativeTimes, 60000);
     refreshLiveStats();
