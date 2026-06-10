@@ -639,11 +639,8 @@ def render_updates(updates: list[dict[str, Any]]) -> str:
         )
         source_badge = escape(event.get("source", "unknown"))
         event_type = escape(event.get("event_type", "update"))
-        old_new = ""
-        if event.get("old_file") or event.get("new_file"):
-            old_new = f"<p><strong>File:</strong> {escape(event.get('old_file') or 'none')} -> {escape(event.get('new_file') or 'none')}</p>"
-        notes = escape(event.get("notes", ""))
-        notes_html = f"<p class=\"run-detail\">{notes}</p>" if notes else ""
+        test_label = escape(event.get("test_label") or "")
+        test_label_html = f'<p><strong>Test:</strong> {test_label}</p>' if test_label else ""
         cards.append(
             f"""
 <article class="update-card">
@@ -653,8 +650,7 @@ def render_updates(updates: list[dict[str, Any]]) -> str:
     <span class="badge" style="background:#1a2a1a; border-color:#3d5c3d; color:#9fdfaf;">{source_badge}</span>
   </div>
   <p><strong>When:</strong> <time class="relative-time" datetime="{tested_at}" title="{tested_at}">{tested_at_display}</time></p>
-  {old_new}
-  {notes_html}
+  {test_label_html}
 </article>
 """
         )
