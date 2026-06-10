@@ -3,7 +3,7 @@ Minecraft 26.1.2 Client Package for macOS Apple Silicon
 Target client: macOS on Apple Silicon (M2/M3), official Minecraft launcher.
 Target loader: NeoForge 26.1.2.71.
 Target server: 91.99.176.243:25565.
-Package contents: 285 mod jars, 9 resource packs, and 1 shader pack.
+Package contents: 285 mod jars, 9 resource packs, 1 shader pack, and updater tooling scripts.
 Generated: 2026-06-04.
 
 Recommended install:
@@ -15,7 +15,7 @@ Recommended install:
 What the installer does:
 - Downloads and verifies the current client package.
 - Installs or updates a user-local Temurin Java 25 Apple Silicon runtime.
-- Syncs the tested mods, resource packs, and shader packs into the vanilla launcher folder.
+- Syncs the tested mods, resource packs, shader packs, and updater tooling scripts into the vanilla launcher folder.
 - Moves unmanaged mod jars aside before installing the tested Pummelchen set.
 - Installs the NeoForge client profile.
 - Adds the Pummelchen Server entry to servers.dat.
