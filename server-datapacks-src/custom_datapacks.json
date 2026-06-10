@@ -6,7 +6,7 @@
       "canonical_key": "pummelchen-welcome",
       "target_mc": "26.1.2",
       "notes": "Replaces Gamingbarn's Guns and Chems' Guns welcome dialogs with a Pummelchen Server welcome screen. Disables Raid Mode permanently. Starter pistol spawns fully loaded.",
-      "sha256": "caa43ad825a2afc47a216dd55823094bb294824a004e546dc8c9e49826724076"
+      "sha256": "7a3db04e5c99c96cc9450bb62aa6ad4a7950030a8a9e15e7dcbb769a8ed6b028"
     }
   ]
 }
