@@ -465,9 +465,7 @@ def next_versioned_release_id(release_root: Path, db_path: Path, server_key: str
         match = VERSIONED_RELEASE_ID_RE.fullmatch(candidate)
         if match and match.group(1) == today:
             highest = max(highest, int(match.group(2)))
-    base = f"release_{today}_V{highest + 1}"
-    suffix = clean_release_suffix(label)
-    return f"{base}_{suffix}" if suffix else base
+    return f"release_{today}_V{highest + 1}"
 
 
 def git_commit() -> str:

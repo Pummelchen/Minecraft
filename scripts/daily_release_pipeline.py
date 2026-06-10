@@ -46,7 +46,7 @@ def release_id_from_key(release_key: str) -> str:
     if not match:
         raise SystemExit(f"release key does not map to release id style: {release_key}")
     year, month, day, version = match.groups()
-    return f"release_{year}{month}{day}_{version.upper()}_daily"
+    return f"release_{year}{month}{day}_{version.upper()}"
 
 
 def run(cmd: Sequence[str], *, dry_run: bool) -> subprocess.CompletedProcess[str]:
