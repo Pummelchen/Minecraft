@@ -47,11 +47,14 @@ def looks_like_file_name(name: str) -> bool:
     """Return true when the string looks like an artifact filename rather than a mod title."""
     if not name:
         return False
-    lowered = name.lower()
+    lowered = name.lower().replace("_", "-").replace(" ", "-")
     if re.search(r"\.(jar|zip)(?:\.disabled)?$", lowered):
         return True
     if lowered.endswith(".jar.disabled") or lowered.endswith(".zip.disabled"):
         return True
+    if re.search(r"\b(neoforge|forge|fabric|quilt|modrinth|mod|jar|zip|client|server|packmeta|codex|fixed)\b", lowered):
+        if re.search(r"\d", lowered):
+            return True
     return bool(re.search(r"\.[a-z0-9]+$", lowered)) and " " not in lowered
 
 
@@ -77,7 +80,7 @@ def file_name_basenames(file_name: str) -> list[str]:
         return []
 
     base = re.sub(r"\.[a-z0-9]+(?:\.[a-z0-9-]+)?$", "", raw, flags=re.IGNORECASE)
-    base = base.replace("_", "-")
+    base = base.replace("_", "-").replace(" ", "-")
     base = base.strip(" -_.")
 
     candidates = []
@@ -177,7 +180,7 @@ def readable_title_from_file_name(file_name: str) -> str:
     if not base:
         return "Pack update"
     base = re.sub(r"\.[a-z0-9]+(?:\.[a-z0-9-]+)?$", "", base, flags=re.IGNORECASE)
-    base = base.replace("_", "-")
+    base = base.replace("_", "-").replace(" ", "-")
     parts = [part for part in base.split("-") if part]
     while parts and looks_like_version_token(parts[-1]):
         parts.pop()
@@ -196,7 +199,7 @@ def slug_from_file_name(file_name: str) -> str:
     if not base:
         return ""
     base = re.sub(r"\.[a-z0-9]+(?:\.[a-z0-9-]+)?$", "", base, flags=re.IGNORECASE)
-    base = base.replace("_", "-")
+    base = base.replace("_", "-").replace(" ", "-")
     parts = [part for part in base.split("-") if part]
     while parts and looks_like_version_token(parts[-1]):
         parts.pop()
@@ -282,7 +285,7 @@ def fetch_mod_name_from_file(conn: sqlite3.Connection, file_name: str) -> str:
         return fetch_mod_name(conn, int(row["mod_id"]), str(row["mod_name"]))
     slug = slug_from_file_name(file_name)
     try:
-        if slug and slug != file_name.lower():
+        if slug and slug != file_name.lower() and looks_like_file_name(file_name):
             project = search_project(slug)
             if project:
                 return clean_title(process_project_name(project))
@@ -450,7 +453,7 @@ def build_from_acceptance_blocks(conn: sqlite3.Connection, cutoff: dt.datetime) 
         target_files = row["target_file_names"] or ""
         first_target_file = target_files.split("\n")[0].strip() if target_files else ""
         title = first_target_file if first_target_file else f"Block {row['block_key']}"
-        title = fetch_mod_name_from_file(conn, title) if looks_like_file_name(title) else title
+        title = fetch_mod_name_from_file(conn, title)
         source_url = fetch_mod_url_from_file(conn, first_target_file) if first_target_file else ""
         updates.append({
             "id": f"ab_{row['id']}",
