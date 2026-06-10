@@ -1107,7 +1107,8 @@ def render_update_checks(runs: list[dict[str, Any]]) -> str:
     countdown_html = """
 <div class="update-countdown">
   <span class="countdown-label">Next automatic update check:</span>
-  <strong id="updateCountdown" class="countdown-value" data-next-run-hour="12">--</strong>
+  <strong id="updateCountdown" class="countdown-value" data-next-run-hour="12" data-activity-url="update-activity.json">--</strong>
+  <p id="activityStatus" class="note" style="margin: 6px 0 0; min-height: 1.2em;">Loading update activity...</p>
 </div>
 <div id="updateActivity" class="update-activity" style="display:none;">
   <h4 class="activity-title">Pipeline Activity</h4>
@@ -1847,18 +1848,96 @@ def render_page(
         }});
       }});
     }}
-    function updateCountdown() {{
+    let updateActivityCache = {{ data: null, loadedAt: 0 }};
+    function updateActivityState(entries) {{
+      if (!Array.isArray(entries) || entries.length === 0) {{
+        return {{ running: false, done: false, latest: null, hasEntries: false }};
+      }}
+      const latest = entries[entries.length - 1];
+      const status = String(latest.status || '').toLowerCase();
+      const message = String(latest.message || '');
+      const stage = String(latest.stage || '').toLowerCase();
+      const isCompletionMessage = /pipeline complete/i.test(message);
+      return {{
+        running: status === 'running' && !isCompletionMessage,
+        done: status === 'ok' && isCompletionMessage,
+        latest,
+        hasEntries: true,
+        stage,
+      }};
+    }}
+    async function fetchUpdateActivity(force) {{
+      const now = Date.now();
+      const el = document.getElementById('updateCountdown');
+      if (!el) return updateActivityCache.data;
+      const endpoint = el.dataset.activityUrl || 'update-activity.json';
+      if (!force && updateActivityCache.data && now - updateActivityCache.loadedAt < 5000) {{
+        return updateActivityCache.data;
+      }}
+      try {{
+        const response = await fetch(endpoint, {{ cache: 'no-store' }});
+        if (!response.ok) {{
+          return updateActivityCache.data;
+        }}
+        const data = await response.json();
+        updateActivityCache = {{ data: data, loadedAt: now }};
+      }} catch {{
+        return updateActivityCache.data;
+      }}
+      return updateActivityCache.data;
+    }}
+    function renderActivityList(container, list, entries) {{
+      if (!Array.isArray(entries) || entries.length === 0) {{
+        container.style.display = 'none';
+        return;
+      }}
+      container.style.display = '';
+      const rows = entries.slice(-5).reverse();
+      list.innerHTML = rows.map(e => {{
+        const ts = e.timestamp || '';
+        const msg = e.message || '';
+        const stage = e.stage || '';
+        const status = e.status || 'info';
+        const stageHtml = stage ? `<span class="activity-stage">${{stage}}</span>` : '';
+        return `<li><span class="activity-ts">${{ts}}</span><span class="activity-msg" data-status="${{status}}">${{msg}}</span>${{stageHtml}}</li>`;
+      }}).join('');
+    }}
+    async function updateCountdown() {{
       const el = document.getElementById('updateCountdown');
       if (!el) return;
+      const statusEl = document.getElementById('activityStatus');
+      const container = document.getElementById('updateActivity');
+      const list = document.getElementById('activityList');
+      const data = await fetchUpdateActivity(true);
+      const entries = data && Array.isArray(data.entries) ? data.entries : [];
+      const state = updateActivityState(entries);
+      if (statusEl) {{
+        if (state.running) {{
+          statusEl.textContent = 'Pipeline status: ' + (state.latest && state.latest.message ? state.latest.message : 'Running');
+        }} else if (state.done) {{
+          statusEl.textContent = 'Last completed: ' + (state.latest && state.latest.message ? state.latest.message : 'Pipeline complete');
+        }} else if (state.latest && state.latest.message) {{
+          statusEl.textContent = 'Latest activity: ' + state.latest.message;
+        }} else {{
+          statusEl.textContent = 'No pipeline activity yet.';
+        }}
+      }}
+      if (container && list) {{
+        renderActivityList(container, list, entries);
+      }}
+      if (state.running) {{
+        el.textContent = 'Running now...';
+        return;
+      }}
       const hour = parseInt(el.dataset.nextRunHour || '12', 10);
       const now = new Date();
-      const utcNow = new Date(now.getTime() + now.getTimezoneOffset() * 60000);
       const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, 0, 0));
-      if (utcNow >= next) next.setUTCDate(next.getUTCDate() + 1);
+      if (now.getTime() >= next.getTime()) {{
+        next.setUTCDate(next.getUTCDate() + 1);
+      }}
       const diffMs = next.getTime() - now.getTime();
       if (diffMs <= 0) {{
-        el.textContent = 'Running now...';
-        fetchUpdateActivity();
+        el.textContent = 'Starting soon...';
         return;
       }}
       const totalMinutes = Math.floor(diffMs / 60000);
@@ -1868,33 +1947,8 @@ def render_page(
       const parts = [];
       if (days > 0) parts.push(`${{days}}d`);
       if (hours > 0) parts.push(`${{hours}}h`);
-      parts.push(`${{minutes}}m`);
+      if (minutes > 0 || parts.length === 0) parts.push(`${{minutes}}m`);
       el.textContent = parts.join(' ');
-      document.getElementById('updateActivity').style.display = 'none';
-    }}
-    function fetchUpdateActivity() {{
-      const container = document.getElementById('updateActivity');
-      const list = document.getElementById('activityList');
-      if (!container || !list) return;
-      fetch('update-activity.json', {{ cache: 'no-store' }})
-        .then(r => r.ok ? r.json() : null)
-        .then(data => {{
-          if (!data || !data.entries || data.entries.length === 0) {{
-            container.style.display = 'none';
-            return;
-          }}
-          container.style.display = '';
-          const entries = data.entries.slice(-5).reverse();
-          list.innerHTML = entries.map(e => {{
-            const ts = e.timestamp || '';
-            const msg = e.message || '';
-            const stage = e.stage || '';
-            const status = e.status || 'info';
-            const stageHtml = stage ? `<span class="activity-stage">${{stage}}</span>` : '';
-            return `<li><span class="activity-ts">${{ts}}</span><span class="activity-msg" data-status="${{status}}">${{msg}}</span>${{stageHtml}}</li>`;
-          }}).join('');
-        }})
-        .catch(() => {{}});
     }}
     updateCountdown();
     window.setInterval(updateCountdown, 5000);
