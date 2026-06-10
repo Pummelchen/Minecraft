@@ -219,53 +219,42 @@ def coordinate_release_restart(conn: sqlite3.Connection, rel_id: str, args: argp
     if host and port and password:
         try:
             release_id = payload.get("release_id", rel_id)
-            message = f"New release ready: {release_id}. Server will save, then restart after everyone logs out."
+            wait_seconds = int(args.player_wait_timeout)
+            message = (
+                f"Update required now: {release_id}. "
+                f"Server will restart in {wait_seconds}s for all clients to get the latest pack."
+            )
             _broadcast_update_message(host, port, password, message, timeout)
             players = _query_players(host, port, password, timeout)
-            if players and players > 0 and args.player_wait_timeout > 0:
-                record_release_event(
-                    conn,
-                    rel_id,
-                    "announce",
-                    "ok",
-                    actor,
-                    f"players_online={players}; waiting up_to={args.player_wait_timeout}s for release {release_id}",
-                )
-                until = time.time() + args.player_wait_timeout
-                next_warning = 0.0
-                while time.time() < until:
-                    if players <= 0:
-                        break
-                    remaining = int(until - time.time())
+            record_release_event(
+                conn,
+                rel_id,
+                "announce",
+                "ok",
+                actor,
+                f"players_at_start={players or 0}; waiting_fixed_window={wait_seconds}s for release {release_id}",
+            )
+            until = time.time() + wait_seconds
+            next_warning = 0.0
+            while time.time() < until:
+                remaining = int(until - time.time())
+                if time.time() >= next_warning:
                     warning = (
-                        f"Server update: {remaining}s to log out for release {release_id}. "
-                        "You may disconnect now to finish the update."
+                        f"Update required now: server restart in {remaining}s for release {release_id}. "
+                        "Please exit now so this update can complete."
                     )
-                    if time.time() >= next_warning:
-                        _broadcast_update_message(host, port, password, warning, timeout)
-                        next_warning = time.time() + max(1.0, args.player_warning_interval)
-                    time.sleep(max(1.0, args.player_check_interval))
-                    current = _query_players(host, port, password, timeout)
-                    if current is None:
-                        break
-                    players = current
-                if players and players > 0:
-                    record_release_event(
-                        conn,
-                        rel_id,
-                        "announce",
-                        "warn",
-                        actor,
-                        f"player_wait_timeout_expired release={release_id}; players_still_online={players}",
-                    )
-            else:
+                    _broadcast_update_message(host, port, password, warning, timeout)
+                    next_warning = time.time() + max(1.0, args.player_warning_interval)
+                time.sleep(max(1.0, args.player_check_interval))
+                players = _query_players(host, port, password, timeout)
+            if players is not None:
                 record_release_event(
                     conn,
                     rel_id,
                     "announce",
-                    "ok",
+                    "warn" if players > 0 else "ok",
                     actor,
-                    f"players_online={players or 0}" if players is not None else "players_unknown",
+                    f"players_at_restart={players}" if players is not None else "players_unknown",
                 )
             _save_world_state(host, port, password, timeout)
             if _stop_service(service, dry_run):

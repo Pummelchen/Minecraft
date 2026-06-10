@@ -24,8 +24,9 @@ What the installer does:
 - Verifies installed file hashes before reporting ready.
 
 Automatic updates:
-- The background updater checks the VPS sync manifest at login and every 5 minutes.
+- The background updater checks the VPS sync manifest at login and every 1 minute.
 - It downloads only missing or changed mod, resource-pack, and shader-pack files.
+- The updater reports current/target release status on each run so the server can track client update state.
 - Each downloaded file is SHA256-verified before it replaces the local copy.
 - Stale managed files are removed, and unmanaged mod jars are moved aside to keep the client in sync with the server.
 - Manual pre-launch sync is available at:

@@ -3,6 +3,7 @@ set -euo pipefail
 
 CHECK_ONLY=0
 QUIET=0
+LOCAL_RELEASE_ID=""
 for arg in "$@"; do
   case "$arg" in
     --check-only) CHECK_ONLY=1 ;;
@@ -49,7 +50,10 @@ MANIFEST_URL="${PUMMELCHEN_SYNC_MANIFEST_URL:-}"
 TARGET_RELEASE_ID="${PUMMELCHEN_RELEASE_ID:-}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 LOG_FILE="${PUMMELCHEN_LOG_FILE:-$LOG_DIR/auto-update-$STAMP.log}"
+UPDATE_STATUS_URL="${PUMMELCHEN_UPDATE_STATUS_URL:-${BASE_URL%/}/client-logs/update-status}"
+CLIENT_ID_FILE="${PUMMELCHEN_HOME}/client-id"
 LOCK_DIR="$PUMMELCHEN_HOME/update.lock"
+INSTALLED_RELEASE_FILE="$STATE_DIR/installed-release.txt"
 
 mkdir -p "$PUMMELCHEN_HOME" "$LOG_DIR" "$CACHE_DIR" "$STATE_DIR"
 if [ "$CHECK_ONLY" != "1" ] && [ "${PUMMELCHEN_LOG_TO_STDOUT:-0}" != "1" ]; then
@@ -66,13 +70,16 @@ log() {
 
 fail() {
   log "PUMMELCHEN_AUTO_UPDATE_FAILED: $*"
-  write_status "failed" "$*"
+  report_update_status "error" "$LOCAL_RELEASE_ID" "${TARGET_RELEASE_ID:-legacy}" "" "" "$*"
+  write_status "failed" "$*" "$LOCAL_RELEASE_ID" "${TARGET_RELEASE_ID:-legacy}"
   exit 1
 }
 
 write_status() {
   local status="$1"
   local message="${2:-}"
+  local installed_release="${3:-}"
+  local target_release="${4:-}"
   cat > "$STATE_DIR/auto-update-status.txt" <<EOF
 updated_at=$STAMP
 status=$status
@@ -80,8 +87,87 @@ message=$message
 base_url=$BASE_URL
 manifest_url=$MANIFEST_URL
 release_id=${TARGET_RELEASE_ID:-legacy}
+installed_release_id=${installed_release:-unknown}
+target_release_id=${target_release:-legacy}
 log_file=$LOG_FILE
 EOF
+}
+
+client_id() {
+  if [ -n "${PUMMELCHEN_CLIENT_ID:-}" ]; then
+    tr -cd 'A-Za-z0-9_.-' <<< "${PUMMELCHEN_CLIENT_ID}" | cut -c1-80
+    return 0
+  fi
+  if [ -f "$CLIENT_ID_FILE" ]; then
+    local existing
+    existing="$(tr -cd 'A-Za-z0-9_.-' < "$CLIENT_ID_FILE" | tr -d '\r\n' | cut -c1-80)"
+    if [ -n "$existing" ]; then
+      printf '%s\n' "$existing"
+      return 0
+    fi
+  fi
+  local generated_id
+  if command -v uuidgen >/dev/null 2>&1; then
+    generated_id="$(uuidgen | tr '[:upper:]' '[:lower:]' | tr -dc 'a-z0-9-')"
+  else
+    generated_id="$(printf 'client-%s-%s' "$(hostname | tr -cd 'A-Za-z0-9_.-')" "$(date +%s)")"
+  fi
+  mkdir -p "$PUMMELCHEN_HOME"
+  printf '%s\n' "$generated_id" > "$CLIENT_ID_FILE" 2>/dev/null || true
+  chmod 600 "$CLIENT_ID_FILE" 2>/dev/null || true
+  printf '%s\n' "$generated_id"
+  return 0
+}
+
+read_installed_release() {
+  if [ -f "$INSTALLED_RELEASE_FILE" ]; then
+    tr -d '\r\n ' < "$INSTALLED_RELEASE_FILE" | tr -cd 'A-Za-z0-9._-' | cut -c1-120
+  fi
+}
+
+write_installed_release() {
+  local release_id="$1"
+  [ -n "$release_id" ] || return 0
+  mkdir -p "$STATE_DIR"
+  printf '%s\n' "$release_id" > "$INSTALLED_RELEASE_FILE"
+}
+
+report_update_status() {
+  local status="$1"
+  local installed_release="$2"
+  local target_release="$3"
+  local changed_files="${4:-}"
+  local manifest_entries="${5:-}"
+  local message="${6:-}"
+  if [ "$CHECK_ONLY" = "1" ]; then
+    return 0
+  fi
+  command -v curl >/dev/null 2>&1 || return 0
+  [ -n "$UPDATE_STATUS_URL" ] || return 0
+  local cid os_summary arch
+  cid="$(client_id || true)"
+  [ -n "$cid" ] || return 0
+  os_summary="$(sw_vers -productName 2>/dev/null || printf macOS) $(sw_vers -productVersion 2>/dev/null || true)"
+  arch="$(uname -m 2>/dev/null || true)"
+
+  local curl_args=(
+    --silent --show-error --fail --location
+    --retry 1 --retry-delay 1
+    --connect-timeout 3 --max-time 8
+    -X POST
+    -H "Content-Type: application/x-www-form-urlencoded; charset=utf-8"
+    -H "User-Agent: PummelchenAutoUpdater/1.0"
+    --data-urlencode "client_id=$cid"
+    --data-urlencode "installed_release_id=$installed_release"
+    --data-urlencode "target_release_id=$target_release"
+    --data-urlencode "status=$status"
+    --data-urlencode "manifest_entries=$manifest_entries"
+    --data-urlencode "changed_files=$changed_files"
+    --data-urlencode "os=$os_summary"
+    --data-urlencode "arch=$arch"
+    --data-urlencode "message=$message"
+  )
+  curl "${curl_args[@]}" "$UPDATE_STATUS_URL" >/dev/null 2>&1 || true
 }
 
 require_command() {
@@ -428,6 +514,13 @@ log "Pummelchen auto-update"
 log "Release: ${TARGET_RELEASE_ID:-legacy}"
 log "Manifest: $MANIFEST_URL"
 log "Minecraft folder: $MC_DIR"
+LOCAL_RELEASE_ID="$(read_installed_release)"
+CURRENT_STATUS="up_to_date"
+if [ -z "$LOCAL_RELEASE_ID" ]; then
+  CURRENT_STATUS="unknown"
+elif [ "$LOCAL_RELEASE_ID" != "${TARGET_RELEASE_ID:-legacy}" ]; then
+  CURRENT_STATUS="behind"
+fi
 
 download_url "$MANIFEST_URL" "$RAW_MANIFEST" || fail "Could not download sync manifest."
 awk -F '\t' 'NF >= 5 && $1 !~ /^#/ && $1 ~ /^(mods|resourcepacks|shaderpacks)$/ { print }' "$RAW_MANIFEST" > "$WANTED_MANIFEST"
@@ -440,6 +533,7 @@ fi
 
 if [ "$CHECK_ONLY" = "1" ]; then
   log "Manifest is readable. Client file entries: $ENTRY_COUNT"
+  report_update_status "$CURRENT_STATUS" "$LOCAL_RELEASE_ID" "${TARGET_RELEASE_ID:-legacy}" "" "$ENTRY_COUNT" "manifest check-only"
   exit 0
 fi
 
@@ -451,10 +545,16 @@ move_unmanaged_files "$WANTED_MANIFEST" "$WANTED_NAMES_DIR"
 reset_client_visual_state
 apply_pummelchen_client_defaults
 repair_server_entry
+if [ "$CURRENT_STATUS" = "behind" ]; then
+  CURRENT_STATUS="updated"
+  LOCAL_RELEASE_ID="$TARGET_RELEASE_ID"
+fi
+write_installed_release "$TARGET_RELEASE_ID"
+write_status "ok" "changed_files=$CHANGED_COUNT entries=$ENTRY_COUNT" "$LOCAL_RELEASE_ID" "$TARGET_RELEASE_ID"
+report_update_status "$CURRENT_STATUS" "$LOCAL_RELEASE_ID" "$TARGET_RELEASE_ID" "$CHANGED_COUNT" "$ENTRY_COUNT" "sync complete"
 
 cp "$WANTED_MANIFEST" "$STATE_DIR/client-sync-manifest.tsv"
 write_legacy_manifest "$WANTED_MANIFEST"
-write_status "ok" "changed_files=$CHANGED_COUNT entries=$ENTRY_COUNT"
 DOCTOR="$PUMMELCHEN_HOME/bin/pummelchen-client-doctor.sh"
 if [ -x "$DOCTOR" ]; then
   "$DOCTOR" --upload-if-new-crash --quiet >/dev/null 2>&1 || true

@@ -32,6 +32,7 @@ DEFAULT_PORT = 7791
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_INSTALLER_EVENT_BYTES = 96 * 1024
 REQUEST_TIMEOUT_SECONDS = 35
+DEFAULT_UPDATE_POLL_SECONDS = 60
 TERMINAL_SESSION_STATUSES = {"ok", "failed", "cancelled"}
 
 
@@ -168,6 +169,48 @@ def init_db(db_path: Path) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_client_installer_events_type ON client_installer_events(event_type, received_at)"
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS client_update_status (
+                client_id TEXT PRIMARY KEY,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                installed_release_id TEXT,
+                target_release_id TEXT,
+                status TEXT NOT NULL,
+                manifest_entries INTEGER,
+                changed_files INTEGER,
+                last_error TEXT,
+                last_status_message TEXT,
+                remote_addr TEXT,
+                user_agent TEXT,
+                os_summary TEXT,
+                arch TEXT
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_client_update_status_seen ON client_update_status(last_seen_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_client_update_status_status ON client_update_status(status)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS client_update_status_events (
+                id INTEGER PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                received_at TEXT NOT NULL,
+                installed_release_id TEXT,
+                target_release_id TEXT,
+                status TEXT NOT NULL,
+                manifest_entries INTEGER,
+                changed_files INTEGER,
+                message TEXT,
+                remote_addr TEXT,
+                user_agent TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_client_update_status_events_client ON client_update_status_events(client_id, received_at)"
+        )
 
 
 def read_zip_text(archive_path: Path, candidates: tuple[str, ...], max_bytes: int = 64_000) -> str:
@@ -228,6 +271,9 @@ class UploadHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if self.path in {"/installer-event", "/client-logs/installer-event"}:
             self.handle_installer_event()
+            return
+        if self.path in {"/update-status", "/client-logs/update-status"}:
+            self.handle_client_update_status()
             return
 
         if self.path not in {"/upload", "/client-logs/upload"}:
@@ -494,6 +540,119 @@ class UploadHandler(BaseHTTPRequestHandler):
                 "session_id": session_id,
                 "session_status": session_status,
                 "received_at": received_at,
+            },
+        )
+
+    def handle_client_update_status(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self.send_json(411, {"ok": False, "error": "missing_length"})
+            return
+        if length <= 0:
+            self.send_json(400, {"ok": False, "error": "empty_update_status"})
+            return
+        if length > self.server.max_event_bytes:
+            self.send_json(413, {"ok": False, "error": "event_too_large"})
+            return
+
+        try:
+            fields = self.read_event_fields(length)
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            self.send_json(400, {"ok": False, "error": "bad_status_body"})
+            return
+
+        client_id = safe_name(fields.get("client_id", ""), "unknown-client")
+        if not client_id:
+            self.send_json(400, {"ok": False, "error": "missing_client_id"})
+            return
+        installed_release_id = clean_text(fields.get("installed_release_id", ""), 160)
+        target_release_id = clean_text(fields.get("target_release_id", ""), 160)
+        status = clean_text(fields.get("status", ""), 30).lower() or "unknown"
+        if status not in {"unknown", "up_to_date", "updated", "behind", "out_of_date", "error", "check_only"}:
+            status = "unknown"
+        manifest_entries = parse_int(fields.get("manifest_entries"))
+        changed_files = parse_int(fields.get("changed_files"))
+        message = clean_text(fields.get("message", ""), 500)
+        os_summary = clean_text(fields.get("os", ""), 300)
+        arch = clean_text(fields.get("arch", ""), 40)
+        remote_addr = self.headers.get("X-Real-IP") or self.client_address[0]
+        user_agent = clean_text(self.headers.get("User-Agent", ""), 300)
+        received_at = utc_now()
+        require_update = int(installed_release_id and target_release_id and installed_release_id != target_release_id)
+
+        with sqlite3.connect(self.server.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO client_update_status(
+                    client_id, first_seen_at, last_seen_at, installed_release_id,
+                    target_release_id, status, manifest_entries, changed_files,
+                    last_error, last_status_message, remote_addr, user_agent,
+                    os_summary, arch
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(client_id) DO UPDATE SET
+                    last_seen_at = excluded.last_seen_at,
+                    installed_release_id = COALESCE(NULLIF(excluded.installed_release_id, ''), client_update_status.installed_release_id),
+                    target_release_id = COALESCE(NULLIF(excluded.target_release_id, ''), client_update_status.target_release_id),
+                    status = COALESCE(NULLIF(excluded.status, ''), client_update_status.status),
+                    manifest_entries = COALESCE(excluded.manifest_entries, client_update_status.manifest_entries),
+                    changed_files = COALESCE(excluded.changed_files, client_update_status.changed_files),
+                    last_status_message = COALESCE(NULLIF(excluded.last_status_message, ''), client_update_status.last_status_message),
+                    os_summary = COALESCE(NULLIF(excluded.os_summary, ''), client_update_status.os_summary),
+                    arch = COALESCE(NULLIF(excluded.arch, ''), client_update_status.arch),
+                    user_agent = COALESCE(NULLIF(excluded.user_agent, ''), client_update_status.user_agent),
+                    remote_addr = COALESCE(NULLIF(excluded.remote_addr, ''), client_update_status.remote_addr),
+                    last_error = COALESCE(NULLIF(excluded.last_error, ''), client_update_status.last_error)
+                """,
+                (
+                    client_id,
+                    received_at,
+                    received_at,
+                    installed_release_id,
+                    target_release_id,
+                    status,
+                    manifest_entries,
+                    changed_files,
+                    "",
+                    message,
+                    remote_addr,
+                    user_agent,
+                    os_summary,
+                    arch,
+                ),
+            )
+            cursor = conn.execute(
+                """
+                INSERT INTO client_update_status_events(
+                    client_id, received_at, installed_release_id, target_release_id,
+                    status, manifest_entries, changed_files, message, remote_addr, user_agent
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    client_id,
+                    received_at,
+                    installed_release_id,
+                    target_release_id,
+                    status,
+                    manifest_entries,
+                    changed_files,
+                    message,
+                    remote_addr,
+                    user_agent,
+                ),
+            )
+            event_id = int(cursor.lastrowid)
+
+        self.send_json(
+            200,
+            {
+                "ok": True,
+                "client_id": client_id,
+                "require_update": bool(require_update),
+                "event_id": event_id,
+                "update_window_seconds": DEFAULT_UPDATE_POLL_SECONDS,
             },
         )
 
