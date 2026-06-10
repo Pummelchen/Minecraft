@@ -135,7 +135,10 @@ def _stop_service(service: str, dry_run: bool) -> bool:
     if dry_run:
         print(f"DRY-RUN systemctl stop {service}")
         return True
-    subprocess.run(["systemctl", "stop", service], check=False, timeout=SERVICE_STOP_TIMEOUT)
+    try:
+        subprocess.run(["systemctl", "stop", service], check=False, timeout=SERVICE_STOP_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        pass
     if _wait_for_service_state(service, False, SERVICE_STOP_TIMEOUT):
         return True
     subprocess.run(
@@ -161,7 +164,10 @@ def _start_service(service: str, dry_run: bool) -> bool:
     if dry_run:
         print(f"DRY-RUN systemctl start {service}")
         return True
-    subprocess.run(["systemctl", "start", service], check=True)
+    try:
+        subprocess.run(["systemctl", "start", service], check=False, timeout=SERVICE_START_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return False
     return _wait_for_service_state(service, True, SERVICE_START_TIMEOUT)
 
 
