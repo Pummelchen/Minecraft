@@ -1897,7 +1897,7 @@ def render_page(
         .catch(() => {{}});
     }}
     updateCountdown();
-    window.setInterval(updateCountdown, 15000);
+    window.setInterval(updateCountdown, 5000);
     updateRelativeTimes();
     window.setInterval(updateRelativeTimes, 60000);
     refreshLiveStats();
