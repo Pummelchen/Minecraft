@@ -102,6 +102,14 @@ def _save_world_state(host: str, port: int, password: str, timeout: float) -> No
         _rcon_send_command(host, port, password, "save-all", timeout)
 
 
+def _systemctl_supported_for_env() -> bool:
+    return (
+        shutil.which("systemctl") is not None
+        and os.name == "posix"
+        and Path("/run/systemd/system").is_dir()
+    )
+
+
 def _service_is_running(service: str) -> bool:
     return (
         subprocess.run(
@@ -177,6 +185,23 @@ def coordinate_release_restart(conn: sqlite3.Connection, rel_id: str, args: argp
     actor = getattr(args, "actor", "release_manager")
     service = args.service
     dry_run = getattr(args, "dry_run", False)
+    if not _systemctl_supported_for_env():
+        record_release_event(
+            conn,
+            rel_id,
+            "restart",
+            "warn",
+            actor,
+            "systemctl unavailable (non-systemd environment); release published without restart",
+        )
+        _send_restart_notice(
+            conn,
+            rel_id,
+            actor,
+            "warn",
+            f"systemctl unavailable; skipping restart for service={service}",
+        )
+        return True
     timeout = float(args.rcon_timeout)
     settings = _rcon_settings(args)
     host: str | None = None
