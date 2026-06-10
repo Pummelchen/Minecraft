@@ -278,7 +278,7 @@ fi
 python3 scripts/generate_status_site.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" --output-dir "$PROJECT_DIR/site/public" --public-url "http://91.99.176.243:7788"
 python3 scripts/live_stats_feed.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" --output "$PROJECT_DIR/site/public/live-stats.json"
 python3 scripts/release_manager.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" --public-downloads "$PROJECT_DIR/site/public/downloads" current-json >/dev/null 2>&1 || true
-python3 scripts/check_client_mod_dependencies.py "$SERVER_DIR/client-package" --minecraft-version 26.1.2 --neoforge-version 26.1.2.71
+python3 scripts/check_client_mod_dependencies.py "$SERVER_DIR/client-package" --minecraft-version 26.1.2 --neoforge-version 26.1.2.71 --server-mods-dir "$SERVER_DIR/mods"
 
 if [ "$CREATE_RELEASE" = "1" ]; then
   python3 scripts/release_manager.py \

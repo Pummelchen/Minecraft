@@ -57,7 +57,9 @@ FATAL_PATTERNS = re.compile(
     r"Failed to compile.*shader|"
     r"Shader compilation failed|EXCEPTION_ACCESS_VIOLATION|OpenGL.*fatal|Invalid session|"
     r"multiplayer\.disconnect\.unverified_username|Authentication servers are down|"
-    r"Failed to connect to the server|Connection refused|Timed out",
+    r"Failed to connect to the server|Connection refused|Timed out|"
+    r"channel.*missing on the server side|Channel of mod .* failed to connect|"
+    r"This channel is missing|play_animation_c2s",
     re.IGNORECASE,
 )
 IGNORED_FATAL_PATTERNS = (

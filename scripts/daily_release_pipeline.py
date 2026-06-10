@@ -536,6 +536,8 @@ def run_pipeline(args: argparse.Namespace) -> int:
                 args.minecraft_version,
                 "--neoforge-version",
                 args.neoforge_version,
+                "--server-mods-dir",
+                str(stage_server_dir / "mods"),
             ],
             dry_run=args.dry_run,
         )

@@ -30,6 +30,7 @@ import process_url_batch as processor
 import release_manager
 import server_ops
 import sanitize_resource_pack_metadata
+from check_client_mod_dependencies import scan_jar_for_c2s_channels
 from moddb import UPDATE_SCAN_ACTIVE_STATUSES, connect, init_db, slugify, source_kind, utc_now
 from pummelchen_utils import MRPACK_NAME, SERVER_PUBLIC_URL, sha256_file
 from update_activity import log_activity
@@ -792,6 +793,34 @@ def apply_client_only(
     server_dir: Path,
 ) -> bool:
     mod_id = int(mod["id"])
+    # --- C2S network channel guard -------------------------------------------
+    # If the candidate registers client-to-server channels it is NOT truly
+    # client-only.  The server must also load it or NeoForge will reject the
+    # connection.  Reject here so the caller can re-route through the server
+    # acceptance path.
+    c2s_indicators = scan_jar_for_c2s_channels(downloaded)
+    if c2s_indicators:
+        indicators_summary = "; ".join(c2s_indicators[:3])
+        log_event(
+            conn,
+            run_id,
+            mod_id,
+            event_type="client_update",
+            status="failed",
+            old_file="; ".join(selected_file_names(conn, mod_id)),
+            new_file=downloaded.name,
+            new_file_id=str(file_info.get("id") or ""),
+            source_kind="modrinth" if file_info.get("_source") == "modrinth" else "curseforge",
+            source_url=processor.stable_project_url(project),
+            release=release_channel(file_info),
+            visible=False,
+            notes=(
+                f"Rejected as client-only: registers C2S network channels "
+                f"({indicators_summary}). Must be installed on both server and client."
+            ),
+        )
+        return False
+    # --- end C2S guard -------------------------------------------------------
     old_files = selected_file_names(conn, mod_id)
     role = "shaderpack" if str(file_info["fileName"]).lower().endswith(".zip") and "shader" in str(mod["name"]).lower() else "server_file"
     section = client_section_for(str(file_info["fileName"]), role)
@@ -1155,6 +1184,17 @@ def scan_and_apply(args: argparse.Namespace) -> int:
                         int(row["installed_on_server"] or 0) == 1
                         for row in conn.execute("SELECT installed_on_server FROM mod_files WHERE mod_id = ?", (mod_id,))
                     ) or active_status in {"awaiting_compatible_release", "blocked_by_dependency", "skipped"}
+                    # C2S channel guard: if a "client-only" mod registers C2S
+                    # network channels it MUST go through server acceptance.
+                    if not server_side:
+                        c2s_hits = scan_jar_for_c2s_channels(downloaded)
+                        if c2s_hits:
+                            print(
+                                f"c2s_reroute=1\tmod_id={mod_id}\tname={mod_name}\t"
+                                f"channels={'; '.join(c2s_hits[:3])}",
+                                flush=True,
+                            )
+                            server_side = True
                     if server_side:
                         ok = apply_server_update(
                             conn,

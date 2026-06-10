@@ -21,6 +21,87 @@ SPECIAL_VERSIONS = {
 }
 CLIENT_SIDES = {"BOTH", "CLIENT"}
 
+# ---------------------------------------------------------------------------
+# C2S network channel detection
+# ---------------------------------------------------------------------------
+# Patterns in compiled .class string constants that indicate a mod registers
+# client-to-server network channels.  If a "client-only" mod matches any of
+# these it is NOT truly client-only — the server must also load it or NeoForge
+# will reject the connection with "channel missing on the server side".
+C2S_CLASS_PATTERNS = re.compile(
+    r"playToServer|sendToServer|C2S|MSG_TO_SERVER|CLIENT_TO_SERVER"
+    r"|NetworkRegistry\.newSimpleChannel|NetworkRegistry\.newEventChannel"
+    r"|SimpleChannel|NetworkEventRegistry"
+    r"|play_animation_c2s|registerC2S|registerServerbound",
+    re.IGNORECASE,
+)
+C2S_SUFFIX_RE = re.compile(r"^[a-z][a-z0-9_]*_c2s$")
+
+
+def scan_jar_for_c2s_channels(jar_path: Path) -> list[str]:
+    """Scan a jar for compiled class constants that indicate C2S network channels.
+
+    Returns a list of detected C2S indicators (empty = safe for client-only use).
+    This catches mods like Extra Animations that register ``play_animation_c2s``
+    channels which cause NeoForge to reject the connection when the server lacks
+    the mod.
+    """
+    findings: list[str] = []
+    try:
+        with zipfile.ZipFile(jar_path) as archive:
+            class_names = [n for n in archive.namelist() if n.endswith(".class")]
+            for class_name in class_names:
+                try:
+                    data = archive.read(class_name)
+                except (KeyError, zipfile.BadZipFile):
+                    continue
+                # Extract printable string constants from the constant pool
+                tokens = re.findall(rb"[\x20-\x7e]{5,120}", data)
+                for token_bytes in tokens:
+                    try:
+                        token = token_bytes.decode("ascii")
+                    except UnicodeDecodeError:
+                        continue
+                    if C2S_CLASS_PATTERNS.search(token):
+                        label = f"{class_name}:{token}"
+                        if label not in findings:
+                            findings.append(label)
+                    if C2S_SUFFIX_RE.match(token) and token not in findings:
+                        findings.append(token)
+    except (zipfile.BadZipFile, OSError):
+        pass
+    return findings
+
+
+def validate_c2s_server_parity(
+    client_mods_dir: Path,
+    server_mods_dir: Path,
+) -> list[str]:
+    """Flag client-only mods that register C2S channels but are missing from the server.
+
+    A mod with C2S channels MUST be present on both client and server or NeoForge
+    will reject the connection at join time.
+    """
+    server_files: set[str] = set()
+    if server_mods_dir.is_dir():
+        for path in server_mods_dir.iterdir():
+            if path.is_file() and path.suffix in (".jar", ".zip"):
+                server_files.add(path.name)
+
+    problems: list[str] = []
+    for jar_path in sorted(client_mods_dir.glob("*.jar"), key=lambda p: p.name.lower()):
+        if jar_path.name in server_files:
+            continue  # present on server — no parity issue
+        c2s = scan_jar_for_c2s_channels(jar_path)
+        if c2s:
+            indicators = "; ".join(c2s[:5])
+            problems.append(
+                f"{jar_path.name}: client-only mod registers C2S network channels "
+                f"but is NOT on the server — connection will be rejected. "
+                f"Indicators: {indicators}"
+            )
+    return problems
+
 
 @dataclass(frozen=True)
 class ModInfo:
@@ -216,6 +297,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("package_dir", type=Path, help="Client package directory or a mods directory")
     parser.add_argument("--minecraft-version", default=SPECIAL_VERSIONS["minecraft"])
     parser.add_argument("--neoforge-version", default=SPECIAL_VERSIONS["neoforge"])
+    parser.add_argument(
+        "--server-mods-dir",
+        type=Path,
+        default=None,
+        help="Server mods directory for C2S channel parity check. "
+        "When set, client-only mods with C2S channels are flagged.",
+    )
     return parser
 
 
@@ -232,6 +320,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             "neoforge": args.neoforge_version,
         },
     )
+    # C2S network channel parity: client-only mods must not register C2S channels
+    if args.server_mods_dir and args.server_mods_dir.is_dir():
+        c2s_problems = validate_c2s_server_parity(mods_dir, args.server_mods_dir)
+        problems.extend(c2s_problems)
+    else:
+        # Even without --server-mods-dir, scan for C2S channels as a warning
+        for jar_path in sorted(mods_dir.glob("*.jar"), key=lambda p: p.name.lower()):
+            c2s = scan_jar_for_c2s_channels(jar_path)
+            if c2s:
+                indicators = "; ".join(c2s[:3])
+                print(
+                    f"WARNING {jar_path.name}: registers C2S network channels — "
+                    f"must be present on server. Indicators: {indicators}",
+                    file=sys.stderr,
+                )
     if problems:
         for problem in problems:
             print(f"ERROR {problem}", file=sys.stderr)
