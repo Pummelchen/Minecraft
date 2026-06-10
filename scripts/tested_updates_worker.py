@@ -24,24 +24,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from moddb import connect
+from pummelchen_utils import table_exists
+
 
 DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
 DEFAULT_OUTPUT = Path("/var/minecraft_mods/site/public/tested-updates.json")
 UPDATE_LOG_DAYS = 30
-
-
-def connect(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
-        (table_name,),
-    ).fetchone()
-    return bool(row)
 
 
 def fetch_mod_name(conn: sqlite3.Connection, mod_id: int | None) -> str:

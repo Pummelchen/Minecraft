@@ -20,7 +20,7 @@ groups:
           description: The exporter cannot find the Java process for the configured server directory.
 
       - alert: PummelchenRecentCrash
-        expr: time() - pummelchen_minecraft_latest_crash_timestamp_seconds < 900
+        expr: time() - pummelchen_minecraft_latest_crash_timestamp_seconds < 900  # 900 s = 15 min window
         for: 1m
         labels:
           severity: warning
@@ -38,7 +38,7 @@ groups:
           description: JVM heap used has stayed above 90% of committed heap for 10 minutes.
 
       - alert: PummelchenHighResidentMemory
-        expr: pummelchen_minecraft_process_rss_bytes > 3800000000
+        expr: pummelchen_minecraft_process_rss_bytes > 3800000000  # ~3.8 GB; slightly below the 4 GB JVM ceiling to leave headroom
         for: 10m
         labels:
           severity: warning
@@ -92,7 +92,7 @@ groups:
           description: current-release.json points at a different release than the active pack release in SQLite.
 
       - alert: PummelchenReleasePointerStale
-        expr: pummelchen_release_pointer_age_seconds > 604800
+        expr: pummelchen_release_pointer_age_seconds > 604800  # 604800 s = 7 days
         for: 15m
         labels:
           severity: warning

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Apply the 2026-06-03 next-batch Minecraft mod tracker updates."""
+"""[ARCHIVED] Apply the 2026-06-03 next-batch Minecraft mod tracker updates.
+
+This is a one-shot migration script kept for historical reference.
+Do not run against a live database; use process_url_batch.py instead.
+"""
 
 from __future__ import annotations
 
@@ -517,10 +521,11 @@ def upsert_mod(
             ),
         )
 
+    request_id = f"nextbatch_{mod_id}_{mod['test_label']}_{now.replace(':', '-')}"
     cur.execute(
         """
-        INSERT INTO test_runs(mod_id, tested_at, test_label, status, error_count, log_path, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO test_runs(mod_id, tested_at, test_label, status, error_count, log_path, notes, request_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             mod_id,
@@ -530,6 +535,7 @@ def upsert_mod(
             int(mod["error_count"]),
             f"/var/minecraft_26.1.2/server-test-results/{mod['test_label']}.log",
             str(mod["notes"]),
+            request_id,
         ),
     )
 
@@ -571,11 +577,12 @@ def note_duplicates(cur: sqlite3.Cursor, now: str) -> None:
             (key,),
         ).fetchone()
         if canonical:
+            request_id = f"nextbatch_dup_{canonical[0]}_{now.replace(':', '-')}"
             cur.execute(
                 """
-                INSERT INTO test_runs(
-                    mod_id, tested_at, test_label, status, error_count, log_path, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO test_runs(
+                    mod_id, tested_at, test_label, status, error_count, log_path, notes, request_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     canonical[0],
@@ -585,6 +592,7 @@ def note_duplicates(cur: sqlite3.Cursor, now: str) -> None:
                     0,
                     "",
                     "Current compatible candidate already installed; duplicate request noted.",
+                    request_id,
                 ),
             )
 
@@ -602,10 +610,11 @@ def add_final_validation(cur: sqlite3.Cursor, now: str) -> None:
         ).fetchone()
         if not row:
             continue
+        request_id = f"nextbatch_final_{row[0]}_{now.replace(':', '-')}"
         cur.execute(
             """
-            INSERT INTO test_runs(mod_id, tested_at, test_label, status, error_count, log_path, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT OR IGNORE INTO test_runs(mod_id, tested_at, test_label, status, error_count, log_path, notes, request_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row[0],
@@ -615,6 +624,7 @@ def add_final_validation(cur: sqlite3.Cursor, now: str) -> None:
                 17,
                 "/var/minecraft_26.1.2/server-test-results/20260603_next_final_active_set.log",
                 ACCEPTED_NOTE,
+                request_id,
             ),
         )
 

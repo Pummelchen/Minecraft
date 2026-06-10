@@ -18,20 +18,13 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from moddb import connect, init_db, slugify, status_rank, utc_now
+from pummelchen_utils import sha256_file
 
 
 DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
 DEFAULT_PROJECT_DIR = Path("/var/minecraft_mods")
 DEFAULT_SERVER_DIR = Path("/var/minecraft_26.1.2")
 DEFAULT_METADATA = Path("server-datapacks-src/custom_datapacks.json")
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def load_entries(project_dir: Path, metadata_path: Path) -> list[dict[str, Any]]:
@@ -226,12 +219,13 @@ def upsert_entry(
         (mod_id, test_label),
     ).fetchone()
     if not exists:
+        request_id = f"datapack_{mod_id}_{test_label}_{now.replace(':', '-')}"
         conn.execute(
             """
-            INSERT INTO test_runs(mod_id, tested_at, test_label, status, error_count, log_path, notes)
-            VALUES (?, ?, ?, 'OK', 0, '', ?)
+            INSERT OR IGNORE INTO test_runs(mod_id, tested_at, test_label, status, error_count, log_path, notes, request_id)
+            VALUES (?, ?, ?, 'OK', 0, '', ?, ?)
             """,
-            (mod_id, now, test_label, f"Registered from {metadata_path}; zip sha256:{digest}."),
+            (mod_id, now, test_label, f"Registered from {metadata_path}; zip sha256:{digest}.", request_id),
         )
     return mod_id
 

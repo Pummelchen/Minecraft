@@ -14,7 +14,6 @@ import argparse
 import contextlib
 import dataclasses
 import datetime as dt
-import hashlib
 import io
 import json
 import os
@@ -40,6 +39,7 @@ import headless_client_lab
 import server_ops
 from moddb import ACTIVE_STATUS_RANKS, connect, init_db, row_hash, slugify, utc_now
 from neoforge_metadata import load_neoforge_metadata
+from pummelchen_utils import read_properties, sha256_file
 
 
 DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
@@ -141,14 +141,6 @@ def safe_label(value: str) -> str:
 
 def now_label(prefix: str) -> str:
     return f"{safe_label(prefix)}_{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d_%H%M%S')}"
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def normalize_mod_id(value: str | None) -> str:
@@ -441,18 +433,6 @@ def find_free_port(start: int = 25580, end: int = 25680) -> int:
                 continue
             return port
     raise RuntimeError(f"no free local port in {start}-{end - 1}")
-
-
-def read_properties(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    if not path.exists():
-        return values
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip()
-    return values
 
 
 def write_properties(path: Path, values: dict[str, str]) -> None:

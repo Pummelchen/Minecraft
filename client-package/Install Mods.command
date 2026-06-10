@@ -142,6 +142,74 @@ on_unhandled_error() {
 
 trap 'on_unhandled_error "$?" "$LINENO"' ERR
 
+# Phase tracking for resume capability
+PHASE_FILE="$STATE_DIR/install-phase"
+PHASES=(
+    "check_arch"
+    "check_manifest"
+    "prepare_dirs"
+    "prepare_java"
+    "sync_files"
+    "verify_files"
+    "install_neoforge"
+    "configure_neoforge"
+    "add_server_entry"
+    "install_auto_updater"
+    "write_state"
+    "complete"
+)
+
+RESUME_FROM="${PUMMELCHEN_RESUME_FROM:-}"
+if [ -n "$RESUME_FROM" ]; then
+    echo "RESUME_FROM=$RESUME_FROM" >&2
+fi
+
+save_phase() {
+    echo "$1" > "$PHASE_FILE"
+}
+
+load_phase() {
+    [ -f "$PHASE_FILE" ] && cat "$PHASE_FILE"
+}
+
+should_run_phase() {
+    local phase="$1"
+    local resume_from="${RESUME_FROM:-$(load_phase)}"
+    if [ -z "$resume_from" ]; then
+        return 0
+    fi
+    local found=0
+    for p in "${PHASES[@]}"; do
+        if [ "$p" = "$resume_from" ]; then
+            found=1
+        fi
+        if [ "$found" = "1" ] && [ "$p" = "$phase" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+run_phase() {
+    local phase="$1"
+    shift
+    if ! should_run_phase "$phase"; then
+        echo "Skipping phase $phase (resume from $(load_phase))"
+        return 0
+    fi
+    echo "=== Phase: $phase ==="
+    save_phase "$phase"
+    emit_event "inner_phase" "info" "running" "Starting phase: $phase" 0
+    "$@"
+    local status=$?
+    if [ $status -ne 0 ]; then
+        emit_event "inner_phase" "error" "failed" "Phase $phase failed" 1
+        return $status
+    fi
+    emit_event "inner_phase" "info" "running" "Completed phase: $phase" 0
+    return 0
+}
+
 echo "Pummelchen Server client installer"
 echo "Package: $PACK_DIR"
 echo "Minecraft folder: $MC_DIR"
@@ -660,35 +728,63 @@ log_file=$LOG_FILE
 EOF
 }
 
-echo "Preparing Java..."
-emit_event "inner_phase" "info" "running" "Preparing Java 25 runtime." 0
-JAVA_BIN="$(ensure_java25)"
-"$JAVA_BIN" -version 2>&1 | sed -n '1p'
-emit_event "inner_phase" "info" "running" "Java runtime is ready." 0
+run_phase check_arch bash -c '
+if [ "$(uname -m)" != "arm64" ]; then
+  fail "This package is built for Apple Silicon Macs."
+fi
+'
 
+run_phase check_manifest bash -c '
+if [ ! -f "$PACK_DIR/manifest.txt" ]; then
+  fail "Package manifest is missing."
+fi
+'
+
+run_phase prepare_dirs bash -c '
+mkdir -p "$MC_DIR" "$STATE_DIR" "$PUMMELCHEN_HOME"
+'
+
+run_phase prepare_java bash -c '
+echo "Preparing Java..."
+JAVA_BIN="$(ensure_java25)"
+"$JAVA_BIN" -version 2>&1 | sed -n "1p"
+'
+
+run_phase sync_files bash -c '
 echo "Syncing Pummelchen files..."
-emit_event "inner_phase" "info" "running" "Syncing mods, resource packs, and shader packs." 0
 sync_section "mods"
 sync_section "resourcepacks"
 sync_section "shaderpacks"
 reset_client_visual_state
 apply_pummelchen_client_defaults
+'
 
+run_phase verify_files bash -c '
 echo "Verifying installed files..."
-emit_event "inner_phase" "info" "running" "Verifying installed client files." 0
 verify_section "mods"
 verify_section "resourcepacks"
 verify_section "shaderpacks"
+'
 
-emit_event "inner_phase" "info" "running" "Installing NeoForge launcher profile." 0
+run_phase install_neoforge bash -c '
 install_neoforge_profile "$JAVA_BIN"
+'
+
+run_phase configure_neoforge bash -c '
 configure_neoforge_profile "$JAVA_BIN"
-emit_event "inner_phase" "info" "running" "Adding Pummelchen server entry." 0
+'
+
+run_phase add_server_entry bash -c '
 add_server_entry "$JAVA_BIN"
-emit_event "inner_phase" "info" "running" "Installing background updater and log uploader." 0
+'
+
+run_phase install_auto_updater bash -c '
 install_auto_updater
-emit_event "inner_phase" "info" "running" "Writing client install state." 0
+'
+
+run_phase write_state bash -c '
 write_state
+'
 
 if [ "$OPEN_LAUNCHER" = "1" ]; then
   emit_event "inner_phase" "info" "running" "Opening Minecraft Launcher." 0
@@ -705,4 +801,5 @@ echo "Installed $MOD_COUNT mod jar(s), $RP_COUNT resource pack file(s), and $SHA
 echo "Server: $SERVER_ADDRESS"
 echo "Log file: $LOG_FILE"
 emit_event "inner_completed" "info" "running" "Managed client installer completed without errors." 0
+save_phase complete
 finish_prompt

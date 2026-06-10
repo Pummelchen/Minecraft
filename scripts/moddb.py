@@ -11,8 +11,10 @@ import argparse
 import csv
 import datetime as dt
 import hashlib
+import random
 import re
 import sqlite3
+import time
 from pathlib import Path
 from typing import Iterable, Sequence
 from urllib.parse import urlparse
@@ -97,6 +99,14 @@ CREATE TABLE IF NOT EXISTS schema_info (
     applied_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    id INTEGER PRIMARY KEY,
+    version INTEGER NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    applied_at TEXT NOT NULL,
+    checksum TEXT
+);
+
 CREATE TABLE IF NOT EXISTS imports (
     id INTEGER PRIMARY KEY,
     imported_at TEXT NOT NULL,
@@ -170,7 +180,8 @@ CREATE TABLE IF NOT EXISTS test_runs (
     status TEXT,
     error_count INTEGER,
     log_path TEXT,
-    notes TEXT
+    notes TEXT,
+    request_id TEXT UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS sheet_rows (
@@ -891,18 +902,79 @@ def error_count_from_notes(notes: str) -> int | None:
     return None
 
 
-def connect(db_path: Path, *, timeout: float = 30.0) -> sqlite3.Connection:
+def connect(db_path: Path, *, timeout: float = 30.0, retries: int = 5, base_delay: float = 0.1) -> sqlite3.Connection:
+    """Connect to SQLite with exponential backoff retry on lock contention."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, timeout=timeout)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    return conn
+    last_error: Exception | None = None
+    for attempt in range(retries):
+        try:
+            conn = sqlite3.connect(db_path, timeout=timeout)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA busy_timeout = 30000")
+            return conn
+        except sqlite3.OperationalError as e:
+            last_error = e
+            if "locked" in str(e).lower() or "busy" in str(e).lower():
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 0.05)
+                time.sleep(delay)
+                continue
+            raise
+    raise last_error or sqlite3.OperationalError("max retries exceeded")
+
+
+# Each entry: (version, name, sql, checksum).
+# Migrations 2-7 have empty SQL because their schema changes are already
+# included in EXTENDED_DB_SCHEMA above; the entries exist solely to record
+# the migration as applied so that run_migrations() does not attempt to
+# re-apply them on a fresh database.
+MIGRATIONS = [
+    (1, "initial_schema", DB_SCHEMA + EXTENDED_DB_SCHEMA, ""),
+    (2, "add_test_runs_request_id", "", ""),  # Column added manually in schema
+    (3, "add_mod_metadata_risk_flags", "", ""),  # Already in EXTENDED_DB_SCHEMA
+    (4, "add_pack_releases", "", ""),  # Already in EXTENDED_DB_SCHEMA
+    (5, "add_acceptance_lab", "", ""),  # Already in EXTENDED_DB_SCHEMA
+    (6, "add_headless_client", "", ""),  # Already in EXTENDED_DB_SCHEMA
+    (7, "add_client_installer", "", ""),  # Already in EXTENDED_DB_SCHEMA
+]
+
+
+def get_applied_migrations(conn: sqlite3.Connection) -> set[int]:
+    """Get set of already applied migration versions."""
+    try:
+        rows = conn.execute("SELECT version FROM schema_migrations").fetchall()
+        return {int(row["version"]) for row in rows}
+    except sqlite3.OperationalError:
+        return set()
+
+
+def run_migrations(conn: sqlite3.Connection) -> int:
+    """Run any pending migrations. Returns number of migrations applied."""
+    applied = get_applied_migrations(conn)
+    applied_count = 0
+
+    for version, name, sql, checksum in MIGRATIONS:
+        if version in applied:
+            continue
+        if sql:
+            conn.executescript(sql)
+        conn.execute(
+            "INSERT INTO schema_migrations(version, name, applied_at, checksum) VALUES (?, ?, ?, ?)",
+            (version, name, utc_now(), checksum),
+        )
+        applied_count += 1
+        print(f"migration_applied={version} name={name}")
+
+    conn.commit()
+    return applied_count
 
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(DB_SCHEMA)
     conn.executescript(EXTENDED_DB_SCHEMA)
+    run_migrations(conn)
+    # Legacy schema_info entries for backward compatibility
     conn.execute(
         "INSERT OR IGNORE INTO schema_info(version, applied_at) VALUES (?, ?)",
         (1, utc_now()),
@@ -1051,10 +1123,11 @@ def import_csv(
             )
         label = test_label_from_notes(cells[13])
         if cells[11] or label or cells[13]:
+            request_id = f"import_{mod_id}_{label or 'notes'}_{utc_now().replace(':', '-')}"
             conn.execute(
                 """
-                INSERT INTO test_runs(mod_id, tested_at, test_label, status, error_count, log_path, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO test_runs(mod_id, tested_at, test_label, status, error_count, log_path, notes, request_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     mod_id,
@@ -1064,6 +1137,7 @@ def import_csv(
                     error_count_from_notes(cells[13]),
                     "",
                     cells[13],
+                    request_id,
                 ),
             )
         conn.execute(
@@ -1308,6 +1382,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init", help="Create or migrate the database schema")
+    sub.add_parser("migrate", help="Run pending database migrations")
 
     import_parser = sub.add_parser("import-sheet-csv", help="Import a Google Sheet grid CSV")
     import_parser.add_argument("csv_path", type=Path)
@@ -1366,6 +1441,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not args.query.lstrip().lower().startswith("select"):
                 raise ValueError("sql command only allows SELECT queries")
             run_sql(conn, args.query)
+        elif args.command == "migrate":
+            applied = run_migrations(conn)
+            print(f"migrations_applied={applied}")
         else:
             parser.error(f"unknown command: {args.command}")
     finally:

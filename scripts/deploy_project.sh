@@ -218,10 +218,15 @@ install -m 0644 systemd/pummelchen-live-stats.timer /etc/systemd/system/pummelch
 install -m 0644 systemd/pummelchen-client-log-receiver.service /etc/systemd/system/pummelchen-client-log-receiver.service
 install -m 0644 systemd/pummelchen-minecraft-metrics.service /etc/systemd/system/pummelchen-minecraft-metrics.service
 install -m 0644 systemd/pummelchen-minecraft.service /etc/systemd/system/pummelchen-minecraft.service
+install -m 0644 systemd/pummelchen-tested-updates.service /etc/systemd/system/pummelchen-tested-updates.service
+install -m 0644 systemd/pummelchen-tested-updates.timer /etc/systemd/system/pummelchen-tested-updates.timer
+install -m 0644 systemd/pummelchen-acceptance-lab-cleanup.service /etc/systemd/system/pummelchen-acceptance-lab-cleanup.service
+install -m 0644 systemd/pummelchen-acceptance-lab-cleanup.timer /etc/systemd/system/pummelchen-acceptance-lab-cleanup.timer
+install -m 0644 systemd/pummelchen-headless-client.service /etc/systemd/system/pummelchen-headless-client.service
 install -m 0644 cron/pummelchen-daily-update /etc/cron.d/pummelchen-daily-update
 install -m 0644 cron/pummelchen-status-site /etc/cron.d/pummelchen-status-site
 systemctl daemon-reload
-systemctl enable --now pummelchen-live-stats.timer pummelchen-client-log-receiver.service pummelchen-minecraft-metrics.service
+systemctl enable --now pummelchen-live-stats.timer pummelchen-client-log-receiver.service pummelchen-minecraft-metrics.service pummelchen-tested-updates.timer pummelchen-acceptance-lab-cleanup.timer
 systemctl enable pummelchen-minecraft.service
 systemctl restart pummelchen-client-log-receiver.service pummelchen-minecraft-metrics.service
 

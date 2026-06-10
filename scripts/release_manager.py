@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import hashlib
 import json
 import os
 import re
@@ -22,6 +21,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from moddb import connect, init_db, utc_now
+from pummelchen_utils import MRPACK_NAME, sha256_file, write_json_atomic
 
 
 DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
@@ -32,17 +32,8 @@ DEFAULT_PROJECT_ROOT = Path("/var/minecraft_mods")
 DEFAULT_CLIENT_UPLOADS = Path("/var/minecraft_mods/client_log_uploads")
 DEFAULT_SERVER_KEY = "minecraft_26_1_2"
 CLIENT_ZIP_NAME = "minecraft_26.1.2_client_macos_apple_silicon.zip"
-MRPACK_NAME = "pummelchen-server-26.1.2.mrpack"
 DMG_NAME = "Pummelchen-Client-Installer.dmg"
 LEGACY_SERVER_BACKUP = Path("/var/minecraft")
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def path_size(path: Path) -> int:
@@ -72,8 +63,12 @@ def path_size(path: Path) -> int:
 
 
 def ensure_path_inside(path: Path, root: Path, label: str) -> None:
+    """Safely check if path is inside root without following symlinks."""
     root_resolved = root.resolve()
-    path_resolved = path.resolve() if path.exists() else path.parent.resolve() / path.name
+    try:
+        path_resolved = path.resolve(strict=False)
+    except OSError:
+        path_resolved = path.parent.resolve() / path.name
     try:
         path_resolved.relative_to(root_resolved)
     except ValueError as exc:
@@ -102,13 +97,6 @@ def remove_path(path: Path, *, dry_run: bool, reason: str) -> int:
     else:
         path.unlink()
     return bytes_count
-
-
-def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(path)
 
 
 def hardlink_or_copy(src: Path, dst: Path) -> None:
@@ -698,7 +686,10 @@ def safe_remove_release_dir(path: Path, release_root: Path, *, dry_run: bool) ->
     if not path.exists():
         return False
     release_root_resolved = release_root.resolve()
-    path_resolved = path.resolve()
+    try:
+        path_resolved = path.resolve(strict=False)
+    except OSError:
+        path_resolved = path.parent.resolve() / path.name
     try:
         path_resolved.relative_to(release_root_resolved)
     except ValueError as exc:

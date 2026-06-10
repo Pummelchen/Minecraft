@@ -19,10 +19,11 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import minecraft_metrics_exporter as metrics
+from pummelchen_utils import SERVER_HOST, SERVER_MC_PORT
 
 
-DEFAULT_HOST = "91.99.176.243"
-DEFAULT_PORT = 25565
+DEFAULT_HOST = SERVER_HOST
+DEFAULT_PORT = SERVER_MC_PORT
 
 
 def read_release_pointer(location: str) -> dict[str, Any]:

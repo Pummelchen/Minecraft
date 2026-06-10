@@ -6,24 +6,32 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import html
+import json
 import os
 import platform
 import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from moddb import connect
+from pummelchen_utils import MRPACK_NAME, SERVER_HOST, SERVER_MC_PORT, SERVER_PUBLIC_URL, display_release_version, human_bytes, table_exists
 
 
 DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
 DEFAULT_OUTPUT = Path("/var/minecraft_mods/site/public")
 DEFAULT_SERVER = Path("/var/minecraft_26.1.2")
-DEFAULT_PUBLIC_URL = "http://91.99.176.243:7788"
+DEFAULT_PUBLIC_URL = SERVER_PUBLIC_URL
 CLIENT_ZIP_NAME = "minecraft_26.1.2_client_macos_apple_silicon.zip"
 INSTALLER_NAME = "install-pummelchen.command"
-MRPACK_NAME = "pummelchen-server-26.1.2.mrpack"
 CLIENT_DMG_NAME = "Pummelchen-Client-Installer.dmg"
 CLIENT_SYNC_MANIFEST_NAME = "client-sync-manifest.tsv"
 CLIENT_FILES_DIR_NAME = "client-files"
@@ -74,16 +82,6 @@ def read_key_value_file(path: Path) -> dict[str, str]:
         key, value = line.split("=", 1)
         data[key] = value.strip().strip('"')
     return data
-
-
-def human_bytes(value: float) -> str:
-    units = ["B", "KB", "MB", "GB", "TB"]
-    size = float(value)
-    for unit in units:
-        if size < 1024 or unit == units[-1]:
-            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
-        size /= 1024
-    return f"{size:.1f} TB"
 
 
 def pct(used: float, total: float) -> str:
@@ -213,20 +211,6 @@ def collect_stats(server_dir: Path) -> dict[str, str]:
         "Client Mod Pack Generated": client_pack_generated,
         "Client Mod Pack Generated ISO": client_pack_generated_iso,
     }
-
-
-def connect(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
-        (table_name,),
-    ).fetchone()
-    return bool(row)
 
 
 def fetch_mods(conn: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -392,23 +376,6 @@ def fetch_active_release(conn: sqlite3.Connection) -> dict[str, Any]:
         """
     ).fetchone()
     return dict(row) if row else {}
-
-
-def display_release_version(release_id: str) -> str:
-    value = (release_id or "").strip()
-    match = re.fullmatch(r"release_(\d{4})(\d{2})(\d{2})_([^_]+)(?:_.*)?", value)
-    if match:
-        year, month, day, version = match.groups()
-        if version_match := re.match(r"(V\d+)", version, re.IGNORECASE):
-            version = version_match.group(1).upper()
-        return f"{year}-{month}-{day}_{version}"
-    match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})_([^_]+)(?:_.*)?", value)
-    if match:
-        year, month, day, version = match.groups()
-        if version_match := re.match(r"(V\d+)", version, re.IGNORECASE):
-            version = version_match.group(1).upper()
-        return f"{year}-{month}-{day}_{version}"
-    return value or "Unknown"
 
 
 def version_text(files: list[dict[str, Any]]) -> str:
@@ -661,26 +628,33 @@ def render_updates(updates: list[dict[str, Any]]) -> str:
         return f'<p class="note">No tested successful updates have been logged in the last {UPDATE_LOG_DAYS} days. The daily updater only publishes entries here after a change passes validation and the client package is rebuilt when needed.</p>'
     cards = []
     for event in updates:
-        tested_at = escape(event.get("tested_at"))
-        mod_name = escape(clean_update_title(event.get("mod_name") or "Pack update"))
-        homepage_url = safe_external_url(event.get("homepage_url"))
+        tested_at = escape(event.get("tested_at", ""))
+        tested_at_display = escape(event.get("tested_at_display", event.get("tested_at", "")))
+        title = escape(clean_update_title(event.get("title") or event.get("mod_name") or "Pack update"))
+        homepage_url = safe_external_url(event.get("source_url") or event.get("homepage_url"))
         title_html = (
-            f'<a href="{escape(homepage_url)}" target="_blank" rel="noopener noreferrer">{mod_name}</a>'
+            f'<a href="{escape(homepage_url)}" target="_blank" rel="noopener noreferrer">{title}</a>'
             if homepage_url
-            else mod_name
+            else title
         )
+        source_badge = escape(event.get("source", "unknown"))
+        event_type = escape(event.get("event_type", "update"))
         old_new = ""
-        if event.get("old_file_name") or event.get("new_file_name"):
-            old_new = f"<p><strong>File:</strong> {escape(event.get('old_file_name') or 'none')} -> {escape(event.get('new_file_name') or 'none')}</p>"
+        if event.get("old_file") or event.get("new_file"):
+            old_new = f"<p><strong>File:</strong> {escape(event.get('old_file') or 'none')} -> {escape(event.get('new_file') or 'none')}</p>"
+        notes = escape(event.get("notes", ""))
+        notes_html = f"<p class=\"run-detail\">{notes}</p>" if notes else ""
         cards.append(
             f"""
 <article class="update-card">
   <div class="mod-topline">
     <h4>{title_html}</h4>
-    <span class="badge">{escape(event.get('event_type'))}</span>
+    <span class="badge">{event_type}</span>
+    <span class="badge" style="background:#1a2a1a; border-color:#3d5c3d; color:#9fdfaf;">{source_badge}</span>
   </div>
-  <p><strong>When:</strong> <time class="relative-time" datetime="{tested_at}" title="{tested_at}">{tested_at}</time></p>
+  <p><strong>When:</strong> <time class="relative-time" datetime="{tested_at}" title="{tested_at}">{tested_at_display}</time></p>
   {old_new}
+  {notes_html}
 </article>
 """
         )
@@ -694,92 +668,7 @@ def render_update_checks(runs: list[dict[str, Any]]) -> str:
   <strong id="updateCountdown" class="countdown-value" data-next-run-hour="12">--</strong>
 </div>
 """
-    if not runs:
-        return countdown_html + '<p class="note">No update runs recorded yet.</p>'
-    blocks = []
-    for run in runs:
-        started = escape(run.get("started_at") or "")
-        completed = escape(run.get("completed_at") or "")
-        trigger = escape(run.get("trigger_type") or "")
-        status = escape(run.get("status") or "")
-        scanned = run.get("scanned_mods") or 0
-        applied = run.get("applied") or 0
-        failed = run.get("failed") or 0
-        skipped = run.get("skipped") or 0
-        run_label = escape(run.get("run_label") or "")
-        status_class = "run-pass" if status == "complete" and applied > 0 and failed == 0 else ("run-fail" if failed > 0 else "run-neutral")
-        summary_parts = [f"{scanned} scanned", f"{applied} applied"]
-        if failed:
-            summary_parts.append(f"{failed} failed")
-        if skipped:
-            summary_parts.append(f"{skipped} skipped")
-        summary = ", ".join(summary_parts)
-        events = run.get("events", [])
-        if events:
-            rows = []
-            for event in events:
-                mod_name = escape(clean_update_title(event.get("mod_name") or "Unknown mod"))
-                homepage_url = safe_external_url(event.get("homepage_url"))
-                name_html = (
-                    f'<a href="{escape(homepage_url)}" target="_blank" rel="noopener noreferrer">{mod_name}</a>'
-                    if homepage_url
-                    else mod_name
-                )
-                event_status = event.get("status") or ""
-                event_type = event.get("event_type") or ""
-                if event_status == "applied":
-                    badge_class = "badge-applied"
-                    badge_text = "applied"
-                elif event_status == "failed":
-                    badge_class = "badge-failed"
-                    badge_text = "failed"
-                elif event_status == "dry_run":
-                    badge_class = "badge-dryrun"
-                    badge_text = "dry run"
-                else:
-                    badge_class = ""
-                    badge_text = escape(event_status)
-                new_file = escape(event.get("new_file_name") or "")
-                notes = escape(event.get("notes") or "")
-                detail_parts = []
-                if new_file:
-                    detail_parts.append(new_file)
-                if notes:
-                    detail_parts.append(notes)
-                detail = " — ".join(detail_parts)
-                rows.append(
-                    f"""<tr>
-  <td>{name_html}</td>
-  <td><span class="run-badge {badge_class}">{badge_text}</span></td>
-  <td class="run-detail">{detail}</td>
-</tr>"""
-                )
-            table_html = f"""<table class="run-events-table">
-<thead><tr><th>Mod</th><th>Result</th><th>Details</th></tr></thead>
-<tbody>{"".join(rows)}</tbody>
-</table>"""
-        else:
-            table_html = '<p class="note">No per-mod events recorded for this run.</p>'
-        blocks.append(
-            f"""<details class="run-block {status_class}" open>
-  <summary>
-    <span class="run-summary-title">
-      <time class="relative-time" datetime="{started}" title="{started}">{started}</time>
-      <span class="run-trigger">{trigger}</span>
-    </span>
-    <span class="run-summary-stats">{summary}</span>
-  </summary>
-  <div class="run-body">
-    <p class="run-meta">
-      <strong>Started:</strong> <time class="relative-time" datetime="{started}" title="{started}">{started}</time>
-      &middot; <strong>Completed:</strong> <time class="relative-time" datetime="{completed}" title="{completed}">{completed}</time>
-      &middot; <strong>Label:</strong> {run_label}
-    </p>
-    {table_html}
-  </div>
-</details>"""
-        )
-    return countdown_html + "\n".join(blocks)
+    return countdown_html
 
 
 def render_page(
@@ -1211,8 +1100,8 @@ def render_page(
         <h1>Pummelchen Server</h1>
         <p class="subtitle">A compact status and install page for the private Minecraft 26.1.2 NeoForge server on the Debian VPS.</p>
         <div class="pill-row">
-          <span class="pill">Server: 91.99.176.243:25565</span>
-          <span class="pill">Web: 91.99.176.243:7788</span>
+          <span class="pill">Server: {SERVER_HOST}:{SERVER_MC_PORT}</span>
+          <span class="pill">Web: {SERVER_HOST}:7788</span>
           <span class="pill">Generated: {generated}</span>
           <span class="pill">{server_count} Server Mods</span>
           <span class="pill">{client_count} Client Mods</span>
@@ -1539,6 +1428,18 @@ def write_client_sync_manifest(server_dir: Path, downloads: Path) -> None:
     (downloads / CLIENT_SYNC_MANIFEST_NAME).write_text("\n".join(manifest_lines) + "\n", encoding="utf-8")
 
 
+def fetch_tested_updates_json(output_dir: Path) -> list[dict[str, Any]]:
+    """Read pre-built tested updates feed written by the 15-min worker."""
+    json_path = output_dir / "tested-updates.json"
+    if not json_path.exists():
+        return []
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        return data.get("updates", [])
+    except Exception:
+        return []
+
+
 def write_site(db_path: Path, output_dir: Path, server_dir: Path, public_url: str) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     downloads = output_dir / "downloads"
@@ -1552,9 +1453,11 @@ def write_site(db_path: Path, output_dir: Path, server_dir: Path, public_url: st
 
     with connect(db_path) as conn:
         mods = fetch_mods(conn)
-        updates = fetch_updates(conn)
         update_checks = fetch_update_checks(conn)
         active_release = fetch_active_release(conn)
+
+    # Use the comprehensive tested updates feed from the independent worker
+    updates = fetch_tested_updates_json(output_dir)
 
     server_mods = [mod for mod in mods if is_server_mod(mod)]
     client_mods = [mod for mod in mods if is_client_included(mod) and not is_server_mod(mod)]

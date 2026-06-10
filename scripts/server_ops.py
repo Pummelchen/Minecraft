@@ -22,6 +22,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import generate_status_site as site
 from moddb import connect, init_db, utc_now
+from pummelchen_utils import sha256_file
 
 
 DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
@@ -46,16 +47,6 @@ def run_text(cmd: list[str], cwd: Path | None = None) -> str:
         return subprocess.check_output(cmd, cwd=cwd, text=True, stderr=subprocess.STDOUT, timeout=15).strip()
     except Exception:
         return ""
-
-
-def sha256_file(path: Path) -> str:
-    import hashlib
-
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def java_version() -> str:

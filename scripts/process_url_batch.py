@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import hashlib
 import json
 import re
 import shutil
@@ -25,6 +24,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from moddb import HEADERS, connect, row_hash, slugify, source_kind, status_rank, utc_now
+import random
 
 
 API_BASE = "https://api.curse.tools/v1/cf"
@@ -102,15 +102,46 @@ def safe_run_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", value).strip("_") or "url_batch"
 
 
+def _api_request_with_retry(
+    url: str,
+    *,
+    retries: int = 3,
+    base_delay: float = 1.0,
+    max_delay: float = 30.0,
+) -> urllib.request.urlopen:
+    """Make an HTTP request with exponential backoff retry on 429/5xx errors."""
+    last_error: Exception | None = None
+    for attempt in range(retries):
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        try:
+            return urllib.request.urlopen(request, timeout=45)
+        except urllib.error.HTTPError as e:
+            last_error = e
+            if e.code == 429 or (500 <= e.code < 600):
+                delay = min(base_delay * (2 ** attempt) + random.uniform(0, 0.5), max_delay)
+                retry_after = e.headers.get("Retry-After")
+                if retry_after and retry_after.isdigit():
+                    delay = max(delay, int(retry_after))
+                time.sleep(delay)
+                continue
+            raise
+        except urllib.error.URLError as e:
+            last_error = e
+            if attempt < retries - 1:
+                delay = min(base_delay * (2 ** attempt) + random.uniform(0, 0.5), max_delay)
+                time.sleep(delay)
+                continue
+            raise
+    raise last_error or RuntimeError("max retries exceeded")
+
+
 def api_json(url: str) -> dict[str, Any]:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=45) as response:
+    with _api_request_with_retry(url) as response:
         return json.load(response)
 
 
 def api_json_list(url: str) -> list[dict[str, Any]]:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=45) as response:
+    with _api_request_with_retry(url) as response:
         return json.load(response)
 
 
@@ -365,14 +396,6 @@ def download_file(file_info: dict[str, Any], dest_dir: Path) -> Path:
     if expected and target.stat().st_size != expected:
         raise RuntimeError(f"downloaded size mismatch for {filename}")
     return target
-
-
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def existing_ok_mod(conn: sqlite3.Connection, slug: str) -> sqlite3.Row | None:
@@ -654,14 +677,20 @@ def insert_test_run(
     error_count: int,
     log_path: str,
     notes: str,
-) -> None:
-    conn.execute(
+    request_id: str | None = None,
+) -> bool:
+    """Insert a test run with optional idempotency key. Returns True if inserted, False if duplicate."""
+    if request_id is None:
+        request_id = f"{mod_id}_{label}_{utc_now().replace(':', '-')}"
+    cur = conn.execute(
         """
-        INSERT INTO test_runs(mod_id, tested_at, test_label, status, error_count, log_path, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO test_runs(mod_id, tested_at, test_label, status, error_count, log_path, notes, request_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (mod_id, utc_now(), label, status, error_count, log_path, notes),
+        (mod_id, utc_now(), label, status, error_count, log_path, notes, request_id),
     )
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def install_to(path: Path, dest_dir: Path) -> Path:
@@ -967,7 +996,7 @@ def process_item(
                 files=[file_path.name],
                 note=note,
             )
-            insert_test_run(conn, mod_id, f"{label}_isolated", isolated_status, len(isolated_severe), isolated_log_path, note)
+            insert_test_run(conn, mod_id, f"{label}_isolated", isolated_status, len(isolated_severe), isolated_log_path, note, request_id=f"isolated_{mod_id}_{label}")
             update_batch_item(conn, int(item["batch_item_id"]), "failed", note)
             return f"failed {slug}: isolated acceptance {severe_summary}"
 
@@ -1005,7 +1034,7 @@ def process_item(
                     note=dep_note,
                     entry_type="Dependency",
                 )
-                insert_test_run(conn, dep_mod_id, label, test_status, error_count, log_path, dep_note)
+                insert_test_run(conn, dep_mod_id, label, test_status, error_count, log_path, dep_note, request_id=f"dep_{dep_mod_id}_{label}")
             client_path = install_to(main_target, CLIENT_MODS_DIR)
             note = f"{file_note} Isolated acceptance lab passed, then boot test {label} reached Done with no severe filtered errors."
             set_mod_state(
@@ -1021,7 +1050,7 @@ def process_item(
                 files=[main_target.name],
                 note=note,
             )
-            insert_test_run(conn, mod_id, label, test_status, error_count, log_path, note)
+            insert_test_run(conn, mod_id, label, test_status, error_count, log_path, note, request_id=f"main_{mod_id}_{label}")
             update_batch_item(conn, int(item["batch_item_id"]), "ok", note)
             return f"ok-server {slug}: {client_path.name}"
 
@@ -1041,7 +1070,7 @@ def process_item(
             files=[path.name for path in failed_paths],
             note=note,
         )
-        insert_test_run(conn, mod_id, label, test_status, error_count, log_path, note)
+        insert_test_run(conn, mod_id, label, test_status, error_count, log_path, note, request_id=f"main_{mod_id}_{label}")
         update_batch_item(conn, int(item["batch_item_id"]), "failed", note)
         return f"failed {slug}: {severe_summary}"
     except (urllib.error.URLError, TimeoutError, RuntimeError, subprocess.TimeoutExpired) as exc:
@@ -1103,6 +1132,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # RUN_PREFIX and DOWNLOAD_DIR are intentionally module-level so that
+    # helper functions (move_to_failed, run_server_test, etc.) can reference
+    # them without an extra context parameter.
     global RUN_PREFIX, DOWNLOAD_DIR
     RUN_PREFIX = safe_run_name(args.batch_name)
     DOWNLOAD_DIR = SERVER_DIR / "codex-downloads" / RUN_PREFIX

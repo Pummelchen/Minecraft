@@ -14,13 +14,19 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from pummelchen_utils import SERVER_PUBLIC_URL
+
 
 DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
 DEFAULT_SERVER_DIR = Path("/var/minecraft_26.1.2")
 DEFAULT_RELEASE_ROOT = Path("/var/minecraft_mods/releases")
 DEFAULT_PUBLIC_DOWNLOADS = Path("/var/minecraft_mods/site/public/downloads")
 DEFAULT_RELEASE_BACKUPS = Path("/var/minecraft_mods/release_backups")
-DEFAULT_PUBLIC_URL = "http://91.99.176.243:7788"
+DEFAULT_PUBLIC_URL = SERVER_PUBLIC_URL
 DEFAULT_SERVER_KEY = "minecraft_26_1_2"
 DEFAULT_MINECRAFT_VERSION = "26.1.2"
 DEFAULT_NEOFORGE_VERSION = "26.1.2.71"
@@ -63,9 +69,9 @@ def safe_stage_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("_")
 
 
-def prepare_staging_server(source_server: Path, stage_root: Path, release_key: str, started_at: str, *, dry_run: bool) -> Path:
+def prepare_staging_server(source_server: Path, stage_root: Path, release_key: str, started_at: str, *, dry_run: bool, simulate_all: bool = False) -> Path:
     stage_dir = stage_root / f"daily_{safe_stage_name(release_key)}_{safe_stage_name(started_at)}"
-    if dry_run:
+    if dry_run or simulate_all:
         print(f"pipeline_stage_server={stage_dir}")
         return stage_dir
 
@@ -104,26 +110,29 @@ def prepare_staging_server(source_server: Path, stage_root: Path, release_key: s
         "tmpfs",
     }
 
-    for item in sorted(source_server.iterdir()):
-        if item.name in excluded:
-            continue
-        destination = stage_dir / item.name
-        if item.is_dir() and not item.is_symlink():
-            shutil.copytree(item, destination, symlinks=True, dirs_exist_ok=True)
-        elif item.is_file():
-            if destination.exists():
-                destination.unlink()
-            shutil.copy2(item, destination)
+    if not simulate_all:
+        for item in sorted(source_server.iterdir()):
+            if item.name in excluded:
+                continue
+            destination = stage_dir / item.name
+            if item.is_dir() and not item.is_symlink():
+                shutil.copytree(item, destination, symlinks=True, dirs_exist_ok=True)
+            elif item.is_file():
+                if destination.exists():
+                    destination.unlink()
+                shutil.copy2(item, destination)
 
-    # Ensure required runtime directories are available for isolated tests and packaging.
-    for name in ("mods", "server-datapacks", "client-package", "libraries", "config", "defaultconfigs"):
-        source = source_server / name
-        target = stage_dir / name
-        if source.exists() and not target.exists():
-            if source.is_dir() and not source.is_symlink():
-                shutil.copytree(source, target, symlinks=True, dirs_exist_ok=True)
-            elif source.is_file():
-                shutil.copy2(source, target)
+        # Ensure required runtime directories are available for isolated tests and packaging.
+        for name in ("mods", "server-datapacks", "client-package", "libraries", "config", "defaultconfigs"):
+            source = source_server / name
+            target = stage_dir / name
+            if source.exists() and not target.exists():
+                if source.is_dir() and not source.is_symlink():
+                    shutil.copytree(source, target, symlinks=True, dirs_exist_ok=True)
+                elif source.is_file():
+                    shutil.copy2(source, target)
+    else:
+        print(f"pipeline_simulate_all=skipped filesystem copy for staging server", flush=True)
 
     print(f"pipeline_stage_server={stage_dir}")
     return stage_dir
@@ -307,6 +316,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
         release_key=release_key,
         started_at=started_at,
         dry_run=args.dry_run,
+        simulate_all=args.simulate_all,
     )
     print(f"pipeline_started_at={started_at}", flush=True)
     print(f"pipeline_release_key={release_key}", flush=True)
@@ -635,6 +645,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--release-key", default="")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--simulate-applied", action="store_true", help="Dry-run the full post-update path.")
+    parser.add_argument("--simulate-all", action="store_true", help="Mock all filesystem mutations (implies --dry-run).")
     return parser
 
 

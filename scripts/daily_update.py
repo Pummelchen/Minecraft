@@ -7,7 +7,6 @@ import argparse
 import concurrent.futures
 import csv
 import datetime as dt
-import hashlib
 import json
 import os
 import re
@@ -15,6 +14,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -31,16 +31,16 @@ import release_manager
 import server_ops
 import sanitize_resource_pack_metadata
 from moddb import UPDATE_SCAN_ACTIVE_STATUSES, connect, init_db, slugify, source_kind, utc_now
+from pummelchen_utils import MRPACK_NAME, SERVER_PUBLIC_URL, sha256_file
 
 
 DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
 DEFAULT_SERVER_DIR = Path("/var/minecraft_26.1.2")
 DEFAULT_SERVER_KEY = "minecraft_26_1_2"
-DEFAULT_PUBLIC_URL = "http://91.99.176.243:7788"
+DEFAULT_PUBLIC_URL = SERVER_PUBLIC_URL
 DEFAULT_RELEASE_ROOT = Path("/var/minecraft_mods/releases")
 DEFAULT_PUBLIC_DOWNLOADS = Path("/var/minecraft_mods/site/public/downloads")
 CLIENT_ZIP_NAME = "minecraft_26.1.2_client_macos_apple_silicon.zip"
-MRPACK_NAME = "pummelchen-server-26.1.2.mrpack"
 SERVER_DISABLED_FILE_MARKERS = {
     "animalgarden_commonraven": "server watchdog crash from Common Raven flying AI chunk loads",
     "automated_harvest": "server watchdog crash in automated_harvest HarvestTicker",
@@ -236,22 +236,71 @@ def resolve_candidate(conn: sqlite3.Connection, mod: sqlite3.Row) -> tuple[dict[
 
 
 # ---------------------------------------------------------------------------
-# Parallel candidate resolution
+# Parallel candidate resolution with rate limiting
 # ---------------------------------------------------------------------------
 
 MODRINTH_BATCH_SIZE = 20
 CF_MAX_WORKERS = 8
+API_RATE_LIMIT = 10  # requests per second per host
+API_RATE_BURST = 20  # burst allowance
+
+# Rate limiter using token bucket
+class RateLimiter:
+    def __init__(self, rate: float, burst: int):
+        self.rate = rate
+        self.burst = burst
+        self.tokens = float(burst)
+        self.last_update = time.monotonic()
+        self.lock = threading.Lock()
+
+    def acquire(self) -> None:
+        with self.lock:
+            now = time.monotonic()
+            elapsed = now - self.last_update
+            self.tokens = min(self.burst, self.tokens + elapsed * self.rate)
+            if self.tokens >= 1:
+                self.tokens -= 1
+                self.last_update = now
+                return
+            wait = (1 - self.tokens) / self.rate
+            self.tokens = 0
+            self.last_update = now + wait
+        time.sleep(wait)
+
+_cf_limiter = RateLimiter(API_RATE_LIMIT, API_RATE_BURST)
+_modrinth_limiter = RateLimiter(API_RATE_LIMIT, API_RATE_BURST)
 
 
 def _resolve_cf(slug: str) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
-    """Thread target: resolve a single CurseForge project + files."""
+    """Thread target: resolve a single CurseForge project + files with rate limiting."""
+    _cf_limiter.acquire()
     try:
         project = curseforge_project(slug)
         if project:
+            _cf_limiter.acquire()
             files = curseforge_files(int(project["id"]))
             return project, files
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"warning: curseforge fetch failed for {slug}: {exc}", file=sys.stderr)
+    return None
+
+
+def _fetch_modrinth_project(slug: str) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """Fetch Modrinth project with rate limiting."""
+    _modrinth_limiter.acquire()
+    try:
+        projects = processor.api_json_bulk([slug])
+        if not projects:
+            return None
+        proj = projects[0]
+        _modrinth_limiter.acquire()
+        versions = processor.modrinth_versions_bulk(proj["slug"])
+        proj["_source"] = "modrinth"
+        file_info = processor.choose_modrinth_file_from_versions(proj, versions)
+        if file_info:
+            return proj, file_info
+    except Exception as exc:
+        print(f"warning: modrinth fetch failed for {slug}: {exc}", file=sys.stderr)
     return None
 
 
@@ -259,7 +308,7 @@ def resolve_candidates_parallel(
     conn: sqlite3.Connection,
     mods: list[sqlite3.Row],
 ) -> dict[int, tuple[dict[str, Any], dict[str, Any]] | None]:
-    """Resolve candidates for all mods using bulk Modrinth + threaded CurseForge."""
+    """Resolve candidates for all mods using bulk Modrinth + threaded CurseForge with rate limiting."""
     modrinth_slugs: dict[int, str] = {}
     cf_slugs: dict[int, str] = {}
 
@@ -277,47 +326,29 @@ def resolve_candidates_parallel(
     cf_map: dict[str, tuple[dict[str, Any], list[dict[str, Any]]] | None] = {}
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=CF_MAX_WORKERS) as pool:
-        # --- Modrinth bulk: batch projects + per-project versions -----------
-        def fetch_modrinth_all() -> None:
-            slug_list = list(set(modrinth_slugs.values()))
-            for batch_start in range(0, len(slug_list), MODRINTH_BATCH_SIZE):
-                batch = slug_list[batch_start : batch_start + MODRINTH_BATCH_SIZE]
-                try:
-                    projects = processor.api_json_bulk(batch)
-                except Exception:
-                    continue
-                for proj in projects:
-                    proj_slug = str(proj.get("slug") or "")
-                    if not proj_slug:
-                        continue
-                    proj["_source"] = "modrinth"
-                    try:
-                        versions = processor.modrinth_versions_bulk(proj_slug)
-                    except Exception:
-                        continue
-                    file_info = processor.choose_modrinth_file_from_versions(proj, versions)
-                    if file_info:
-                        modrinth_map[proj_slug] = (proj, file_info)
+        # --- Modrinth: submit each unique slug as a task with rate limiting ---
+        modrinth_futures: dict[str, Any] = {}
+        for slug in set(modrinth_slugs.values()):
+            modrinth_futures[slug] = pool.submit(_fetch_modrinth_project, slug)
 
-        modrinth_future = pool.submit(fetch_modrinth_all)
+        for slug, future in modrinth_futures.items():
+            try:
+                modrinth_map[slug] = future.result(timeout=120)
+            except Exception as exc:
+                print(f"warning: modrinth future failed for {slug}: {exc}", file=sys.stderr)
+                modrinth_map[slug] = None
 
-        # --- CurseForge threaded -------------------------------------------
+        # --- CurseForge threaded with rate limiting ---
         cf_futures: dict[str, Any] = {}
         for slug in set(cf_slugs.values()):
             cf_futures[slug] = pool.submit(_resolve_cf, slug)
 
-        # Collect CurseForge results
         for slug, future in cf_futures.items():
             try:
                 cf_map[slug] = future.result(timeout=120)
-            except Exception:
+            except Exception as exc:
+                print(f"warning: curseforge future failed for {slug}: {exc}", file=sys.stderr)
                 cf_map[slug] = None
-
-        # Wait for Modrinth
-        try:
-            modrinth_future.result(timeout=300)
-        except Exception:
-            pass
 
     # --- Build result dict --------------------------------------------------
     result: dict[int, tuple[dict[str, Any], dict[str, Any]] | None] = {}
@@ -345,14 +376,6 @@ def resolve_candidates_parallel(
 
 def download_file(file_info: dict[str, Any], dest_dir: Path) -> Path:
     return processor.download_file(file_info, dest_dir)
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def write_manifest(root: Path, output_path: Path) -> None:
@@ -497,14 +520,21 @@ def should_publish_client_file(relative_path: Path) -> bool:
 
 
 def create_client_zip(package_dir: Path, zip_path: Path) -> None:
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(package_dir.rglob("*"), key=lambda item: item.relative_to(package_dir).as_posix().lower()):
-            if not path.is_file():
-                continue
-            relative_path = path.relative_to(package_dir)
-            if not should_publish_client_file(relative_path):
-                continue
-            archive.write(path, f"client-package/{relative_path.as_posix()}")
+    """Create client zip atomically via temp file + rename."""
+    tmp_path = zip_path.with_suffix(zip_path.suffix + ".tmp")
+    try:
+        with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(package_dir.rglob("*"), key=lambda item: item.relative_to(package_dir).as_posix().lower()):
+                if not path.is_file():
+                    continue
+                relative_path = path.relative_to(package_dir)
+                if not should_publish_client_file(relative_path):
+                    continue
+                archive.write(path, f"client-package/{relative_path.as_posix()}")
+        tmp_path.replace(zip_path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
 
 
 def rebuild_client_package(server_dir: Path) -> tuple[Path, str]:
@@ -521,7 +551,9 @@ def rebuild_client_package(server_dir: Path) -> tuple[Path, str]:
         sha_path.unlink()
     create_client_zip(package_dir, zip_path)
     digest = sha256_file(zip_path)
-    sha_path.write_text(f"{digest}  {CLIENT_ZIP_NAME}\n", encoding="utf-8")
+    tmp_sha = sha_path.with_suffix(sha_path.suffix + ".tmp")
+    tmp_sha.write_text(f"{digest}  {CLIENT_ZIP_NAME}\n", encoding="utf-8")
+    tmp_sha.replace(sha_path)
     return zip_path, digest
 
 
@@ -875,6 +907,7 @@ def apply_server_update(
                 len(isolated_severe),
                 isolated_log_path,
                 "Rejected before live install by isolated acceptance lab.",
+                request_id=f"isolated_{mod_id}_{label}",
             )
             return False
     rollback_dir = server_dir / "mods.rollback" / label
@@ -978,7 +1011,7 @@ def apply_server_update(
         file_role="server_datapack" if server_datapack else "server_file",
         path_hint=str(server_dir / server_section),
     )
-    processor.insert_test_run(conn, mod_id, label, test_status, error_count, log_path, "Accepted by daily updater.")
+    processor.insert_test_run(conn, mod_id, label, test_status, error_count, log_path, "Accepted by daily updater.", request_id=f"daily_{mod_id}_{label}")
     conn.commit()
     log_event(
         conn,
@@ -1058,65 +1091,96 @@ def scan_and_apply(args: argparse.Namespace) -> int:
         resolved_count = sum(1 for v in candidates_map.values() if v is not None)
         print(f"scan_phase=resolved candidates={resolved_count}/{len(scan_rows)}", flush=True)
         try:
+            savepoint_counter = 0
             for mod in scan_rows:
-                stats["scanned"] += 1
-                candidate = candidates_map.get(int(mod["id"]))
-                if not candidate:
-                    stats["skipped"] += 1
-                    continue
-                project, file_info = candidate
-                new_name = str(file_info.get("fileName") or "")
-                old_files = selected_file_names(conn, int(mod["id"]))
-                active_status = str(mod["active_status"] or "")
-                if new_name in old_files and active_status == "ok":
-                    stats["skipped"] += 1
-                    continue
-                if args.dry_run:
+                mod_id = int(mod["id"])
+                savepoint_counter += 1
+                savepoint_name = f"sp_{savepoint_counter}"
+                conn.execute(f"SAVEPOINT {savepoint_name}")
+                try:
+                    stats["scanned"] += 1
+                    candidate = candidates_map.get(mod_id)
+                    if not candidate:
+                        stats["skipped"] += 1
+                        conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+                        continue
+                    project, file_info = candidate
+                    new_name = str(file_info.get("fileName") or "")
+                    old_files = selected_file_names(conn, mod_id)
+                    active_status = str(mod["active_status"] or "")
+                    if new_name in old_files and active_status == "ok":
+                        stats["skipped"] += 1
+                        conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+                        continue
+                    if args.dry_run:
+                        stats["candidates"] += 1
+                        log_event(
+                            conn,
+                            run_id,
+                            mod_id,
+                            event_type="candidate",
+                            status="dry_run",
+                            old_file="; ".join(old_files),
+                            new_file=new_name,
+                            new_file_id=str(file_info.get("id") or ""),
+                            source_kind="modrinth" if file_info.get("_source") == "modrinth" else "curseforge",
+                            source_url=processor.stable_project_url(project),
+                            release=release_channel(file_info),
+                            notes="Candidate only; dry run did not install or test.",
+                        )
+                        conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+                        continue
                     stats["candidates"] += 1
+                    downloaded = download_file(file_info, processor.DOWNLOAD_DIR)
+                    server_side = any(
+                        int(row["installed_on_server"] or 0) == 1
+                        for row in conn.execute("SELECT installed_on_server FROM mod_files WHERE mod_id = ?", (mod_id,))
+                    ) or active_status in {"awaiting_compatible_release", "blocked_by_dependency", "skipped"}
+                    if server_side:
+                        ok = apply_server_update(
+                            conn,
+                            run_id,
+                            mod,
+                            project,
+                            file_info,
+                            downloaded,
+                            args.server_dir,
+                            args.db,
+                            args.timeout,
+                        )
+                    else:
+                        ok = apply_client_only(conn, run_id, mod, project, file_info, downloaded, args.server_dir)
+                    if ok:
+                        stats["applied"] += 1
+                        server_ops.backfill_metadata(conn)
+                        server_ops.sync_instance_files(conn, server_id, args.server_dir)
+                        server_ops.score_risks(conn, server_id)
+                    else:
+                        stats["failed"] += 1
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+                    if args.apply_limit and stats["applied"] >= args.apply_limit:
+                        break
+                except Exception as mod_exc:
+                    conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+                    stats["failed"] += 1
                     log_event(
                         conn,
                         run_id,
-                        int(mod["id"]),
-                        event_type="candidate",
-                        status="dry_run",
+                        mod_id,
+                        event_type="server_update" if server_side else "client_update",
+                        status="failed",
                         old_file="; ".join(old_files),
                         new_file=new_name,
                         new_file_id=str(file_info.get("id") or ""),
                         source_kind="modrinth" if file_info.get("_source") == "modrinth" else "curseforge",
                         source_url=processor.stable_project_url(project),
                         release=release_channel(file_info),
-                        notes="Candidate only; dry run did not install or test.",
+                        visible=False,
+                        notes=f"Exception during apply: {type(mod_exc).__name__}: {mod_exc}",
                     )
-                    continue
-                stats["candidates"] += 1
-                downloaded = download_file(file_info, processor.DOWNLOAD_DIR)
-                server_side = any(
-                    int(row["installed_on_server"] or 0) == 1
-                    for row in conn.execute("SELECT installed_on_server FROM mod_files WHERE mod_id = ?", (int(mod["id"]),))
-                ) or active_status in {"awaiting_compatible_release", "blocked_by_dependency", "skipped"}
-                if server_side:
-                    ok = apply_server_update(
-                        conn,
-                        run_id,
-                        mod,
-                        project,
-                        file_info,
-                        downloaded,
-                        args.server_dir,
-                        args.db,
-                        args.timeout,
-                    )
-                else:
-                    ok = apply_client_only(conn, run_id, mod, project, file_info, downloaded, args.server_dir)
-                if ok:
-                    stats["applied"] += 1
-                    server_ops.backfill_metadata(conn)
-                    server_ops.sync_instance_files(conn, server_id, args.server_dir)
-                    server_ops.score_risks(conn, server_id)
-                else:
-                    stats["failed"] += 1
-                if args.apply_limit and stats["applied"] >= args.apply_limit:
-                    break
+                    if args.apply_limit and stats["applied"] >= args.apply_limit:
+                        break
             finish_update_run(conn, run_id, "complete", stats)
         except Exception as exc:
             finish_update_run(conn, run_id, "error", stats, f"{type(exc).__name__}: {exc}")

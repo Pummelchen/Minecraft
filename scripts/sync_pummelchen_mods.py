@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sqlite3
 import sys
@@ -19,6 +18,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from moddb import connect, init_db, row_hash, slugify, status_rank, utc_now
+from pummelchen_utils import sha256_file
 from neoforge_metadata import load_neoforge_metadata
 
 
@@ -36,14 +36,6 @@ class ParsedMod:
     version: str
     dependencies: tuple[str, ...]
     metadata_source: str
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def normalize_id(value: str | None) -> str:
@@ -396,12 +388,13 @@ def upsert_entry(
         (mod_id,),
     ).fetchone()
     if not exists:
+        request_id = f"pummelchen_mod_{mod_id}_{now.replace(':', '-')}"
         conn.execute(
             """
-            INSERT INTO test_runs(mod_id, tested_at, test_label, status, error_count, log_path, notes)
-            VALUES (?, ?, 'pummelchen_mod_registered', 'OK', 0, '', ?)
+            INSERT OR IGNORE INTO test_runs(mod_id, tested_at, test_label, status, error_count, log_path, notes, request_id)
+            VALUES (?, ?, 'pummelchen_mod_registered', 'OK', 0, '', ?, ?)
             """,
-            (mod_id, now, notes_text),
+            (mod_id, now, notes_text, request_id),
         )
 
     return True

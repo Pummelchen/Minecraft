@@ -5,12 +5,12 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import hashlib
 import json
 import re
 import secrets
 import shutil
 import sqlite3
+import sys
 import tempfile
 import urllib.parse
 import zipfile
@@ -18,6 +18,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from pummelchen_utils import sha256_file
 
 DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
 DEFAULT_UPLOAD_DIR = Path("/var/minecraft_mods/client_log_uploads")
@@ -67,14 +72,6 @@ def session_status_for_event(event_type: str, status: str) -> str:
     if event_type == "cancelled":
         return "cancelled"
     return "running"
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def ensure_token(path: Path) -> str:

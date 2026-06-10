@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fcntl
 import json
 import os
 import re
@@ -18,6 +19,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import minecraft_metrics_exporter as mc_metrics
+from pummelchen_utils import display_release_version, human_bytes, write_json_atomic
 
 
 DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
@@ -132,16 +134,6 @@ def _human_speed_mbps(speed_mbps: float) -> str:
     return f"{speed_mbps:.0f} Mbps"
 
 
-def human_bytes(value: float) -> str:
-    units = ["B", "KB", "MB", "GB", "TB"]
-    size = float(value)
-    for unit in units:
-        if size < 1024 or unit == units[-1]:
-            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
-        size /= 1024
-    return f"{size:.1f} TB"
-
-
 def clamp_percent(value: float) -> float:
     return max(0.0, min(100.0, value))
 
@@ -214,33 +206,11 @@ def read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        with path.open("r", encoding="utf-8") as f:
+            fcntl.flock(f, fcntl.LOCK_SH)
+            return json.loads(f.read())
     except Exception:
         return {}
-
-
-def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(path)
-
-
-def display_release_version(release_id: str) -> str:
-    value = (release_id or "").strip()
-    match = re.fullmatch(r"release_(\d{4})(\d{2})(\d{2})_([^_]+)(?:_.*)?", value)
-    if match:
-        year, month, day, version = match.groups()
-        if version_match := re.match(r"(V\d+)", version, re.IGNORECASE):
-            version = version_match.group(1).upper()
-        return f"{year}-{month}-{day}_{version}"
-    match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})_([^_]+)(?:_.*)?", value)
-    if match:
-        year, month, day, version = match.groups()
-        if version_match := re.match(r"(V\d+)", version, re.IGNORECASE):
-            version = version_match.group(1).upper()
-        return f"{year}-{month}-{day}_{version}"
-    return value or "Unknown"
 
 
 def active_release_text(db_path: Path, server_key: str) -> str:
@@ -256,8 +226,8 @@ def minecraft_live_values(server_dir: Path, db_path: Path, server_key: str) -> d
         status = mc_metrics.minecraft_status("127.0.0.1", 25565, timeout=1.0)
         player_data = status.get("players") or {}
         players = f"{int(player_data.get('online') or 0)} / {int(player_data.get('max') or 0)}"
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"warning: minecraft status ping failed: {exc}", file=sys.stderr)
     return {
         "Last Mod Version": active_release_text(db_path, server_key),
         "Minecraft Players": players,

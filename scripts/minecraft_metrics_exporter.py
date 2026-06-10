@@ -22,6 +22,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from moddb import connect
+from pummelchen_utils import read_properties, table_exists, write_json_atomic
+
 DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
 DEFAULT_SERVER_DIR = Path("/var/minecraft_26.1.2")
 DEFAULT_STATE = Path("/var/minecraft_mods/site/minecraft-metrics-state.json")
@@ -51,12 +54,6 @@ def read_json(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
 
-
-def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(path)
 
 
 def encode_varint(value: int) -> bytes:
@@ -121,18 +118,6 @@ def minecraft_status(host: str, port: int, timeout: float = 1.5) -> dict[str, An
     offset += read
     return json.loads(payload[offset : offset + json_length].decode("utf-8"))
 
-
-def read_properties(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    if not path.exists():
-        return values
-    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip()
-    return values
 
 
 def rcon_settings(server_dir: Path, password_file: Path | None, explicit_port: int | None) -> tuple[int, str] | None:
@@ -444,13 +429,6 @@ def update_metrics(db_path: Path) -> dict[str, float]:
     return values
 
 
-def table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
-        (name,),
-    ).fetchone()
-    return bool(row)
-
 
 def active_release(db_path: Path, server_key: str) -> dict[str, str]:
     if not db_path.exists():
@@ -530,8 +508,8 @@ def build_metrics(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
         players = status.get("players") or {}
         players_online = float(players.get("online") or 0)
         players_max = float(players.get("max") or 0)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"warning: minecraft status ping failed: {exc}", file=sys.stderr)
 
     release = active_release(args.db, args.server_key)
     label_release = release.get("release_id", "")
