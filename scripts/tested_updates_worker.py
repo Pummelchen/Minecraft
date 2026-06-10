@@ -40,6 +40,7 @@ UPDATE_LOG_DAYS = 30
 
 _MOD_NAME_CACHE: dict[int, str] = {}
 _SOURCE_URL_NAME_CACHE: dict[str, str] = {}
+_FILE_MATCH_CACHE: dict[str, tuple[int, str, str] | None] = {}
 
 
 def looks_like_file_name(name: str) -> bool:
@@ -69,6 +70,108 @@ def looks_like_version_token(token: str) -> bool:
     return False
 
 
+def file_name_basenames(file_name: str) -> list[str]:
+    """Yield normalized filename candidates, including codex-fixed variants."""
+    raw = file_name.strip()
+    if not raw:
+        return []
+
+    base = re.sub(r"\.[a-z0-9]+(?:\.[a-z0-9-]+)?$", "", raw, flags=re.IGNORECASE)
+    base = base.replace("_", "-")
+    base = base.strip(" -_.")
+
+    candidates = []
+    seen = set()
+    cur = base
+
+    while cur:
+        cur_key = cur.lower()
+        if cur_key in seen:
+            break
+        seen.add(cur_key)
+        candidates.append(cur)
+
+        lowered = cur.lower()
+        next_candidate = None
+        for suffix in (
+            "-codex-fixed-packmeta",
+            "-codex-fixed-pack",
+            "-codex-fixed",
+            "-codexfix",
+            "-codex",
+        ):
+            if lowered.endswith(suffix):
+                next_candidate = cur[:-len(suffix)].rstrip(" -_.")
+                break
+
+        if not next_candidate:
+            parts = [part for part in cur.split("-") if part]
+            if parts and parts[-1].lower() in {"codex", "codexfix", "fixed", "packmeta"}:
+                next_candidate = "-".join(parts[:-1])
+            else:
+                break
+
+        if not next_candidate:
+            break
+        cur = next_candidate.strip(" -_.")
+
+    return candidates
+
+
+def resolve_mod_from_file(conn: sqlite3.Connection, file_name: str) -> tuple[int, str, str] | None:
+    if not file_name:
+        return None
+
+    cache_key = file_name.lower()
+    cached = _FILE_MATCH_CACHE.get(cache_key)
+    if cache_key in _FILE_MATCH_CACHE:
+        return cached
+
+    for base in file_name_basenames(file_name):
+        needle = base.lower()
+        row = conn.execute(
+            """
+            SELECT m.id AS mod_id, m.name AS mod_name, COALESCE(NULLIF(su.url, ''), m.primary_url) AS source_url
+            FROM mod_files f
+            JOIN mods m ON m.id = f.mod_id
+            LEFT JOIN source_urls su ON su.mod_id = m.id AND su.is_primary = 1
+            WHERE lower(f.file_name) = ? OR lower(f.file_name) LIKE ? || '.%'
+            ORDER BY f.id DESC
+            LIMIT 1
+            """,
+            (needle + ".jar", needle),
+        ).fetchone()
+        if row:
+            payload = (int(row["mod_id"]), str(row["mod_name"]), str(row["source_url"] or ""))
+            _FILE_MATCH_CACHE[cache_key] = payload
+            return payload
+
+    # As a final fallback, try direct mod lookup by canonical key/name using the
+    # trimmed file stem.
+    fallback_stem = file_name_basenames(file_name)[-1] if file_name_basenames(file_name) else ""
+    if fallback_stem:
+        normalized = fallback_stem.split("-", 1)[0].lower()
+        if normalized:
+            row = conn.execute(
+                """
+                SELECT m.id AS mod_id, m.name AS mod_name, COALESCE(NULLIF(su.url, ''), m.primary_url) AS source_url
+                FROM mods m
+                LEFT JOIN source_urls su ON su.mod_id = m.id AND su.is_primary = 1
+                WHERE lower(m.canonical_key) = ? OR lower(m.name) = ? OR lower(m.name) LIKE ? || '%'
+                ORDER BY m.id DESC
+                LIMIT 1
+                """,
+                (normalized, normalized, normalized),
+            ).fetchone()
+            if row:
+                payload = (int(row["mod_id"]), str(row["mod_name"]), str(row["source_url"] or ""))
+                _FILE_MATCH_CACHE[cache_key] = payload
+                return payload
+
+    _FILE_MATCH_CACHE[cache_key] = None
+    return None
+
+
 def readable_title_from_file_name(file_name: str) -> str:
     base = file_name.strip()
     if not base:
@@ -77,6 +180,8 @@ def readable_title_from_file_name(file_name: str) -> str:
     base = base.replace("_", "-")
     parts = [part for part in base.split("-") if part]
     while parts and looks_like_version_token(parts[-1]):
+        parts.pop()
+    while parts and parts[-1].lower() in {"codex", "fixed", "packmeta", "codexfix"}:
         parts.pop()
     if not parts:
         parts = [base]
@@ -168,17 +273,11 @@ def fetch_mod_name(conn: sqlite3.Connection, mod_id: int | None, fallback_name: 
 
 
 def fetch_mod_name_from_file(conn: sqlite3.Connection, file_name: str) -> str:
-    row = conn.execute(
-        """
-        SELECT m.id AS mod_id, m.name AS mod_name
-        FROM mod_files f
-        JOIN mods m ON m.id = f.mod_id
-        WHERE f.file_name = ?
-        ORDER BY f.id DESC
-        LIMIT 1
-        """,
-        (file_name,),
-    ).fetchone()
+    row_data = resolve_mod_from_file(conn, file_name)
+    row = None
+    if row_data:
+        mod_id, mod_name, _ = row_data
+        row = {"mod_id": mod_id, "mod_name": mod_name}
     if row:
         return fetch_mod_name(conn, int(row["mod_id"]), str(row["mod_name"]))
     slug = slug_from_file_name(file_name)
@@ -193,20 +292,11 @@ def fetch_mod_name_from_file(conn: sqlite3.Connection, file_name: str) -> str:
 
 
 def fetch_mod_url_from_file(conn: sqlite3.Connection, file_name: str) -> str:
-    row = conn.execute(
-        """
-        SELECT COALESCE(NULLIF(su.url, ''), m.primary_url) AS url
-        FROM mod_files f
-        JOIN mods m ON m.id = f.mod_id
-        LEFT JOIN source_urls su ON su.mod_id = m.id AND su.is_primary = 1
-        WHERE f.file_name = ?
-        ORDER BY f.id DESC
-        LIMIT 1
-        """,
-        (file_name,),
-    ).fetchone()
-    if row and row["url"]:
-        return str(row["url"])
+    row_data = resolve_mod_from_file(conn, file_name)
+    if row_data:
+        _, _, url = row_data
+        if url:
+            return url
     return ""
 
 
