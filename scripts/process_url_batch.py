@@ -92,6 +92,11 @@ CLIENT_ONLY_HINTS = (
     "lambdynamiclights",
     "subtle-effects",
 )
+KNOWN_CLIENT_SIDE_REQUIRED_DEPENDENCIES = {
+    "playeranimcore",
+    "playeranimator",
+    "player-animator",
+}
 
 
 def today() -> str:
@@ -825,6 +830,7 @@ def resolve_required_dependencies(
     conn: sqlite3.Connection,
     file_info: dict[str, Any],
     now: str,
+    include_client_only: bool = False,
 ) -> tuple[list[tuple[int, dict[str, Any], dict[str, Any], Path]], list[str]]:
     candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
     resolved: list[tuple[int, dict[str, Any], dict[str, Any], Path]] = []
@@ -844,9 +850,19 @@ def resolve_required_dependencies(
             problems.append(f"required dependency {project_name(dep_project)} has no compatible NeoForge 26.1.x file")
             continue
         dep_side = side(dep_file, dep_slug)
-        if dep_side == "client":
-            problems.append(f"required dependency {project_name(dep_project)} resolved as client-only")
-            continue
+        if dep_side == "client" and not include_client_only:
+            normalized_dep_slug = slugify(dep_slug)
+            normalized_project_name = slugify(project_name(dep_project))
+            if (
+                normalized_dep_slug in KNOWN_CLIENT_SIDE_REQUIRED_DEPENDENCIES
+                or normalized_project_name in KNOWN_CLIENT_SIDE_REQUIRED_DEPENDENCIES
+            ):
+                pass
+            else:
+                problems.append(
+                    f"required dependency {project_name(dep_project)} resolved as client-only"
+                )
+                continue
         candidates.append((dep_project, dep_file))
     if problems:
         return [], problems
@@ -928,6 +944,48 @@ def process_item(
         )
 
         if selected_side == "client":
+            dependencies, dependency_problems = resolve_required_dependencies(
+                conn,
+                file_info,
+                now,
+                include_client_only=True,
+            )
+            if dependency_problems:
+                note = f"{file_note} Skipped: " + "; ".join(dependency_problems) + "."
+                set_mod_state(
+                    conn,
+                    mod_id=mod_id,
+                    project=project,
+                    file_info=file_info,
+                    status="Skipped",
+                    server_status="Skipped: missing compatible dependency",
+                    client_package="Not included",
+                    installed_server=False,
+                    included_client=False,
+                    files=[],
+                    note=note,
+                )
+                update_batch_item(conn, int(item["batch_item_id"]), "skipped", note)
+                return f"skipped {slug}: dependency problem"
+            for dep_mod_id, dep_project, dep_file, dep_path in dependencies:
+                dep_target = install_to(dep_path, CLIENT_MODS_DIR)
+                set_mod_state(
+                    conn,
+                    mod_id=dep_mod_id,
+                    project=dep_project,
+                    file_info=dep_file,
+                    status="OK",
+                    server_status="OK",
+                    client_package="Included",
+                    installed_server=False,
+                    included_client=True,
+                    files=[dep_target.name],
+                    note=(
+                        f"Accepted required dependency during client install of {file_path.name}; "
+                        "included in client package."
+                    ),
+                    entry_type="Dependency",
+                )
             client_path = install_to(file_path, CLIENT_MODS_DIR)
             note = f"{file_note} Client-only file added to client package as {client_path.name}; not installed on server."
             set_mod_state(
