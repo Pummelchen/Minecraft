@@ -103,6 +103,8 @@ Clients resolve `/downloads/current-release.json` to find the active release ID,
 | `deploy_project.sh` | VPS deployment: validate → sync → install services → smoke test |
 | `validate_project.sh` | Full quality gate: compile, schema, manifests, site, monitoring |
 | `build_mac_client_dmg.sh` | Build macOS Apple Silicon installer DMG |
+| `check_neoforge_version.py` | Check upstream NeoForge metadata before installer/release builds |
+| `release_health_monitor.py` | Verify active release files, status JSON, client downloads, and server health |
 | `sync_mod_install_state.py` | Reconcile SQLite install flags with live server/client |
 | `check_client_manifest.py` | Validate client package manifest and checksums |
 | `check_client_mod_dependencies.py` | Scan NeoForge metadata for missing client-side dependencies |
@@ -121,6 +123,7 @@ Clients resolve `/downloads/current-release.json` to find the active release ID,
 | `pummelchen-minecraft-metrics.service` | Prometheus Minecraft exporter (port 7792) |
 | `pummelchen-tested-updates.service/timer` | Background tested-updates worker |
 | `pummelchen-acceptance-lab-cleanup.service/timer` | Lab working directory cleanup |
+| `pummelchen-release-health.service/timer` | Five-minute release/download/server health watchdog |
 | `pummelchen-headless-client.service` | Headless client lab runner |
 
 ## Mod Status Taxonomy

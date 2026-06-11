@@ -6,6 +6,48 @@ This project is the control plane for the Pummelchen Server Minecraft pack. The
 production copy runs on the VPS in `/var/minecraft_mods`; the live server folder
 is `/var/minecraft_26.1.2`.
 
+## 2026-06-11 Production Audit Addendum
+
+Audit plan executed:
+- Map release, updater, DMG, deploy, VPS service, monitoring, and status-site
+  surfaces.
+- Run syntax, compile, manifest, schema, updater, monitoring, and generated-site
+  gates locally and remotely.
+- Search for incomplete markers, unsafe write/delete paths, secret exposure, and
+  untracked runtime drift.
+- Verify server-side watch agents are installed, enabled, and producing status
+  JSON on the VPS.
+- Rebuild the macOS DMG, deploy project files and service units, then verify
+  web status, metrics, SQLite integrity, and Minecraft service health.
+
+Findings fixed:
+- `scripts/mod_acceptance_lab.py` referenced `Any` without importing it; the
+  full compile gate now catches this class of failure.
+- `scripts/release_health_monitor.py` existed but had no installed schedule.
+  It is now deployed as `pummelchen-release-health.service/timer` and runs every
+  five minutes.
+- DMG builds and daily releases did not check upstream NeoForge metadata. Both
+  paths now write `site/public/neoforge-version.json`; validation includes a
+  local metadata fixture.
+- The new release-health systemd sandbox originally allowed status JSON writes
+  but not its documented client-package repair path; the unit now grants only
+  the required public-site and client-package write paths.
+
+Verification completed:
+- `bash scripts/validate_project.sh` passed locally.
+- The macOS DMG was rebuilt successfully.
+- `scripts/deploy_project.sh --host root@91.99.176.243` passed local and remote
+  gates and installed the release-health timer.
+- VPS checks passed: expected services/timers active, release-health service ran
+  with `status=0/SUCCESS`, `release-health.json` reported `overall=healthy`,
+  status site returned HTTP 200, SQLite `PRAGMA integrity_check` returned `ok`,
+  and `pummelchen_minecraft_up` settled to `1.000000` after the deploy restart.
+
+Current non-blocking operator warning:
+- Upstream NeoForge metadata reports `26.1.2.75` while production remains pinned
+  to accepted `26.1.2.71`. Do not auto-upgrade the loader without running the
+  same server/client acceptance and release flow used for mod updates.
+
 ## Audit Scope
 
 Server-side:

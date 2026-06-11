@@ -222,11 +222,13 @@ install -m 0644 systemd/pummelchen-tested-updates.service /etc/systemd/system/pu
 install -m 0644 systemd/pummelchen-tested-updates.timer /etc/systemd/system/pummelchen-tested-updates.timer
 install -m 0644 systemd/pummelchen-acceptance-lab-cleanup.service /etc/systemd/system/pummelchen-acceptance-lab-cleanup.service
 install -m 0644 systemd/pummelchen-acceptance-lab-cleanup.timer /etc/systemd/system/pummelchen-acceptance-lab-cleanup.timer
+install -m 0644 systemd/pummelchen-release-health.service /etc/systemd/system/pummelchen-release-health.service
+install -m 0644 systemd/pummelchen-release-health.timer /etc/systemd/system/pummelchen-release-health.timer
 install -m 0644 systemd/pummelchen-headless-client.service /etc/systemd/system/pummelchen-headless-client.service
 install -m 0644 cron/pummelchen-daily-update /etc/cron.d/pummelchen-daily-update
 install -m 0644 cron/pummelchen-status-site /etc/cron.d/pummelchen-status-site
 systemctl daemon-reload
-systemctl enable --now pummelchen-live-stats.timer pummelchen-client-log-receiver.service pummelchen-minecraft-metrics.service pummelchen-tested-updates.timer pummelchen-acceptance-lab-cleanup.timer
+systemctl enable --now pummelchen-live-stats.timer pummelchen-client-log-receiver.service pummelchen-minecraft-metrics.service pummelchen-tested-updates.timer pummelchen-acceptance-lab-cleanup.timer pummelchen-release-health.timer
 systemctl enable pummelchen-minecraft.service
 systemctl restart pummelchen-client-log-receiver.service pummelchen-minecraft-metrics.service
 
@@ -278,6 +280,8 @@ fi
 python3 scripts/generate_status_site.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" --output-dir "$PROJECT_DIR/site/public" --public-url "http://91.99.176.243:7788"
 python3 scripts/live_stats_feed.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" --output "$PROJECT_DIR/site/public/live-stats.json"
 python3 scripts/release_manager.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" --public-downloads "$PROJECT_DIR/site/public/downloads" current-json >/dev/null 2>&1 || true
+python3 scripts/check_neoforge_version.py --current 26.1.2.71 --minecraft-version 26.1.2 --write-json "$PROJECT_DIR/site/public/neoforge-version.json" --allow-network-failure
+python3 scripts/release_health_monitor.py --db "$PROJECT_DIR/data/minecraft_mods.sqlite" --server-dir "$SERVER_DIR" --release-root "$PROJECT_DIR/releases" --public-downloads "$PROJECT_DIR/site/public/downloads" --base-url "http://127.0.0.1:7788" --service pummelchen-minecraft.service --quiet
 python3 scripts/check_client_mod_dependencies.py "$SERVER_DIR/client-package" --minecraft-version 26.1.2 --neoforge-version 26.1.2.71 --server-mods-dir "$SERVER_DIR/mods"
 
 if [ "$CREATE_RELEASE" = "1" ]; then

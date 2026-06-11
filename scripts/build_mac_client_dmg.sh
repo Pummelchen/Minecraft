@@ -7,6 +7,14 @@ APP_NAME="Pummelchen Installer.app"
 DMG_NAME="Pummelchen-Client-Installer.dmg"
 SWIFT_SOURCE="$ROOT_DIR/client-installer/ProgressInstaller.swift"
 BOOTSTRAP_SOURCE="$ROOT_DIR/client-installer/install-bootstrap.sh"
+MINECRAFT_VERSION="${PUMMELCHEN_MINECRAFT_VERSION:-26.1.2}"
+NEOFORGE_VERSION="${PUMMELCHEN_NEOFORGE_VERSION:-26.1.2.71}"
+
+python3 "$ROOT_DIR/scripts/check_neoforge_version.py" \
+  --current "$NEOFORGE_VERSION" \
+  --minecraft-version "$MINECRAFT_VERSION" \
+  --write-json "$ROOT_DIR/site/public/neoforge-version.json" \
+  --allow-network-failure
 
 command -v hdiutil >/dev/null 2>&1 || {
   echo "hdiutil is required; build this DMG on macOS." >&2

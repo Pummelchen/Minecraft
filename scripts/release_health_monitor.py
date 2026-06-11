@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Release Health Monitor — server-side agent for client update integrity.
 
-Runs every 5 minutes via cron to verify the client update pipeline is healthy.
+Runs every 5 minutes via the pummelchen-release-health systemd timer to verify the client update pipeline is healthy.
 Automatically fixes common issues (broken symlinks, stale pointers) and logs
 every finding to a status JSON that the dashboard can surface.
 

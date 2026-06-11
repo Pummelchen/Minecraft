@@ -1611,6 +1611,37 @@ description = "fixture"
 PY
 "$PYTHON_BIN" "$ROOT_DIR/scripts/check_client_mod_dependencies.py" "$DEP_PACKAGE" \
   --minecraft-version 26.1.2 --neoforge-version 26.1.2.71
+
+log "NeoForge version preflight fixture"
+NEOFORGE_METADATA="$TMP_DIR/neoforge-maven-metadata.xml"
+NEOFORGE_STATUS="$TMP_DIR/neoforge-version.json"
+cat > "$NEOFORGE_METADATA" <<'XML'
+<metadata>
+  <versioning>
+    <versions>
+      <version>26.1.2.70</version>
+      <version>26.1.2.71</version>
+      <version>26.1.2.72</version>
+      <version>26.1.3.1</version>
+    </versions>
+  </versioning>
+</metadata>
+XML
+"$PYTHON_BIN" "$ROOT_DIR/scripts/check_neoforge_version.py" \
+  --current 26.1.2.71 \
+  --minecraft-version 26.1.2 \
+  --metadata-url "file://$NEOFORGE_METADATA" \
+  --write-json "$NEOFORGE_STATUS"
+"$PYTHON_BIN" - "$NEOFORGE_STATUS" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert payload["latest_neoforge_version"] == "26.1.2.72", payload
+assert payload["update_available"] is True, payload
+assert payload["status"] == "update_available", payload
+PY
 "$PYTHON_BIN" - "$DEP_PACKAGE/mods/client-b.jar" <<'PY'
 from pathlib import Path
 import sys

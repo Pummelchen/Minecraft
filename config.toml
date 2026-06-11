@@ -92,6 +92,8 @@ tested_updates_service = "pummelchen-tested-updates.service"
 tested_updates_timer = "pummelchen-tested-updates.timer"
 acceptance_lab_cleanup_service = "pummelchen-acceptance-lab-cleanup.service"
 acceptance_lab_cleanup_timer = "pummelchen-acceptance-lab-cleanup.timer"
+release_health_service = "pummelchen-release-health.service"
+release_health_timer = "pummelchen-release-health.timer"
 headless_client_service = "pummelchen-headless-client.service"
 
 [cron]
