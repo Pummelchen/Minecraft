@@ -43,10 +43,11 @@ Verification completed:
   status site returned HTTP 200, SQLite `PRAGMA integrity_check` returned `ok`,
   and `pummelchen_minecraft_up` settled to `1.000000` after the deploy restart.
 
-Current non-blocking operator warning:
-- Upstream NeoForge metadata reports `26.1.2.75` while production remains pinned
-  to accepted `26.1.2.71`. Do not auto-upgrade the loader without running the
-  same server/client acceptance and release flow used for mod updates.
+Follow-up completed:
+- NeoForge was upgraded from `26.1.2.71` to current `26.1.2.75` through the
+  controlled server/client release flow. The active release is
+  `release_20260611_V7_neoforge-26.1.2.75`, with `release-health.json`
+  reporting `overall=healthy`, zero warnings, and zero errors after the upgrade.
 
 ## Audit Scope
 

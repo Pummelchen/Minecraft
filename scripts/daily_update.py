@@ -475,7 +475,7 @@ def create_mrpack(server_dir: Path) -> Path:
         "files": [],
         "dependencies": {
             "minecraft": "26.1.2",
-            "neoforge": "26.1.2.71",
+            "neoforge": "26.1.2.75",
         },
     }
     if mrpack_path.exists():

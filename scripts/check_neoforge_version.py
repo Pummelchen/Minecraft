@@ -51,7 +51,7 @@ def write_status(path: Path, payload: dict[str, object]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--current", required=True, help="Current pinned NeoForge version, for example 26.1.2.71")
+    parser.add_argument("--current", required=True, help="Current pinned NeoForge version, for example 26.1.2.75")
     parser.add_argument("--minecraft-version", required=True, help="Pinned Minecraft version, for example 26.1.2")
     parser.add_argument("--metadata-url", default=DEFAULT_METADATA_URL)
     parser.add_argument("--timeout", type=float, default=15.0)

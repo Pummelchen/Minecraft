@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SERVER_DIR="${1:-/var/minecraft_26.1.2}"
-NEOFORGE_VERSION="${NEOFORGE_VERSION:-26.1.2.71}"
+NEOFORGE_VERSION="${NEOFORGE_VERSION:-26.1.2.75}"
 CLIENT_PACKAGE_DIR="$SERVER_DIR/client-package"
 INSTALLER_NAME="neoforge-${NEOFORGE_VERSION}-installer.jar"
 INSTALLER_URL="https://maven.neoforged.net/releases/net/neoforged/neoforge/${NEOFORGE_VERSION}/${INSTALLER_NAME}"

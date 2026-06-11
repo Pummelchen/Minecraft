@@ -499,7 +499,7 @@ profile_exists() {
 
 install_neoforge_profile() {
   local java_bin="$1"
-  local installer="$PACK_DIR/neoforge-26.1.2.71-installer.jar"
+  local installer="$PACK_DIR/neoforge-26.1.2.75-installer.jar"
   [ -f "$installer" ] || fail "NeoForge client installer jar is missing."
   echo "Installing NeoForge client profile..."
   if (cd "$LOG_DIR" && "$java_bin" -jar "$installer" --install-client); then
@@ -544,7 +544,7 @@ data.profiles = data.profiles || {};
 var profile = data.profiles.NeoForge || {};
 profile.name = 'NeoForge';
 profile.type = 'custom';
-profile.lastVersionId = 'neoforge-26.1.2.71';
+profile.lastVersionId = 'neoforge-26.1.2.75';
 profile.javaDir = javaBin;
 profile.javaArgs = profile.javaArgs || '-Xmx8G -XX:+UnlockExperimentalVMOptions -XX:+UseG1GC -XX:G1NewSizePercent=20 -XX:G1ReservePercent=20 -XX:MaxGCPauseMillis=50 -XX:G1HeapRegionSize=32M';
 profile.lastUsed = (new Date()).toISOString();

@@ -8,7 +8,7 @@ DMG_NAME="Pummelchen-Client-Installer.dmg"
 SWIFT_SOURCE="$ROOT_DIR/client-installer/ProgressInstaller.swift"
 BOOTSTRAP_SOURCE="$ROOT_DIR/client-installer/install-bootstrap.sh"
 MINECRAFT_VERSION="${PUMMELCHEN_MINECRAFT_VERSION:-26.1.2}"
-NEOFORGE_VERSION="${PUMMELCHEN_NEOFORGE_VERSION:-26.1.2.71}"
+NEOFORGE_VERSION="${PUMMELCHEN_NEOFORGE_VERSION:-26.1.2.75}"
 
 python3 "$ROOT_DIR/scripts/check_neoforge_version.py" \
   --current "$NEOFORGE_VERSION" \

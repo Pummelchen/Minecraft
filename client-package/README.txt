@@ -1,7 +1,7 @@
 Minecraft 26.1.2 Client Package for macOS Apple Silicon
 
 Target client: macOS on Apple Silicon (M2/M3), official Minecraft launcher.
-Target loader: NeoForge 26.1.2.71.
+Target loader: NeoForge 26.1.2.75.
 Target server: 91.99.176.243:25565.
 Package contents: 285 mod jars, 9 resource packs, 1 shader pack, and updater tooling scripts.
 Generated: 2026-06-04.

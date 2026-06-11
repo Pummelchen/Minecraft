@@ -476,7 +476,7 @@ RELEASES="$TMP_DIR/releases"
 PUBLIC="$TMP_DIR/public/downloads"
 mkdir -p "$SERVER/mods" "$SERVER/server-datapacks" "$SERVER/client-package/mods" \
   "$SERVER/client-package/resourcepacks" "$SERVER/client-package/shaderpacks" \
-  "$SERVER/client-package/tools" "$SERVER/libraries/net/neoforged/neoforge/26.1.2.71"
+  "$SERVER/client-package/tools" "$SERVER/libraries/net/neoforged/neoforge/26.1.2.75"
 printf 'mod-a\n' > "$SERVER/mods/mod-a.jar"
 printf 'pack-a\n' > "$SERVER/server-datapacks/pack-a.zip"
 printf 'client-mod-a\n' > "$SERVER/client-package/mods/client-mod-a.jar"
@@ -1610,7 +1610,7 @@ description = "fixture"
 ''')
 PY
 "$PYTHON_BIN" "$ROOT_DIR/scripts/check_client_mod_dependencies.py" "$DEP_PACKAGE" \
-  --minecraft-version 26.1.2 --neoforge-version 26.1.2.71
+  --minecraft-version 26.1.2 --neoforge-version 26.1.2.75
 
 log "NeoForge version preflight fixture"
 NEOFORGE_METADATA="$TMP_DIR/neoforge-maven-metadata.xml"
@@ -1620,15 +1620,15 @@ cat > "$NEOFORGE_METADATA" <<'XML'
   <versioning>
     <versions>
       <version>26.1.2.70</version>
-      <version>26.1.2.71</version>
-      <version>26.1.2.72</version>
+      <version>26.1.2.75</version>
+      <version>26.1.2.76</version>
       <version>26.1.3.1</version>
     </versions>
   </versioning>
 </metadata>
 XML
 "$PYTHON_BIN" "$ROOT_DIR/scripts/check_neoforge_version.py" \
-  --current 26.1.2.71 \
+  --current 26.1.2.75 \
   --minecraft-version 26.1.2 \
   --metadata-url "file://$NEOFORGE_METADATA" \
   --write-json "$NEOFORGE_STATUS"
@@ -1638,7 +1638,7 @@ import sys
 from pathlib import Path
 
 payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-assert payload["latest_neoforge_version"] == "26.1.2.72", payload
+assert payload["latest_neoforge_version"] == "26.1.2.76", payload
 assert payload["update_available"] is True, payload
 assert payload["status"] == "update_available", payload
 PY
@@ -1648,7 +1648,7 @@ import sys
 Path(sys.argv[1]).unlink()
 PY
 if "$PYTHON_BIN" "$ROOT_DIR/scripts/check_client_mod_dependencies.py" "$DEP_PACKAGE" \
-  --minecraft-version 26.1.2 --neoforge-version 26.1.2.71 >/tmp/pummelchen-depcheck.$$ 2>&1; then
+  --minecraft-version 26.1.2 --neoforge-version 26.1.2.75 >/tmp/pummelchen-depcheck.$$ 2>&1; then
   cat /tmp/pummelchen-depcheck.$$ >&2
   rm -f /tmp/pummelchen-depcheck.$$
   fail "dependency checker did not catch missing client dependency"
@@ -1721,7 +1721,7 @@ grep -Fq '"showTutorial":{"value":false}' "$AUTO_MC/config/mtsconfigclient.json"
 
 log "macOS client smoke launcher fixture"
 SMOKE_MC="$TMP_DIR/client-smoke-mc"
-mkdir -p "$SMOKE_MC/versions/26.1.2" "$SMOKE_MC/versions/neoforge-26.1.2.71" \
+mkdir -p "$SMOKE_MC/versions/26.1.2" "$SMOKE_MC/versions/neoforge-26.1.2.75" \
   "$SMOKE_MC/libraries/com/example/clientlib/1.0.0"
 touch "$TMP_DIR/fake-java" \
   "$SMOKE_MC/versions/26.1.2/26.1.2.jar" \
@@ -1759,12 +1759,12 @@ root = Path(sys.argv[1])
         {"downloads": {"artifact": {"path": "com/example/clientlib/1.0.0/clientlib-1.0.0.jar"}}}
     ],
 }), encoding="utf-8")
-(root / "versions/neoforge-26.1.2.71/neoforge-26.1.2.71.json").write_text(json.dumps({
-    "id": "neoforge-26.1.2.71",
+(root / "versions/neoforge-26.1.2.75/neoforge-26.1.2.75.json").write_text(json.dumps({
+    "id": "neoforge-26.1.2.75",
     "inheritsFrom": "26.1.2",
     "mainClass": "net.neoforged.fml.startup.Client",
     "arguments": {
-        "game": ["--fml.neoForgeVersion", "26.1.2.71"],
+        "game": ["--fml.neoForgeVersion", "26.1.2.75"],
         "jvm": ["-DlibraryDirectory=${library_directory}"],
     },
 }), encoding="utf-8")

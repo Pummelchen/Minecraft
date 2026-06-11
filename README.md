@@ -8,7 +8,7 @@
 |---|---|
 | Repository | `https://github.com/Pummelchen/MinecraftServer` |
 | Minecraft version | `26.1.2` |
-| Mod loader | NeoForge `26.1.2.71` |
+| Mod loader | NeoForge `26.1.2.75` |
 | Java runtime | OpenJDK `25.0.3` (system-wide, server + client) |
 | Server OS | Debian 13, kernel `6.12.90` |
 | VPS hostname | `deltasona` |
@@ -16,9 +16,9 @@
 | SSH access | `root@91.99.176.243` (key-based, ed25519) |
 | Production project dir | `/var/minecraft_mods` (control plane, scripts, DB) |
 | Production server dir | `/var/minecraft_26.1.2` (runtime, mods, worlds) |
-| Active release | `release_20260606_V1D_pyramid` |
-| Server-side jars | 243 |
-| Client package | 242 mods, 9 resource packs, 1 shader pack |
+| Active release | `release_20260611_V7_neoforge-26.1.2.75` |
+| Server-side jars | 253 |
+| Client package | 255 mods, 9 resource packs, 1 shader pack |
 | Central config file | `config.toml` (single source of truth for all paths/ports/limits) |
 
 ## Network Topology

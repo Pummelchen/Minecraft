@@ -31,7 +31,7 @@ DEFAULT_RELEASE_BACKUPS = Path("/var/minecraft_mods/release_backups")
 DEFAULT_PUBLIC_URL = SERVER_PUBLIC_URL
 DEFAULT_SERVER_KEY = "minecraft_26_1_2"
 DEFAULT_MINECRAFT_VERSION = "26.1.2"
-DEFAULT_NEOFORGE_VERSION = "26.1.2.71"
+DEFAULT_NEOFORGE_VERSION = "26.1.2.75"
 DEFAULT_STAGING_ROOT = Path("/var/minecraft_mods/.pipeline_staging")
 
 SCRIPT_DIR = Path(__file__).resolve().parent

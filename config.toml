@@ -4,7 +4,7 @@
 [server]
 # Minecraft version
 minecraft_version = "26.1.2"
-neoforge_version = "26.1.2.71"
+neoforge_version = "26.1.2.75"
 
 # Server paths
 server_key = "minecraft_26_1_2"

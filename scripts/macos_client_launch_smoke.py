@@ -25,7 +25,7 @@ from typing import Any, Iterable, Sequence
 
 
 MACOS_OS_NAME = "osx"
-DEFAULT_VERSION = "neoforge-26.1.2.71"
+DEFAULT_VERSION = "neoforge-26.1.2.75"
 DEFAULT_MINECRAFT_DIR = Path.home() / "Library/Application Support/minecraft"
 DEFAULT_PUMMELCHEN_JAVA = Path.home() / "Library/Application Support/Pummelchen/java25/bin/java"
 SUCCESS_MARKERS = (

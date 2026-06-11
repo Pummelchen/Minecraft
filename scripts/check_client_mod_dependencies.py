@@ -17,7 +17,7 @@ from neoforge_metadata import load_neoforge_metadata
 
 SPECIAL_VERSIONS = {
     "minecraft": "26.1.2",
-    "neoforge": "26.1.2.71",
+    "neoforge": "26.1.2.75",
 }
 CLIENT_SIDES = {"BOTH", "CLIENT"}
 
