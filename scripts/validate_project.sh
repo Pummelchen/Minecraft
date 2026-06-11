@@ -220,7 +220,7 @@ DB="$TMP_DIR/minecraft_mods.sqlite"
 
 log "Daily release pipeline dry run"
 TODAY_RELEASE_KEY="$(date -u +%Y-%m-%d)_V9"
-TODAY_RELEASE_ID="release_$(date -u +%Y%m%d)_V9_daily"
+TODAY_RELEASE_ID="release_$(date -u +%Y%m%d)_V9"
 PIPELINE_ACTIVITY_DRY="$TMP_DIR/update-activity.json"
 PIPELINE_DRY="$("$PYTHON_BIN" "$ROOT_DIR/scripts/daily_release_pipeline.py" \
   --db "$DB" \
