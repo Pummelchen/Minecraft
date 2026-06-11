@@ -38,6 +38,7 @@ CLIENT_FILES_DIR_NAME = "client-files"
 RELEASE_REPORT_FILE = "report.html"
 UPDATE_LOG_DAYS = 7
 HERO_IMAGE_NAME = "pummelchen-hero.png"
+SEED_MAPPER_BASE_URL = "https://mcseedmap.net/1.21.5-Java"
 
 
 GROUP_RULES: list[tuple[str, tuple[str, ...]]] = [
@@ -188,6 +189,8 @@ def collect_stats(server_dir: Path) -> dict[str, str]:
         mtime = dt.datetime.fromtimestamp(zip_path.stat().st_mtime, tz=dt.timezone.utc)
         client_pack_generated = mtime.strftime("%Y-%m-%d %H:%M UTC")
         client_pack_generated_iso = mtime.isoformat(timespec="seconds")
+    server_props = read_key_value_file(server_dir / "server.properties")
+    world_seed = server_props.get("level-seed", "")
     return {
         "Server OS": os_release.get("PRETTY_NAME", platform.platform()),
         "OS Kernel": platform.release(),
@@ -210,6 +213,7 @@ def collect_stats(server_dir: Path) -> dict[str, str]:
         "Client Mod Pack SHA256": sha or "Missing",
         "Client Mod Pack Generated": client_pack_generated,
         "Client Mod Pack Generated ISO": client_pack_generated_iso,
+        "World Seed": world_seed,
     }
 
 
@@ -1312,6 +1316,12 @@ def render_page(
     client_dmg_url = f"{public_url.rstrip('/')}/downloads/{CLIENT_DMG_NAME}"
     server_count = len(server_mods)
     client_count = len(client_mods)
+    world_seed = stats.get("World Seed", "")
+    if world_seed:
+        seed_url = f"{SEED_MAPPER_BASE_URL}/{quote(str(world_seed), safe='')}#l=-1"
+        seed_viewer_html = f'<p class="seed-viewer"><strong>World Seed Viewer:</strong> <a href="{escape(seed_url)}" target="_blank" rel="noopener">{escape(world_seed)}</a></p>'
+    else:
+        seed_viewer_html = '<p class="seed-viewer"><strong>World Seed Viewer:</strong> <span id="worldSeedLink">loading...</span></p>'
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1373,6 +1383,9 @@ def render_page(
     }}
     h1 {{ margin: 0; font-size: 42px; line-height: 1.05; }}
     .subtitle {{ margin: 8px 0 0; color: var(--muted); max-width: 760px; }}
+    .seed-viewer {{ margin: 10px 0 0; font-size: 14px; color: var(--muted); }}
+    .seed-viewer a {{ color: var(--blue); text-decoration: none; font-family: monospace; }}
+    .seed-viewer a:hover {{ text-decoration: underline; color: #93c5fd; }}
     .pill-row {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }}
     .pill {{
       border: 1px solid var(--line);
@@ -1784,6 +1797,7 @@ def render_page(
       <div>
         <h1>Pummelchen Server</h1>
         <p class="subtitle">A compact status and install page for the private Minecraft 26.1.2 NeoForge server on the Debian VPS.</p>
+        {seed_viewer_html}
         <div class="pill-row">
           <span class="pill">Server: {SERVER_HOST}:{SERVER_MC_PORT}</span>
           <span class="pill">Web: {SERVER_HOST}:7788</span>
@@ -1962,6 +1976,13 @@ def render_page(
       if (dot) {{
         dot.classList.toggle('ok', ageSeconds !== null && ageSeconds <= 90);
         dot.classList.toggle('warn', ageSeconds !== null && ageSeconds > 90);
+      }}
+      if (payload.world_seed) {{
+        const seedEl = document.getElementById('worldSeedLink');
+        if (seedEl) {{
+          const seedUrl = `https://mcseedmap.net/1.21.5-Java/${{encodeURIComponent(payload.world_seed)}}#l=-1`;
+          seedEl.innerHTML = `<a href="${{seedUrl}}" target="_blank" rel="noopener">${{payload.world_seed}}</a>`;
+        }}
       }}
     }}
     async function refreshLiveStats() {{

@@ -290,6 +290,14 @@ def build_payload(
     disk_free_gb = disk.free / (1024 ** 3)
     disk_total_gb = disk.total / (1024 ** 3)
 
+    server_props_path = server_dir / "server.properties"
+    world_seed = ""
+    if server_props_path.exists():
+        for line in server_props_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("level-seed="):
+                world_seed = line.split("=", 1)[1].strip()
+                break
+
     interface = normalize_interface_name(state.get("net_interface")) or detect_default_interface()
     net_snapshot = read_net_bytes(interface)
     network_percent = 0.0
@@ -350,6 +358,7 @@ def build_payload(
     payload = {
         "generated_at": now.isoformat(timespec="seconds"),
         "interval_seconds": 10,
+        "world_seed": world_seed,
         "stats": {
             "Generated": now.strftime("%Y-%m-%d %H:%M UTC"),
             "CPU usage": f"{cpu_percent:.1f}%",
