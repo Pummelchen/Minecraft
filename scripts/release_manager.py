@@ -631,7 +631,7 @@ def publish_release(
         else:
             public_link.unlink()
     try:
-        public_link.symlink_to(release_dir / "public", target_is_directory=True)
+        public_link.symlink_to((release_dir / "public").resolve(), target_is_directory=True)
     except OSError:
         shutil.copytree(release_dir / "public", public_link)
         normalize_public_permissions(public_link)
