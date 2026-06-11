@@ -398,6 +398,82 @@ def check_dmg_freshness(
         report.ok("dmg_freshness", f"DMG in sync ({live_hash[:12]}…)")
 
 
+def check_client_package_sync(
+    report: HealthReport,
+    db_path: Path,
+    server_dir: Path,
+) -> None:
+    """Detect server mods marked as client-included that are missing from client-package/mods/.
+
+    Auto-copies missing mods and flags that a client rebuild is needed.
+    """
+    import shutil
+
+    server_mods_dir = server_dir / "mods"
+    client_mods_dir = server_dir / "client-package" / "mods"
+    if not server_mods_dir.is_dir() or not client_mods_dir.is_dir():
+        report.warn("client_package_sync", "Server or client-package mods dir missing")
+        return
+
+    server_jars = {f.name for f in server_mods_dir.iterdir() if f.suffix in (".jar", ".zip")}
+    client_jars = {f.name for f in client_mods_dir.iterdir() if f.suffix in (".jar", ".zip")}
+
+    try:
+        with connect(db_path) as conn:
+            included_rows = conn.execute(
+                "SELECT name, client_package FROM mods WHERE client_package = 'Included' AND active_status = 'ok'"
+            ).fetchall()
+    except Exception as exc:
+        report.warn("client_package_sync", f"Database error: {exc}")
+        return
+
+    # Import exclusion check
+    try:
+        from daily_update import client_exclusion_reason
+    except ImportError:
+        client_exclusion_reason = lambda name: None
+
+    missing: list[str] = []
+    for jar_name in sorted(server_jars - client_jars):
+        jar_lower = jar_name.lower()
+        if client_exclusion_reason(jar_name):
+            continue
+        is_included = False
+        for row in included_rows:
+            mod_name = str(row["name"] or "").lower()
+            words = [w for w in mod_name.replace("(", "").replace(")", "").replace("[", "").replace("]", "").split() if len(w) > 3]
+            if words and any(w in jar_lower for w in words[:3]):
+                is_included = True
+                break
+        if is_included:
+            missing.append(jar_name)
+
+    if not missing:
+        report.ok("client_package_sync", f"All server-client mods in sync ({len(server_jars)} server, {len(client_jars)} client)")
+        return
+
+    copied = []
+    for jar_name in missing:
+        src = server_mods_dir / jar_name
+        dst = client_mods_dir / jar_name
+        try:
+            shutil.copy2(src, dst)
+            copied.append(jar_name)
+        except OSError as exc:
+            report.error("client_package_sync", f"Failed to copy {jar_name}: {exc}")
+
+    if copied:
+        report.fixed("client_package_sync", f"Auto-copied {len(copied)} mod(s) to client-package: {', '.join(copied[:5])}")
+        report.error("client_package_sync", f"Client rebuild needed! {len(copied)} mod(s) were missing: {', '.join(copied[:5])}")
+        log_activity(
+            f"Health monitor: auto-copied {len(copied)} missing client mod(s): {', '.join(copied[:3])}. Client rebuild required!",
+            stage="health",
+            status="failed",
+        )
+    else:
+        report.ok("client_package_sync", f"All {len(server_jars)} server mods accounted for in client")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -440,6 +516,9 @@ def run_monitor(
 
         # 8. DMG freshness
         check_dmg_freshness(report, server_dir, release_root, release_id)
+
+        # 9. Client package mod sync — detect server mods that should be in client but aren't
+        check_client_package_sync(report, db_path, server_dir)
 
     # Write status
     overall = report.write(HEALTH_STATUS_PATH)
