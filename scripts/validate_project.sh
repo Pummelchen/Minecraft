@@ -105,10 +105,11 @@ PY
     [ -f "$CUSTOM_DATAPACKS_SERVER/custom-live-world/datapacks/$file_name" ] \
       || fail "custom datapack was not copied to active level-name datapacks folder ($file_name)"
   done
-  grep -q '^bonus-chest=false$' "$ROOT_DIR/server-config/server.properties.override" \
-    || fail "server properties must disable generated bonus chests"
+  grep -q '^bonus-chest=true$' "$ROOT_DIR/server-config/server.properties.override" \
+    || fail "server properties must enable the customized generated bonus chest"
   "$PYTHON_BIN" - "$ROOT_DIR/server-datapacks/pummelchen-welcome.zip" <<'PY' \
     || fail "welcome datapack does not enforce new-world safety policy"
+import json
 import sys
 import zipfile
 
@@ -116,21 +117,29 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     load = archive.read("data/pummelchen/function/load.mcfunction").decode()
     tick = archive.read("data/pummelchen/function/tick.mcfunction").decode()
     tick_tag = archive.read("data/minecraft/tags/function/tick.json").decode()
+    bonus_chest = json.loads(archive.read("data/minecraft/loot_table/chests/spawn_bonus_chest.json"))
 
 required_load = [
-    "gamerule keepInventory true",
-    "gamerule doTileDrops true",
-    "gamerule mobGriefing false",
-    "gamerule projectilesCanBreakBlocks false",
-    "gamerule blockExplosionDropDecay false",
-    "gamerule mobExplosionDropDecay false",
-    "gamerule tntExplosionDropDecay false",
+    "gamerule keep_inventory true",
+    "gamerule mob_griefing false",
+    "gamerule projectiles_can_break_blocks false",
+    "gamerule block_explosion_drop_decay false",
+    "gamerule mob_explosion_drop_decay false",
+    "gamerule tnt_explodes false",
+    "gamerule tnt_explosion_drop_decay false",
 ]
 for command in required_load:
     assert command in load, command
 assert "kill @e[type=minecraft:tnt]" in tick
 assert "kill @e[type=minecraft:tnt_minecart]" in tick
 assert "pummelchen:tick" in tick_tag
+pools = bonus_chest["pools"]
+assert len(pools) == 3
+assert [pool["rolls"] for pool in pools] == [3, 3, 3]
+food_names = {entry["name"] for entry in pools[0]["entries"]}
+assert {"minecraft:bread", "minecraft:cooked_beef", "minecraft:apple"} <= food_names
+assert pools[1]["entries"][0] == {"type": "minecraft:loot_table", "value": "chems_guns:guns/starter_pistol"}
+assert pools[2]["entries"][0] == {"type": "minecraft:loot_table", "value": "chems_guns:ammo/standard/pistol_magazine"}
 PY
 
   if [ "$HAS_PURPLE_HOUSE" = "1" ]; then
@@ -148,8 +157,8 @@ PY
       || fail "world reset did not report requested seed"
     grep -q '^level-seed=123456789$' "$RESET_WORLD_SERVER/server.properties" \
       || fail "world reset did not write new level seed"
-    grep -q '^bonus-chest=false$' "$RESET_WORLD_SERVER/server.properties" \
-      || fail "world reset did not disable generated bonus chest"
+    grep -q '^bonus-chest=true$' "$RESET_WORLD_SERVER/server.properties" \
+      || fail "world reset did not enable customized generated bonus chest"
     [ -d "$RESET_WORLD_SERVER/world-reset-backups" ] \
       || fail "world reset did not create backup root"
     [ ! -f "$RESET_WORLD_SERVER/custom-live-world/region/r.0.0.mca" ] \

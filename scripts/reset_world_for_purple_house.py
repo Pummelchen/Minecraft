@@ -1274,7 +1274,7 @@ def main() -> int:
 
     write_properties(
         server_dir / "server.properties",
-        {"level-name": world_name, "level-seed": seed, "bonus-chest": "false"},
+        {"level-name": world_name, "level-seed": seed, "bonus-chest": "true"},
     )
 
     if args.auto_place:

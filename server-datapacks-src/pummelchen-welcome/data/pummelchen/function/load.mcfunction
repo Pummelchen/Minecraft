@@ -1,8 +1,8 @@
 scoreboard players set mode chems.raid_mode -1
-gamerule keepInventory true
-gamerule doTileDrops true
-gamerule mobGriefing false
-gamerule projectilesCanBreakBlocks false
-gamerule blockExplosionDropDecay false
-gamerule mobExplosionDropDecay false
-gamerule tntExplosionDropDecay false
+gamerule keep_inventory true
+gamerule mob_griefing false
+gamerule projectiles_can_break_blocks false
+gamerule block_explosion_drop_decay false
+gamerule mob_explosion_drop_decay false
+gamerule tnt_explodes false
+gamerule tnt_explosion_drop_decay false
