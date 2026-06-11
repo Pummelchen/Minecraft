@@ -1272,7 +1272,10 @@ def main() -> int:
         print(f"world_dir={world_dir}")
         return 0
 
-    write_properties(server_dir / "server.properties", {"level-name": world_name, "level-seed": seed})
+    write_properties(
+        server_dir / "server.properties",
+        {"level-name": world_name, "level-seed": seed, "bonus-chest": "false"},
+    )
 
     if args.auto_place:
         # bootstrap world once, detect generated spawn, then place house with RCON.

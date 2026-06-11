@@ -105,6 +105,33 @@ PY
     [ -f "$CUSTOM_DATAPACKS_SERVER/custom-live-world/datapacks/$file_name" ] \
       || fail "custom datapack was not copied to active level-name datapacks folder ($file_name)"
   done
+  grep -q '^bonus-chest=false$' "$ROOT_DIR/server-config/server.properties.override" \
+    || fail "server properties must disable generated bonus chests"
+  "$PYTHON_BIN" - "$ROOT_DIR/server-datapacks/pummelchen-welcome.zip" <<'PY' \
+    || fail "welcome datapack does not enforce new-world safety policy"
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    load = archive.read("data/pummelchen/function/load.mcfunction").decode()
+    tick = archive.read("data/pummelchen/function/tick.mcfunction").decode()
+    tick_tag = archive.read("data/minecraft/tags/function/tick.json").decode()
+
+required_load = [
+    "gamerule keepInventory true",
+    "gamerule doTileDrops true",
+    "gamerule mobGriefing false",
+    "gamerule projectilesCanBreakBlocks false",
+    "gamerule blockExplosionDropDecay false",
+    "gamerule mobExplosionDropDecay false",
+    "gamerule tntExplosionDropDecay false",
+]
+for command in required_load:
+    assert command in load, command
+assert "kill @e[type=minecraft:tnt]" in tick
+assert "kill @e[type=minecraft:tnt_minecart]" in tick
+assert "pummelchen:tick" in tick_tag
+PY
 
   if [ "$HAS_PURPLE_HOUSE" = "1" ]; then
     RESET_WORLD_SERVER="$TMP_DIR/reset-world-server"
@@ -121,6 +148,8 @@ PY
       || fail "world reset did not report requested seed"
     grep -q '^level-seed=123456789$' "$RESET_WORLD_SERVER/server.properties" \
       || fail "world reset did not write new level seed"
+    grep -q '^bonus-chest=false$' "$RESET_WORLD_SERVER/server.properties" \
+      || fail "world reset did not disable generated bonus chest"
     [ -d "$RESET_WORLD_SERVER/world-reset-backups" ] \
       || fail "world reset did not create backup root"
     [ ! -f "$RESET_WORLD_SERVER/custom-live-world/region/r.0.0.mca" ] \

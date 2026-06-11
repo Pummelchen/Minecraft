@@ -5,8 +5,8 @@
       "file_name": "pummelchen-welcome.zip",
       "canonical_key": "pummelchen-welcome",
       "target_mc": "26.1.2",
-      "notes": "Replaces Gamingbarn's Guns and Chems' Guns welcome dialogs with a Pummelchen Server welcome screen. Disables Raid Mode permanently. Starter pistol spawns fully loaded.",
-      "sha256": "7a3db04e5c99c96cc9450bb62aa6ad4a7950030a8a9e15e7dcbb769a8ed6b028"
+      "notes": "Replaces Gamingbarn's Guns and Chems' Guns welcome dialogs with a Pummelchen Server welcome screen. Disables Raid Mode permanently. Enforces new-world safety gamerules: no generated bonus chest, keep inventory, no mob griefing, no projectile block breaking, no TNT explosions, and full block drops.",
+      "sha256": "d4c2f3498aef789e8ff0704bbae6946859ca5161555da739ac2ec4e346e75dcb"
     }
   ]
 }
