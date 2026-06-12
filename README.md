@@ -6,6 +6,8 @@ This project uses OpenAI Codex as a natural-language interface for mod managemen
 
 "Add mod Biomes O' Plenty"
 
+The Minecraft runtime starts from a vanilla server and layers the managed mod pack onto it through NeoForge. The same release flow also supports client-side shader packs, resource packs, and client configuration scripts so the server and macOS clients stay aligned.
+
 The system then performs the full update pipeline automatically:
 
 - Mod discovery — Searches major Minecraft mod repositories and sources.
