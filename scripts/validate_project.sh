@@ -50,6 +50,31 @@ while IFS= read -r path; do
   bash -n "$path"
 done < <(find "$ROOT_DIR/scripts" "$ROOT_DIR/client-package" "$ROOT_DIR/client-installer" -type f \( -name '*.sh' -o -name '*.command' \) | sort)
 
+log "JSON contract syntax"
+"$PYTHON_BIN" - "$ROOT_DIR/docs/contracts/api" <<'PY'
+import json
+import pathlib
+import sys
+
+schema_dir = pathlib.Path(sys.argv[1])
+for path in sorted(schema_dir.glob("*.json")):
+    json.loads(path.read_text(encoding="utf-8"))
+PY
+
+if command -v swift >/dev/null 2>&1; then
+  log "Swift contract package"
+  swift test --package-path "$ROOT_DIR/swift/PummelchenSwift"
+else
+  log "Swift contract package skipped (swift not installed)"
+fi
+
+if command -v duckdb >/dev/null 2>&1; then
+  log "DuckDB contract SQL syntax"
+  duckdb "$TMP_DIR/contract-syntax.duckdb" < "$ROOT_DIR/docs/contracts/duckdb/001_initial.sql" >/dev/null
+else
+  log "DuckDB contract SQL syntax skipped (duckdb not installed)"
+fi
+
 log "Custom server datapacks"
 CUSTOM_DATAPACK_COUNT="$($PYTHON_BIN - "$ROOT_DIR/server-datapacks-src/custom_datapacks.json" <<'PY'
 import json

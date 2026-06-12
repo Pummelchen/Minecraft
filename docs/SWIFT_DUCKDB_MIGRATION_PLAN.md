@@ -146,6 +146,22 @@ Minecraft folder
   |-- .pummelchen/
 ```
 
+## 4.1 Swift Project Location
+
+The Swift migration code lives in:
+
+```text
+swift/PummelchenSwift
+```
+
+This is a SwiftPM workspace with a shared `PummelchenCore` library and command-line validation tools. It stays inside the existing repository so it can share fixtures, docs, contracts, and validation gates with the current production scripts while avoiding changes to live behavior during early phases.
+
+The first package-level rule is:
+
+```text
+Swift code may read and validate existing contracts before it writes or replaces production state.
+```
+
 ## 5. Why Keep nginx
 
 nginx remains a hard requirement because it is better than the Swift app at:
@@ -1038,6 +1054,7 @@ Acceptance:
 
 - No production behavior changed.
 - API/schema docs exist.
+- Swift contract package builds and tests through `scripts/validate_project.sh` when Swift is installed.
 - Current scripts still pass `scripts/validate_project.sh`.
 
 ### Phase 1: DuckDB Foundation And SQLite Parity
