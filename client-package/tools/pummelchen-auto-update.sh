@@ -505,11 +505,15 @@ set_options_line() {
   ' "$path" > "$tmp" && mv "$tmp" "$path"
 }
 
+PUMMELCHEN_RESOURCE_PACKS='["vanilla","mod_resources","file/ModernArch v2.8.2 [26.1] [128x].zip","file/ModernArch FA Extension v2.2.zip","file/ModernArch Denser Grass Addon.zip"]'
+PUMMELCHEN_SHADER_PACK="BSL_v10.1.3.zip"
+
 set_property_line() {
   local path="$1"
   local key="$2"
   local value="$3"
-  [ -f "$path" ] || return 0
+  mkdir -p "$(dirname "$path")"
+  [ -f "$path" ] || : > "$path"
   local tmp="$path.pummelchen.tmp"
   awk -v key="$key" -v value="$value" '
     BEGIN { replaced = 0 }
@@ -535,9 +539,19 @@ set_json_boolean_value() {
 }
 
 apply_pummelchen_client_defaults() {
+  mkdir -p "$MC_DIR/config"
   set_property_line "$MC_DIR/config/neoforge-client.toml" "showLoadWarnings" "false"
   set_property_line "$MC_DIR/config/forge-client.toml" "showLoadWarnings" "false"
   set_property_line "$MC_DIR/config/yuushya-client.toml" "showCheckScreen" "false"
+  [ -f "$MC_DIR/config/iris.properties" ] || : > "$MC_DIR/config/iris.properties"
+  set_property_line "$MC_DIR/config/iris.properties" "shaderPack" "$PUMMELCHEN_SHADER_PACK"
+  set_property_line "$MC_DIR/config/iris.properties" "enableShaders" "true"
+  set_property_line "$MC_DIR/config/iris.properties" "allowUnknownShaders" "false"
+  set_property_line "$MC_DIR/config/iris.properties" "colorSpace" "SRGB"
+  set_property_line "$MC_DIR/config/iris.properties" "disableUpdateMessage" "false"
+  set_property_line "$MC_DIR/config/iris.properties" "enableDebugOptions" "false"
+  set_property_line "$MC_DIR/config/iris.properties" "maxShadowRenderDistance" "32"
+  set_property_line "$MC_DIR/optionsshaders.txt" "shaderPack" "$PUMMELCHEN_SHADER_PACK"
   set_json_boolean_value "$MC_DIR/config/underground_village/common.json" "enableInGameMessage" "false"
   set_json_boolean_value "$MC_DIR/config/mtsconfigclient.json" "showTutorial" "false"
   log "Applied Pummelchen client defaults for quieter first launch."
@@ -548,9 +562,9 @@ reset_client_visual_state() {
   if [ -f "$options" ]; then
     cp "$options" "$options.before-pummelchen-auto-$STAMP"
   fi
-  set_options_line "$options" "resourcePacks" '["vanilla"]'
+  set_options_line "$options" "resourcePacks" "$PUMMELCHEN_RESOURCE_PACKS"
   set_options_line "$options" "incompatibleResourcePacks" '[]'
-  log "Reset active resource packs to vanilla. Preserved active shader selection."
+  log "Enabled ModernArch resource pack stack and BSL shader defaults."
 }
 
 SYNC_CHANGED_COUNT=0
@@ -617,6 +631,9 @@ sync_files() {
     download_url "$file_url" "$tmp" || fail "Could not download $file_url"
     verify_hash "$tmp" "$expected" || fail "Checksum mismatch for downloaded file: $section/$name"
     mv "$tmp" "$dst" || fail "Could not install $section/$name"
+    if [ "$section" = "tools" ]; then
+      chmod 0755 "$dst" || fail "Could not mark tool executable: $name"
+    fi
     changed=$((changed + 1))
     verified=$((verified + 1))
   done < "$wanted_manifest"
@@ -626,7 +643,7 @@ sync_files() {
     tty_log "  Done! $changed file(s) updated, $verified verified."
     tty_log ""
   elif [ "$dl_total" -eq 0 ]; then
-    sync_summary "$LOCAL_RELEASE_ID" "${TARGET_RELEASE_ID:-legacy}" "$ENTRY_COUNT" "$verified" "0"
+    sync_summary "${TARGET_RELEASE_ID:-$LOCAL_RELEASE_ID}" "${TARGET_RELEASE_ID:-legacy}" "$ENTRY_COUNT" "$verified" "0"
   fi
   SYNC_CHANGED_COUNT="$changed"
 }

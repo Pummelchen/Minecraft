@@ -405,11 +405,16 @@ set_options_line() {
   ' "$path" > "$tmp" && mv "$tmp" "$path"
 }
 
+PUMMELCHEN_RESOURCE_PACKS='["vanilla","mod_resources","file/ModernArch v2.8.2 [26.1] [128x].zip","file/ModernArch FA Extension v2.2.zip","file/ModernArch Denser Grass Addon.zip"]'
+PUMMELCHEN_SHADER_PACK="BSL_v10.1.3.zip"
+PUMMELCHEN_JAVA_ARGS="-Xmx8G -XX:+UnlockExperimentalVMOptions -XX:+UseG1GC -XX:G1NewSizePercent=20 -XX:G1ReservePercent=20 -XX:MaxGCPauseMillis=50 -XX:G1HeapRegionSize=32M"
+
 set_property_line() {
   local path="$1"
   local key="$2"
   local value="$3"
-  [ -f "$path" ] || return 0
+  mkdir -p "$(dirname "$path")"
+  [ -f "$path" ] || : > "$path"
   local tmp="$path.pummelchen.tmp"
   awk -v key="$key" -v value="$value" '
     BEGIN { replaced = 0 }
@@ -435,9 +440,19 @@ set_json_boolean_value() {
 }
 
 apply_pummelchen_client_defaults() {
+  mkdir -p "$MC_DIR/config"
   set_property_line "$MC_DIR/config/neoforge-client.toml" "showLoadWarnings" "false"
   set_property_line "$MC_DIR/config/forge-client.toml" "showLoadWarnings" "false"
   set_property_line "$MC_DIR/config/yuushya-client.toml" "showCheckScreen" "false"
+  [ -f "$MC_DIR/config/iris.properties" ] || : > "$MC_DIR/config/iris.properties"
+  set_property_line "$MC_DIR/config/iris.properties" "shaderPack" "$PUMMELCHEN_SHADER_PACK"
+  set_property_line "$MC_DIR/config/iris.properties" "enableShaders" "true"
+  set_property_line "$MC_DIR/config/iris.properties" "allowUnknownShaders" "false"
+  set_property_line "$MC_DIR/config/iris.properties" "colorSpace" "SRGB"
+  set_property_line "$MC_DIR/config/iris.properties" "disableUpdateMessage" "false"
+  set_property_line "$MC_DIR/config/iris.properties" "enableDebugOptions" "false"
+  set_property_line "$MC_DIR/config/iris.properties" "maxShadowRenderDistance" "32"
+  set_property_line "$MC_DIR/optionsshaders.txt" "shaderPack" "$PUMMELCHEN_SHADER_PACK"
   set_json_boolean_value "$MC_DIR/config/underground_village/common.json" "enableInGameMessage" "false"
   set_json_boolean_value "$MC_DIR/config/mtsconfigclient.json" "showTutorial" "false"
   echo "Applied Pummelchen client defaults for quieter first launch."
@@ -448,9 +463,9 @@ reset_client_visual_state() {
   if [ -f "$options" ]; then
     cp "$options" "$options.before-pummelchen-$STAMP"
   fi
-  set_options_line "$options" "resourcePacks" '["vanilla"]'
+  set_options_line "$options" "resourcePacks" "$PUMMELCHEN_RESOURCE_PACKS"
   set_options_line "$options" "incompatibleResourcePacks" '[]'
-  echo "Reset active resource packs to vanilla. Preserved active shader selection."
+  echo "Enabled ModernArch resource pack stack and BSL shader defaults."
 }
 
 verify_section() {
@@ -517,7 +532,7 @@ configure_neoforge_profile() {
   command -v osascript >/dev/null 2>&1 || fail "osascript is missing; cannot configure Minecraft launcher profile."
 
   echo "Configuring NeoForge launcher profile..."
-  if PROFILE_PATH="$profiles" PROFILE_JAVA_BIN="$java_bin" /usr/bin/osascript -l JavaScript <<'JXA'
+  if PROFILE_PATH="$profiles" PROFILE_JAVA_BIN="$java_bin" PROFILE_JAVA_ARGS="$PUMMELCHEN_JAVA_ARGS" /usr/bin/osascript -l JavaScript <<'JXA'
 ObjC.import('Foundation');
 
 function getenv(name) {
@@ -530,6 +545,7 @@ function getenv(name) {
 
 var profilePath = getenv('PROFILE_PATH');
 var javaBin = getenv('PROFILE_JAVA_BIN');
+var javaArgs = getenv('PROFILE_JAVA_ARGS');
 var error = $();
 var raw = $.NSString.stringWithContentsOfFileEncodingError(profilePath, $.NSUTF8StringEncoding, error);
 if (!raw) {
@@ -543,7 +559,7 @@ profile.name = 'NeoForge';
 profile.type = 'custom';
 profile.lastVersionId = 'neoforge-26.1.2.75';
 profile.javaDir = javaBin;
-profile.javaArgs = profile.javaArgs || '-Xmx8G -XX:+UnlockExperimentalVMOptions -XX:+UseG1GC -XX:G1NewSizePercent=20 -XX:G1ReservePercent=20 -XX:MaxGCPauseMillis=50 -XX:G1HeapRegionSize=32M';
+profile.javaArgs = javaArgs;
 profile.lastUsed = (new Date()).toISOString();
 data.profiles.NeoForge = profile;
 

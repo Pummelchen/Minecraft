@@ -1635,11 +1635,13 @@ AUTO_CACHE="$TMP_DIR/auto-cache"
 mkdir -p "$AUTO_REMOTE/downloads/client-files/mods" \
   "$AUTO_REMOTE/downloads/client-files/resourcepacks" \
   "$AUTO_REMOTE/downloads/client-files/shaderpacks" \
+  "$AUTO_REMOTE/downloads/client-files/tools" \
   "$AUTO_MC/mods" "$AUTO_MC/resourcepacks/Old Pack" "$AUTO_MC/shaderpacks/OldShader" \
   "$AUTO_MC/config"
 printf 'wanted mod\n' > "$AUTO_REMOTE/downloads/client-files/mods/wanted.jar"
 printf 'wanted resource\n' > "$AUTO_REMOTE/downloads/client-files/resourcepacks/Wanted Pack[1].zip"
 printf 'wanted shader\n' > "$AUTO_REMOTE/downloads/client-files/shaderpacks/wanted-shader.zip"
+printf '#!/bin/sh\necho updated\n' > "$AUTO_REMOTE/downloads/client-files/tools/wanted-tool.sh"
 printf 'old mod\n' > "$AUTO_MC/mods/old.jar"
 printf 'old resource\n' > "$AUTO_MC/resourcepacks/Old Pack/pack.mcmeta"
 printf 'old shader\n' > "$AUTO_MC/shaderpacks/OldShader/shaders.properties"
@@ -1664,6 +1666,10 @@ printf '{"general":{"showTutorial":{"value":true}}}\n' > "$AUTO_MC/config/mtscon
     "$(wc -c < "$AUTO_REMOTE/downloads/client-files/shaderpacks/wanted-shader.zip" | tr -d '[:space:]')" \
     "$(sha256_value "$AUTO_REMOTE/downloads/client-files/shaderpacks/wanted-shader.zip")" \
     "$AUTO_REMOTE/downloads/client-files/shaderpacks/wanted-shader.zip"
+  printf 'tools\twanted-tool.sh\t%s\tsha256:%s\tfile://%s\n' \
+    "$(wc -c < "$AUTO_REMOTE/downloads/client-files/tools/wanted-tool.sh" | tr -d '[:space:]')" \
+    "$(sha256_value "$AUTO_REMOTE/downloads/client-files/tools/wanted-tool.sh")" \
+    "$AUTO_REMOTE/downloads/client-files/tools/wanted-tool.sh"
 } > "$AUTO_REMOTE/client-sync-manifest.tsv"
 PUMMELCHEN_SYNC_MANIFEST_URL="file://$AUTO_REMOTE/client-sync-manifest.tsv" \
   PUMMELCHEN_RELEASE_ID="qa-auto-release" \
@@ -1677,14 +1683,16 @@ PUMMELCHEN_SYNC_MANIFEST_URL="file://$AUTO_REMOTE/client-sync-manifest.tsv" \
 [ -f "$AUTO_MC/mods/wanted.jar" ] || fail "auto-updater did not install wanted mod"
 [ -f "$AUTO_MC/resourcepacks/Wanted Pack[1].zip" ] || fail "auto-updater did not install wanted resource pack"
 [ -f "$AUTO_MC/shaderpacks/wanted-shader.zip" ] || fail "auto-updater did not install wanted shader pack"
+[ -x "$AUTO_HOME/bin/wanted-tool.sh" ] || fail "auto-updater did not install wanted tool as executable"
 [ ! -e "$AUTO_MC/mods/old.jar" ] || fail "auto-updater left unmanaged old mod active"
 [ ! -e "$AUTO_MC/resourcepacks/Old Pack" ] || fail "auto-updater left unmanaged resource pack active"
 [ ! -e "$AUTO_MC/shaderpacks/OldShader" ] || fail "auto-updater left unmanaged shader pack active"
 find "$AUTO_MC" -maxdepth 2 -path '*before-pummelchen-auto-*/*' -print | grep -q 'Old Pack' || fail "auto-updater did not quarantine old resource pack"
-grep -Fq 'resourcePacks:["vanilla"]' "$AUTO_MC/options.txt" || fail "auto-updater did not reset active resource packs"
+grep -Fq 'resourcePacks:["vanilla","mod_resources","file/ModernArch v2.8.2 [26.1] [128x].zip","file/ModernArch FA Extension v2.2.zip","file/ModernArch Denser Grass Addon.zip"]' "$AUTO_MC/options.txt" || fail "auto-updater did not enable ModernArch resource pack stack"
 grep -Fq 'incompatibleResourcePacks:[]' "$AUTO_MC/options.txt" || fail "auto-updater did not reset incompatible resource packs"
-grep -Fxq 'shaderPack=OldShader' "$AUTO_MC/optionsshaders.txt" || fail "auto-updater did not preserve options shader"
-grep -Fxq 'shaderPack=OldShader' "$AUTO_MC/config/iris.properties" || fail "auto-updater did not preserve Iris shader"
+grep -Fxq 'shaderPack=BSL_v10.1.3.zip' "$AUTO_MC/optionsshaders.txt" || fail "auto-updater did not select BSL in options shader"
+grep -Fxq 'shaderPack=BSL_v10.1.3.zip' "$AUTO_MC/config/iris.properties" || fail "auto-updater did not select BSL in Iris shader"
+grep -Fxq 'enableShaders=true' "$AUTO_MC/config/iris.properties" || fail "auto-updater did not enable Iris shaders"
 grep -Fxq 'showLoadWarnings=false' "$AUTO_MC/config/neoforge-client.toml" || fail "auto-updater did not quiet NeoForge load warnings"
 grep -Fxq 'showLoadWarnings=false' "$AUTO_MC/config/forge-client.toml" || fail "auto-updater did not quiet Forge load warnings"
 grep -Fxq 'showCheckScreen=false' "$AUTO_MC/config/yuushya-client.toml" || fail "auto-updater did not quiet Yuushya check screen"
