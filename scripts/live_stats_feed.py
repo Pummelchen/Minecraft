@@ -19,10 +19,11 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import minecraft_metrics_exporter as mc_metrics
-from pummelchen_utils import display_release_version, human_bytes, write_json_atomic
+from db_compat import connect_readonly
+from pummelchen_utils import display_release_version, human_bytes, table_exists, write_json_atomic
 
 
-DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
+DEFAULT_DB = Path("/var/minecraft_mods/data/pummelchen.duckdb")
 DEFAULT_OUTPUT = Path("/var/minecraft_mods/site/public/live-stats.json")
 DEFAULT_STATE = Path("/var/minecraft_mods/site/live-stats-history.json")
 DEFAULT_SERVER = Path("/var/minecraft_26.1.2")
@@ -214,6 +215,24 @@ def read_json(path: Path) -> dict[str, Any]:
 
 
 def active_release_text(db_path: Path, server_key: str) -> str:
+    if db_path.suffix.lower() == ".duckdb":
+        try:
+            with connect_readonly(db_path) as conn:
+                if not table_exists(conn, "pack_releases"):
+                    return "No active release"
+                row = conn.execute(
+                    """
+                    SELECT release_id
+                    FROM pack_releases
+                    WHERE server_key = ? AND active = 1
+                    ORDER BY activated_at DESC
+                    LIMIT 1
+                    """,
+                    (server_key,),
+                ).fetchone()
+                return display_release_version(row["release_id"] if row else "")
+        except Exception:
+            return "No active release"
     release = mc_metrics.active_release(db_path, server_key)
     if not release:
         return "No active release"
