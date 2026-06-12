@@ -69,10 +69,7 @@ public enum CurrentReleaseValidator {
     }
 
     public static func validate(_ release: CurrentRelease) throws {
-        try ContractValidation.require(
-            release.releaseID.hasPrefix("release_"),
-            "release_id must start with release_"
-        )
+        _ = try ReleaseIdentifier(release.releaseID)
         try ContractValidation.require(
             !release.createdAt.isEmpty,
             "created_at is required"

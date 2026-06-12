@@ -1142,6 +1142,13 @@ Acceptance:
 - Can render Tested Updates timestamps as `YYYY-MM-DD HH:MM:SS`.
 - Can open the DuckDB foundation database read-only and query reporting views.
 
+Implementation status:
+
+- Implemented in `swift/PummelchenSwift/Sources/PummelchenCore`.
+- The package now includes release-id parsing, API envelope/client-status/release-history/reporting models, SHA256 file hashing, managed file inventory, safe path validation, timestamp display formatting, Minecraft client default writing, and a read-only DuckDB reporting-view wrapper.
+- The `pummelchen-contracts duckdb-reporting-smoke <duckdb-file>` command exercises the shared core read-only DuckDB wrapper against `reporting.v_tested_updates_table`, `reporting.v_failed_mods_table`, and `reporting.v_release_health_latest`.
+- Phase 2 remains non-invasive: no production writer is switched to Swift, and no live client/server behavior is replaced.
+
 ### Phase 3: Server Read-Only API
 
 Create `PummelchenServer` service with read-only endpoints:
