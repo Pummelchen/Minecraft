@@ -693,7 +693,7 @@ def create_release(args: argparse.Namespace) -> int:
     client_manifest_rows: list[tuple[str, Path, Path]] = []
     for section in ("mods", "resourcepacks", "shaderpacks", "tools"):
         root = release_dir / "client-package" / section
-        patterns = ("*",) if section == "tools" else ("*.jar", "*.zip")
+        patterns = ("*",) if section in {"shaderpacks", "tools"} else ("*.jar", "*.zip")
         for path in iter_files(root, patterns):
             client_manifest_rows.append((f"client_{section}", root, path))
     client_manifest_sha = write_manifest(client_manifest_rows, release_dir / "manifests" / "client-package.tsv")
