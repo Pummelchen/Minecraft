@@ -517,9 +517,12 @@ set_property_line() {
   local tmp="$path.pummelchen.tmp"
   awk -v key="$key" -v value="$value" '
     BEGIN { replaced = 0 }
-    index($0, key "=") == 1 {
-      print key "=" value
-      replaced = 1
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      if (!replaced) {
+        indent = substr($0, 1, match($0, /[^[:space:]]/) - 1)
+        print indent key "=" value
+        replaced = 1
+      }
       next
     }
     { print }
@@ -543,6 +546,8 @@ apply_pummelchen_client_defaults() {
   set_property_line "$MC_DIR/config/neoforge-client.toml" "showLoadWarnings" "false"
   set_property_line "$MC_DIR/config/forge-client.toml" "showLoadWarnings" "false"
   set_property_line "$MC_DIR/config/yuushya-client.toml" "showCheckScreen" "false"
+  set_property_line "$MC_DIR/config/untitledduckmod-server.toml" "duck_tamed_no_follow" "true"
+  set_property_line "$MC_DIR/config/untitledduckmod-server.toml" "goose_tamed_no_follow" "true"
   [ -f "$MC_DIR/config/iris.properties" ] || : > "$MC_DIR/config/iris.properties"
   set_property_line "$MC_DIR/config/iris.properties" "shaderPack" "$PUMMELCHEN_SHADER_PACK"
   set_property_line "$MC_DIR/config/iris.properties" "enableShaders" "true"

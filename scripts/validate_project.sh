@@ -173,6 +173,10 @@ printf '%s\n' "$CONFIG_APPLY" | grep -q 'config_overrides_changed=2' || fail "co
 grep -q 'removeErroringEntities = true' "$CONFIG_TARGET/neoforge-server.toml" || fail "config override was not copied"
 CONFIG_REPEAT="$("$PYTHON_BIN" "$ROOT_DIR/scripts/apply_config_overrides.py" --source "$CONFIG_SOURCE" --target "$CONFIG_TARGET")"
 printf '%s\n' "$CONFIG_REPEAT" | grep -q 'config_overrides_changed=0' || fail "config override repeat was not a no-op"
+grep -q '^	duck_tamed_no_follow = true$' "$ROOT_DIR/server-config/config-overrides/untitledduckmod-server.toml" \
+  || fail "project Untitled Duck config must disable tamed duck following"
+grep -q '^	goose_tamed_no_follow = true$' "$ROOT_DIR/server-config/config-overrides/untitledduckmod-server.toml" \
+  || fail "project Untitled Duck config must disable tamed goose following"
 
 if command -v java >/dev/null 2>&1; then
   log "Minecraft server list helper"
@@ -1693,6 +1697,8 @@ grep -Fq 'incompatibleResourcePacks:[]' "$AUTO_MC/options.txt" || fail "auto-upd
 grep -Fxq 'shaderPack=BSL_v10.1.3.zip' "$AUTO_MC/optionsshaders.txt" || fail "auto-updater did not select BSL in options shader"
 grep -Fxq 'shaderPack=BSL_v10.1.3.zip' "$AUTO_MC/config/iris.properties" || fail "auto-updater did not select BSL in Iris shader"
 grep -Fxq 'enableShaders=true' "$AUTO_MC/config/iris.properties" || fail "auto-updater did not enable Iris shaders"
+grep -Fxq 'duck_tamed_no_follow=true' "$AUTO_MC/config/untitledduckmod-server.toml" || fail "auto-updater did not disable tamed duck following"
+grep -Fxq 'goose_tamed_no_follow=true' "$AUTO_MC/config/untitledduckmod-server.toml" || fail "auto-updater did not disable tamed goose following"
 grep -Fxq 'showLoadWarnings=false' "$AUTO_MC/config/neoforge-client.toml" || fail "auto-updater did not quiet NeoForge load warnings"
 grep -Fxq 'showLoadWarnings=false' "$AUTO_MC/config/forge-client.toml" || fail "auto-updater did not quiet Forge load warnings"
 grep -Fxq 'showCheckScreen=false' "$AUTO_MC/config/yuushya-client.toml" || fail "auto-updater did not quiet Yuushya check screen"
