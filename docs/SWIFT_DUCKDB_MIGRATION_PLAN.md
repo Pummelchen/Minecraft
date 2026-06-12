@@ -1068,7 +1068,7 @@ database/duckdb
 swift/PummelchenSwift/Sources/PummelchenDuckDB
 ```
 
-The first Phase 1 runner invokes the installed DuckDB CLI from Swift. That is intentional for the parity phase: it proves schemas, imports, reporting views, and Parquet exports on macOS/Debian without introducing embedded-linker risk. Direct embedded DuckDB integration should be added after the parity database contracts are stable.
+The first Phase 1 runner invokes the installed DuckDB CLI from Swift. That is intentional for the parity phase: it proves schemas, imports, row-count parity, reporting views, current-release/tested-updates parity, and Parquet exports on macOS/Debian without introducing embedded-linker risk. Direct embedded DuckDB integration should be added after the parity database contracts are stable.
 
 Tasks:
 

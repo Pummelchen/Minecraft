@@ -114,11 +114,47 @@ CREATE TABLE IF NOT EXISTS core.update_events (
 
 CREATE TABLE IF NOT EXISTS core.mod_acceptance_blocks (
     id BIGINT PRIMARY KEY,
+    acceptance_release_id BIGINT,
+    level INTEGER,
+    ordinal INTEGER,
     block_key VARCHAR NOT NULL,
     status VARCHAR NOT NULL,
     target_file_names VARCHAR NOT NULL,
+    included_file_names VARCHAR,
     run_label VARCHAR,
     created_at TIMESTAMP,
+    notes VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS core.mod_acceptance_releases (
+    id BIGINT PRIMARY KEY,
+    release_key VARCHAR NOT NULL,
+    completed_at TIMESTAMP,
+    status VARCHAR NOT NULL,
+    bundle_size INTEGER,
+    active_file_count INTEGER,
+    level_count INTEGER,
+    notes VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS core.test_runs (
+    id BIGINT PRIMARY KEY,
+    mod_id BIGINT,
+    tested_at TIMESTAMP,
+    test_label VARCHAR,
+    status VARCHAR,
+    notes VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS core.headless_client_runs (
+    id BIGINT PRIMARY KEY,
+    release_id VARCHAR,
+    started_at TIMESTAMP,
+    status VARCHAR,
+    renderer_summary VARCHAR,
+    duration_seconds DOUBLE,
+    crash_report_count INTEGER,
+    fatal_log_count INTEGER,
     notes VARCHAR
 );
 
@@ -159,21 +195,141 @@ CREATE TABLE IF NOT EXISTS audit.parquet_exports (
 );
 
 CREATE OR REPLACE VIEW reporting.v_tested_updates_table AS
+WITH candidates AS (
+    SELECT
+        u.tested_at,
+        COALESCE(m.name, u.new_file_name, 'Pack update') AS title,
+        u.event_type,
+        u.status,
+        u.old_file_name AS old_file,
+        u.new_file_name AS new_file,
+        COALESCE(u.source_url, m.primary_url) AS source_url,
+        u.test_label,
+        u.notes,
+        m.id AS mod_id,
+        'update_events' AS source
+    FROM core.update_events u
+    LEFT JOIN core.mods m ON m.id = u.mod_id
+    WHERE u.visible_on_site = true
+      AND u.status IN ('applied', 'ok')
+      AND u.tested_at >= now() - INTERVAL 30 DAYS
+
+    UNION ALL
+
+    SELECT
+        tr.tested_at,
+        COALESCE(m.name, 'Server boot test') AS title,
+        'server_boot_test' AS event_type,
+        'passed' AS status,
+        NULL AS old_file,
+        NULL AS new_file,
+        m.primary_url AS source_url,
+        COALESCE(tr.test_label, 'test_run_' || CAST(tr.id AS VARCHAR)) AS test_label,
+        tr.notes,
+        m.id AS mod_id,
+        'test_runs' AS source
+    FROM core.test_runs tr
+    LEFT JOIN core.mods m ON m.id = tr.mod_id
+    WHERE tr.mod_id IS NOT NULL
+      AND COALESCE(tr.notes, '') NOT LIKE 'Skipped:%'
+      AND COALESCE(tr.notes, '') NOT LIKE 'Compatible:%'
+      AND tr.tested_at >= now() - INTERVAL 30 DAYS
+
+    UNION ALL
+
+    SELECT
+        ab.created_at AS tested_at,
+        COALESCE(split_part(ab.target_file_names, '\n', 1), 'Block ' || ab.block_key) AS title,
+        'acceptance_pyramid_L' || CAST(COALESCE(ab.level, 0) AS VARCHAR) AS event_type,
+        'passed' AS status,
+        NULL AS old_file,
+        ab.target_file_names AS new_file,
+        NULL AS source_url,
+        ab.block_key AS test_label,
+        COALESCE(ab.notes, 'Level ' || CAST(COALESCE(ab.level, 0) AS VARCHAR) || ' block ' || CAST(COALESCE(ab.ordinal, 0) AS VARCHAR) || ' passed') AS notes,
+        NULL AS mod_id,
+        'mod_acceptance_blocks' AS source
+    FROM core.mod_acceptance_blocks ab
+    WHERE ab.status = 'passed'
+      AND ab.created_at >= now() - INTERVAL 30 DAYS
+
+    UNION ALL
+
+    SELECT
+        hc.started_at AS tested_at,
+        'Headless client join (release ' || COALESCE(hc.release_id, 'unknown') || ')' AS title,
+        'headless_client_join' AS event_type,
+        'passed' AS status,
+        NULL AS old_file,
+        NULL AS new_file,
+        NULL AS source_url,
+        'hc_' || CAST(hc.id AS VARCHAR) AS test_label,
+        COALESCE(hc.notes, 'Renderer: ' || COALESCE(hc.renderer_summary, 'unknown')) AS notes,
+        NULL AS mod_id,
+        'headless_client' AS source
+    FROM core.headless_client_runs hc
+    WHERE hc.status = 'passed'
+      AND hc.started_at >= now() - INTERVAL 30 DAYS
+
+    UNION ALL
+
+    SELECT
+        pr.created_at AS tested_at,
+        'Release promoted: ' || pr.release_id AS title,
+        'release_promotion' AS event_type,
+        'active' AS status,
+        NULL AS old_file,
+        NULL AS new_file,
+        '/downloads/releases/' || pr.release_id || '/report.html' AS source_url,
+        pr.release_id AS test_label,
+        COALESCE(pr.notes, 'New immutable release activated') AS notes,
+        NULL AS mod_id,
+        'pack_releases' AS source
+    FROM core.pack_releases pr
+    WHERE pr.active = true
+      AND pr.created_at >= now() - INTERVAL 30 DAYS
+
+    UNION ALL
+
+    SELECT
+        mar.completed_at AS tested_at,
+        'Mod acceptance: ' || mar.release_key || ' passed (' || CAST(COALESCE(mar.active_file_count, 0) AS VARCHAR) || ' files)' AS title,
+        'mod_acceptance' AS event_type,
+        'passed' AS status,
+        NULL AS old_file,
+        NULL AS new_file,
+        NULL AS source_url,
+        mar.release_key AS test_label,
+        COALESCE(mar.notes, 'Bundle size: ' || CAST(COALESCE(mar.bundle_size, 0) AS VARCHAR) || ', Levels: ' || CAST(COALESCE(mar.level_count, 0) AS VARCHAR)) AS notes,
+        NULL AS mod_id,
+        'mod_acceptance_releases' AS source
+    FROM core.mod_acceptance_releases mar
+    WHERE mar.status = 'passed'
+      AND mar.completed_at >= now() - INTERVAL 30 DAYS
+),
+deduped AS (
+    SELECT *,
+           row_number() OVER (
+               PARTITION BY mod_id, test_label, source
+               ORDER BY tested_at DESC
+           ) AS row_number
+    FROM candidates
+)
 SELECT
-    COALESCE(u.tested_at, a.created_at) AS tested_at,
-    COALESCE(m.name, u.new_file_name, a.block_key) AS title,
-    COALESCE(u.event_type, 'acceptance_pyramid_L0') AS event_type,
-    COALESCE(u.status, a.status) AS status,
-    u.old_file_name AS old_file,
-    COALESCE(u.new_file_name, a.target_file_names) AS new_file,
-    u.source_url,
-    COALESCE(u.test_label, a.run_label) AS test_label,
-    COALESCE(u.notes, a.notes) AS notes,
-    m.id AS mod_id
-FROM core.update_events u
-LEFT JOIN core.mods m ON m.id = u.mod_id
-FULL OUTER JOIN core.mod_acceptance_blocks a ON false
-WHERE COALESCE(u.visible_on_site, true) = true OR a.id IS NOT NULL;
+    tested_at,
+    title,
+    event_type,
+    status,
+    old_file,
+    new_file,
+    source_url,
+    test_label,
+    notes,
+    mod_id,
+    source
+FROM deduped
+WHERE row_number = 1
+ORDER BY tested_at DESC;
 
 CREATE OR REPLACE VIEW reporting.v_failed_mods_table AS
 SELECT

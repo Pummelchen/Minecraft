@@ -26,6 +26,16 @@ swift run --package-path swift/PummelchenSwift pummelchen-duckdb health \
   --duckdb /tmp/pummelchen_phase1.duckdb
 ```
 
+Run parity checks against SQLite and current site artifacts:
+
+```sh
+swift run --package-path swift/PummelchenSwift pummelchen-duckdb phase1-check \
+  --duckdb /tmp/pummelchen_phase1.duckdb \
+  --sqlite /var/minecraft_mods/data/minecraft_mods.sqlite \
+  --current-release-json /var/minecraft_mods/site/public/downloads/current-release.json \
+  --tested-updates-json /var/minecraft_mods/site/public/tested-updates.json
+```
+
 Export reporting views to Parquet:
 
 ```sh

@@ -116,13 +116,55 @@ DELETE FROM core.mod_acceptance_blocks;
 INSERT INTO core.mod_acceptance_blocks
 SELECT
     id,
+    acceptance_release_id,
+    level,
+    ordinal,
     block_key,
     status,
     target_file_names,
+    included_file_names,
     run_label,
     try_cast(created_at AS TIMESTAMP),
     notes
 FROM raw.mod_acceptance_blocks;
+
+DELETE FROM core.mod_acceptance_releases;
+INSERT INTO core.mod_acceptance_releases
+SELECT
+    id,
+    release_key,
+    try_cast(completed_at AS TIMESTAMP),
+    status,
+    bundle_size,
+    active_file_count,
+    level_count,
+    notes
+FROM raw.mod_acceptance_releases;
+
+DELETE FROM core.test_runs;
+INSERT INTO core.test_runs
+SELECT
+    id,
+    mod_id,
+    try_cast(tested_at AS TIMESTAMP),
+    test_label,
+    status,
+    notes
+FROM raw.test_runs;
+
+DELETE FROM core.headless_client_runs;
+INSERT INTO core.headless_client_runs
+SELECT
+    id,
+    release_id,
+    try_cast(started_at AS TIMESTAMP),
+    status,
+    renderer_summary,
+    duration_seconds,
+    crash_report_count,
+    fatal_log_count,
+    notes
+FROM raw.headless_client_runs;
 
 DELETE FROM core.client_update_status;
 INSERT INTO core.client_update_status
