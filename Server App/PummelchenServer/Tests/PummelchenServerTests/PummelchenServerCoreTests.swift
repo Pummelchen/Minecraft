@@ -222,6 +222,24 @@ struct PummelchenServerCoreTests {
         #expect(oversized.statusCode == 413)
     }
 
+    @Test("server errors redact bearer tokens")
+    func redactsBearerTokensFromErrors() throws {
+        let fixture = try makeProjectFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let api = makeAPI(fixture: fixture, token: "phase6-token")
+        let clientID = "client-redact-a"
+        let response = api.response(for: HTTPRequest(
+            method: "POST",
+            path: "/api/v1/clients/diagnostics",
+            headers: authHeaders(token: "phase6-token", clientID: clientID),
+            body: Data(#"{"client_id":"client-redact-a","reported_at":"not a date","level":"warning","summary":"Authorization: Bearer should-not-leak","details":null}"#.utf8)
+        ))
+        let body = String(decoding: response.body, as: UTF8.self)
+
+        #expect(!body.contains("should-not-leak"))
+    }
+
     @Test("phase 6 stores inventory diagnostics and defaults repair state")
     func phase6StoresInventoryDiagnosticsAndDefaults() throws {
         try requireDuckDB()
@@ -299,8 +317,10 @@ struct PummelchenServerCoreTests {
 
         try "client mod".write(to: clientPackage.appendingPathComponent("mods/example-client.jar"), atomically: true, encoding: .utf8)
         try "AURORA=2\n".write(to: clientPackage.appendingPathComponent("shaderpacks/BSL_v10.1.3.zip.txt"), atomically: true, encoding: .utf8)
-        try "#!/bin/sh\nexit 0\n".write(to: clientPackage.appendingPathComponent("tools/pummelchen-auto-update.sh"), atomically: true, encoding: .utf8)
-        try #"{"generated_by":"legacy-status-site","rows":[{"title":"Existing tested update"}]}"#.write(to: root.appendingPathComponent("site/public/data/tested-updates.json"), atomically: true, encoding: .utf8)
+        let syncHelper = clientPackage.appendingPathComponent("tools/pummelchen-client-sync")
+        try "#!/bin/sh\nexit 0\n".write(to: syncHelper, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: syncHelper.path)
+        try #"{"generated_by":"swift-duckdb-site","rows":[{"title":"Existing tested update"}]}"#.write(to: root.appendingPathComponent("site/public/data/tested-updates.json"), atomically: true, encoding: .utf8)
         try "server mod".write(to: serverDir.appendingPathComponent("mods/example-server.jar"), atomically: true, encoding: .utf8)
         try "datapack".write(to: serverDir.appendingPathComponent("server-datapacks/pummelchen-welcome.zip"), atomically: true, encoding: .utf8)
 
@@ -333,7 +353,7 @@ struct PummelchenServerCoreTests {
         #expect(FileManager.default.fileExists(atPath: publicDownloads.appendingPathComponent("releases/\(releaseID)/\(SwiftReleasePipeline.dmgName).sha256").path))
         #expect(FileManager.default.fileExists(atPath: publicDownloads.appendingPathComponent("releases/\(releaseID)/data/tested-updates.json").path))
         let testedUpdates = try String(contentsOf: publicDownloads.appendingPathComponent("releases/\(releaseID)/data/tested-updates.json"), encoding: .utf8)
-        #expect(testedUpdates.contains("legacy-status-site"))
+        #expect(testedUpdates.contains("swift-duckdb-site"))
         let publicManifest = try String(contentsOf: publicDownloads.appendingPathComponent("releases/\(releaseID)/client-sync-manifest.tsv"), encoding: .utf8)
         let manifest = try ClientSyncManifestParser.parse(publicManifest)
         #expect(manifest.entries.contains { $0.section == "shaderpacks" && $0.name == "BSL_v10.1.3.zip.txt" })

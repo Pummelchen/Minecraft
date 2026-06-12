@@ -189,7 +189,10 @@ final class LocalHTTPServer {
             "Content-Length: \(response.body.count)",
             "Connection: close",
             "X-Pummelchen-Transport-Target: http3_quic_edge",
-            "X-Pummelchen-Mode: swift_api"
+            "X-Pummelchen-Mode: swift_api",
+            "X-Content-Type-Options: nosniff",
+            "X-Frame-Options: DENY",
+            "Referrer-Policy: no-referrer"
         ]
         for key in response.headers.keys.sorted() {
             if let value = response.headers[key] {

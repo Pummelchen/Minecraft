@@ -1,16 +1,16 @@
 # Pummelchen Production Contracts
 
-This document freezes the production behavior that the Swift/DuckDB migration must preserve before replacing any script.
+This document freezes the production behavior for the Swift/DuckDB production system.
 
 ## Project Location
 
-The Swift migration lives in `swift/PummelchenSwift`.
+The Swift production project lives in the repository folders `Server App`, `Client App`, `Server App/Database`, `Server App/nginx`, and `Live Backup`.
 
 Reason:
 
-- It keeps the new Swift code isolated from live Python/Bash operations.
-- It allows SwiftPM build/test gates without changing production behavior.
-- It can later produce both the Debian server service and the macOS client app from shared contract code.
+- `Server App` owns the Debian service, release orchestration, safe world reset, DuckDB writes, and nginx-facing API data.
+- `Client App` owns the macOS app, background sync, local status database, and player-facing sync UI.
+- `Server App/PummelchenShared` owns the shared contracts used by both sides.
 
 The client identity/token model is frozen in `docs/contracts/CLIENT_IDENTITY.md`.
 
@@ -24,15 +24,9 @@ The client identity/token model is frozen in `docs/contracts/CLIENT_IDENTITY.md`
 6. Downloads must use temporary files, verify SHA256, then atomically replace the final path.
 7. If no files need download, the client must still show or print a useful all-synced summary.
 
-## Manual Repair One-Liner
+## Manual Repair
 
-The website must keep a copyable manual repair command until the Swift client has proven real-world recovery:
-
-```sh
-curl -fsSL http://91.99.176.243:7788/downloads/pummelchen-auto-update.sh -o "$HOME/Library/Application Support/Pummelchen/bin/pummelchen-auto-update.sh" && chmod +x "$HOME/Library/Application Support/Pummelchen/bin/pummelchen-auto-update.sh" && "$HOME/Library/Application Support/Pummelchen/bin/pummelchen-auto-update.sh" --force
-```
-
-The Swift CLI helper can replace the downloaded script only after the same command path recovers at least one broken client install.
+Manual repair is handled by the Swift client app and its bundled sync helper. The website must not publish legacy script repair commands.
 
 ## Client No-Download Summary
 
@@ -46,17 +40,18 @@ When nothing needs download, the manual updater and future Swift CLI must report
 
 ## DMG Contents
 
-Current legacy DMG contents must remain functionally available during migration:
+Current DMG contents must remain functionally available:
 
 - installer entrypoint
-- client tools/updater
+- Swift client app
+- bundled Swift sync helper
 - client manifest
 - resource packs
 - shader packs
 - default configs
 - Pummelchen server entry setup
 
-The future DMG will install `PummelchenClient.app`, but it must keep CLI repair functionality inside the app bundle.
+The DMG installs `PummelchenClient.app` and keeps CLI repair functionality inside the app bundle.
 
 ## Client Defaults
 
@@ -171,7 +166,7 @@ The failed-mods page/table must include:
 
 ## Safe World Reset Behavior
 
-Safe reset remains destructive and must only run through an audited job queue in the future.
+Safe reset is destructive and must only run through the audited Swift server app workflow.
 
 Required behavior:
 

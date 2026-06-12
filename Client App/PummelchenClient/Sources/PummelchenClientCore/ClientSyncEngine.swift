@@ -358,10 +358,9 @@ public struct ClientSyncEngine: Sendable {
 
     private func report(result: ClientSyncResult, changedFiles: Int) async {
         guard let token = configuration.clientAPIToken, !token.isEmpty else {
-            await reportLegacy(result: result, changedFiles: changedFiles)
             return
         }
-        let clientID = configuration.clientID ?? Host.current().localizedName ?? "swift-client"
+        let clientID = Self.validClientID(configuration.clientID ?? Host.current().localizedName)
         let status = result.result == "ok"
             ? (changedFiles == 0 ? "synced" : "synced")
             : (result.message.lowercased().contains("checksum") ? "failed_checksum" : "error")
@@ -386,28 +385,6 @@ public struct ClientSyncEngine: Sendable {
         request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(clientID, forHTTPHeaderField: "X-Pummelchen-Client-ID")
-        request.setValue("PummelchenSwiftSync/0.6", forHTTPHeaderField: "User-Agent")
-        request.httpBody = body
-        _ = try? await URLSession.shared.data(for: request)
-    }
-
-    private func reportLegacy(result: ClientSyncResult, changedFiles: Int) async {
-        var components = URLComponents(url: configuration.serverURL.appendingPathComponent("client-logs/update-status"), resolvingAgainstBaseURL: false)
-        components?.queryItems = [
-            URLQueryItem(name: "client_id", value: Host.current().localizedName ?? "swift-client"),
-            URLQueryItem(name: "installed_release_id", value: result.targetReleaseID),
-            URLQueryItem(name: "target_release_id", value: result.targetReleaseID),
-            URLQueryItem(name: "status", value: result.result),
-            URLQueryItem(name: "manifest_entries", value: String(result.manifestEntries)),
-            URLQueryItem(name: "changed_files", value: String(changedFiles)),
-            URLQueryItem(name: "message", value: result.message)
-        ]
-        guard let body = components?.percentEncodedQuery?.data(using: .utf8) else {
-            return
-        }
-        var request = URLRequest(url: configuration.serverURL.appendingPathComponent("client-logs/update-status"))
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
         request.setValue("PummelchenSwiftSync/0.6", forHTTPHeaderField: "User-Agent")
         request.httpBody = body
         _ = try? await URLSession.shared.data(for: request)
@@ -453,5 +430,21 @@ public struct ClientSyncEngine: Sendable {
         } catch {
             return "unknown"
         }
+    }
+
+    private static func validClientID(_ proposed: String?) -> String {
+        let raw = proposed?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let sanitized = raw.map { character -> Character in
+            if character.isLetter || character.isNumber || character == "." || character == "_" || character == ":" || character == "@" || character == "-" {
+                return character
+            }
+            return "-"
+        }
+        let value = String(sanitized).trimmingCharacters(in: CharacterSet(charactersIn: ".:_@-"))
+        if value.count >= 8 && value.count <= 128 {
+            return value
+        }
+        let fallback = "pummelchen-\(machineArchitecture())"
+        return String(fallback.prefix(128))
     }
 }

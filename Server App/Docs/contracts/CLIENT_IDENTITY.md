@@ -1,6 +1,6 @@
 # Pummelchen Client Identity Contract
 
-This contract freezes the client identity/token model for the Swift migration. It is a Phase 0 contract only; existing production scripts remain authoritative until later cutover phases.
+This contract freezes the client identity/token model for the Swift/DuckDB production system.
 
 ## Identity
 
@@ -46,7 +46,7 @@ HTTP/2 HTTPS polling is allowed only as an early private-build compatibility fal
 
 ## Non-Goals
 
-- No direct DuckDB access from clients.
+- No direct access from clients to the server-side DuckDB database.
 - No unauthenticated client write APIs.
 - No shared global client token for production.
 - No large file downloads over the bidirectional QUIC control channel.

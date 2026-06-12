@@ -42,4 +42,23 @@ struct ClientSyncManifestTests {
             _ = try ClientSyncManifestParser.parse(invalid)
         }
     }
+
+    @Test("rejects names and URLs that escape managed client folders")
+    func rejectsEscapingNamesAndURLs() throws {
+        let escapingName = """
+        # Pummelchen client sync manifest v1
+        mods\t../escape.jar\t1\tsha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tdownloads/releases/release_20260612_V1/client-files/mods/../escape.jar
+        """
+        let mismatchedURL = """
+        # Pummelchen client sync manifest v1
+        mods\texample.jar\t1\tsha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tdownloads/releases/release_20260612_V1/client-files/tools/example.jar
+        """
+
+        #expect(throws: ContractValidationError.self) {
+            _ = try ClientSyncManifestParser.parse(escapingName)
+        }
+        #expect(throws: ContractValidationError.self) {
+            _ = try ClientSyncManifestParser.parse(mismatchedURL)
+        }
+    }
 }

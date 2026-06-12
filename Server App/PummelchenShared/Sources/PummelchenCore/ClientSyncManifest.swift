@@ -60,6 +60,7 @@ public enum ClientSyncManifestParser {
                 "line \(lineNumber): unknown section \(section)"
             )
             try ContractValidation.require(!name.isEmpty, "line \(lineNumber): name is required")
+            try validateManifestFileName(name, lineNumber: lineNumber)
             guard let sizeBytes = Int64(sizeText), sizeBytes >= 0 else {
                 throw ContractValidationError.invalid("line \(lineNumber): size must be a non-negative integer")
             }
@@ -73,6 +74,7 @@ public enum ClientSyncManifestParser {
                 urlPath.hasPrefix("downloads/releases/"),
                 "line \(lineNumber): url_path must be release-scoped"
             )
+            try validateManifestURLPath(urlPath, section: section, name: name, lineNumber: lineNumber)
 
             let key = "\(section)\t\(name)"
             try ContractValidation.require(
@@ -92,5 +94,21 @@ public enum ClientSyncManifestParser {
         }
 
         return ClientSyncManifest(entries: entries)
+    }
+
+    private static func validateManifestFileName(_ name: String, lineNumber: Int) throws {
+        let forbidden = CharacterSet(charactersIn: "/\\")
+        try ContractValidation.require(name.rangeOfCharacter(from: forbidden) == nil, "line \(lineNumber): name must be a plain file name")
+        try ContractValidation.require(name != "." && name != ".." && !name.hasPrefix("."), "line \(lineNumber): hidden or relative file names are not allowed")
+        try ContractValidation.require(!name.contains("\0"), "line \(lineNumber): name contains a NUL byte")
+    }
+
+    private static func validateManifestURLPath(_ urlPath: String, section: String, name: String, lineNumber: Int) throws {
+        try ContractValidation.require(!urlPath.contains(".."), "line \(lineNumber): url_path must not contain parent traversal")
+        try ContractValidation.require(!urlPath.contains("\\"), "line \(lineNumber): url_path must use forward slashes")
+        try ContractValidation.require(
+            urlPath.hasSuffix("/client-files/\(section)/\(name)"),
+            "line \(lineNumber): url_path must match the manifest section and file name"
+        )
     }
 }

@@ -132,7 +132,7 @@ public struct ControlEventStore: Sendable {
 
     private func validateClientID(_ clientID: String) throws {
         let trimmed = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
-        try ContractValidation.require(trimmed.count >= 8 && trimmed.count <= 128, "client_id must be 8-128 characters")
+        try ContractValidation.requireClientID(trimmed)
     }
 
     private func parseEvents(_ csv: String) throws -> [ControlEvent] {

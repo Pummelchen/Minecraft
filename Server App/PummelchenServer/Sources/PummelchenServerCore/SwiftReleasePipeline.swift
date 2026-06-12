@@ -343,12 +343,12 @@ public struct SwiftReleasePipeline: Sendable {
             let output = try runCommand(executable: "/bin/sh", arguments: ["-lc", restartCommand], currentDirectory: config.projectRoot)
             try executeDuckDB("""
             INSERT INTO release.release_events(event_id, release_id, event_at, event_type, status, actor, notes)
-            VALUES (\(Self.sqlLiteral(UUID().uuidString)), \(Self.sqlLiteral(config.releaseID)), TIMESTAMP '\(Self.duckTimestamp(Date()))', 'restart', 'ok', \(Self.sqlLiteral(config.actor)), \(Self.sqlLiteral(output.prefix(1000).description)));
+            VALUES (\(Self.sqlLiteral(UUID().uuidString)), \(Self.sqlLiteral(config.releaseID)), TIMESTAMP '\(Self.duckTimestamp(Date()))', 'restart', 'ok', \(Self.sqlLiteral(config.actor)), \(Self.sqlLiteral(Self.redactSecrets(output).prefix(1000).description)));
             """)
         } catch {
             try executeDuckDB("""
             INSERT INTO release.release_events(event_id, release_id, event_at, event_type, status, actor, notes)
-            VALUES (\(Self.sqlLiteral(UUID().uuidString)), \(Self.sqlLiteral(config.releaseID)), TIMESTAMP '\(Self.duckTimestamp(Date()))', 'restart', 'error', \(Self.sqlLiteral(config.actor)), \(Self.sqlLiteral(String(describing: error).prefix(1000).description)));
+            VALUES (\(Self.sqlLiteral(UUID().uuidString)), \(Self.sqlLiteral(config.releaseID)), TIMESTAMP '\(Self.duckTimestamp(Date()))', 'restart', 'error', \(Self.sqlLiteral(config.actor)), \(Self.sqlLiteral(Self.redactSecrets(String(describing: error)).prefix(1000).description)));
             """)
             throw error
         }
@@ -362,12 +362,12 @@ public struct SwiftReleasePipeline: Sendable {
             let output = try runCommand(executable: "/bin/sh", arguments: ["-lc", healthCommand], currentDirectory: config.projectRoot)
             try executeDuckDB("""
             INSERT INTO release.release_health_results(result_id, release_id, checked_at, status, details)
-            VALUES (\(Self.sqlLiteral(UUID().uuidString)), \(Self.sqlLiteral(config.releaseID)), TIMESTAMP '\(Self.duckTimestamp(Date()))', 'ok', \(Self.sqlLiteral(output.prefix(2000).description)));
+            VALUES (\(Self.sqlLiteral(UUID().uuidString)), \(Self.sqlLiteral(config.releaseID)), TIMESTAMP '\(Self.duckTimestamp(Date()))', 'ok', \(Self.sqlLiteral(Self.redactSecrets(output).prefix(2000).description)));
             """)
         } catch {
             try executeDuckDB("""
             INSERT INTO release.release_health_results(result_id, release_id, checked_at, status, details)
-            VALUES (\(Self.sqlLiteral(UUID().uuidString)), \(Self.sqlLiteral(config.releaseID)), TIMESTAMP '\(Self.duckTimestamp(Date()))', 'error', \(Self.sqlLiteral(String(describing: error).prefix(2000).description)));
+            VALUES (\(Self.sqlLiteral(UUID().uuidString)), \(Self.sqlLiteral(config.releaseID)), TIMESTAMP '\(Self.duckTimestamp(Date()))', 'error', \(Self.sqlLiteral(Self.redactSecrets(String(describing: error)).prefix(2000).description)));
             """)
             throw error
         }
@@ -542,6 +542,9 @@ public struct SwiftReleasePipeline: Sendable {
             return false
         }
         if section == .tools {
+            if file.pathExtension.isEmpty {
+                return fileManager.isExecutableFile(atPath: file.path)
+            }
             return ["sh", "java", "txt", "md", "json"].contains(file.pathExtension.lowercased())
         }
         if section == .shaderpacks {
@@ -643,7 +646,7 @@ public struct SwiftReleasePipeline: Sendable {
         process.waitUntilExit()
         let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         guard process.terminationStatus == 0 else {
-            throw SwiftReleasePipelineError.commandFailed(([executable] + arguments).joined(separator: " ") + "\n" + output)
+            throw SwiftReleasePipelineError.commandFailed(Self.redactSecrets(([executable] + arguments).joined(separator: " ") + "\n" + output))
         }
         return output
     }
@@ -685,6 +688,14 @@ public struct SwiftReleasePipeline: Sendable {
     private static func sqlTimestamp(_ value: String) -> String {
         let parsed = ISO8601DateFormatter().date(from: value) ?? Date()
         return duckTimestamp(parsed)
+    }
+
+    private static func redactSecrets(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: #"Bearer\s+[A-Za-z0-9._~+/\-=]+"#, with: "Bearer [REDACTED]", options: .regularExpression)
+            .replacingOccurrences(of: #"(--rcon-password\s+)(\S+)"#, with: "$1[REDACTED]", options: .regularExpression)
+            .replacingOccurrences(of: #"(rcon\.password\s*=\s*)(\S+)"#, with: "$1[REDACTED]", options: .regularExpression)
+            .replacingOccurrences(of: #""client_secret"\s*:\s*"[^"]+""#, with: #""client_secret":"[REDACTED]""#, options: .regularExpression)
     }
 
     private static func duckTimestamp(_ date: Date) -> String {

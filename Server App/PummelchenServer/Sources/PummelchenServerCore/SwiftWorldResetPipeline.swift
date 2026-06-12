@@ -690,7 +690,7 @@ public struct SwiftWorldResetPipeline: Sendable {
         process.waitUntilExit()
         let output = pipe.fileHandleForReading.readDataToEndOfFile()
         guard process.terminationStatus == 0 else {
-            throw SwiftWorldResetError.commandFailed(([executable] + arguments).joined(separator: " ") + "\n" + String(decoding: output, as: UTF8.self))
+            throw SwiftWorldResetError.commandFailed(Self.redactSecrets(([executable] + arguments).joined(separator: " ") + "\n" + String(decoding: output, as: UTF8.self)))
         }
         return output
     }
@@ -729,6 +729,14 @@ public struct SwiftWorldResetPipeline: Sendable {
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         return formatter.string(from: parsed)
+    }
+
+    private static func redactSecrets(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: #"Bearer\s+[A-Za-z0-9._~+/\-=]+"#, with: "Bearer [REDACTED]", options: .regularExpression)
+            .replacingOccurrences(of: #"(--rcon-password\s+)(\S+)"#, with: "$1[REDACTED]", options: .regularExpression)
+            .replacingOccurrences(of: #"(rcon\.password\s*=\s*)(\S+)"#, with: "$1[REDACTED]", options: .regularExpression)
+            .replacingOccurrences(of: #""client_secret"\s*:\s*"[^"]+""#, with: #""client_secret":"[REDACTED]""#, options: .regularExpression)
     }
 
     private static func duckDBExecutablePath() throws -> String {

@@ -4,14 +4,14 @@ public struct SafePath: Sendable {
     public let root: URL
 
     public init(root: URL) throws {
-        self.root = root.standardizedFileURL
+        self.root = root.standardizedFileURL.resolvingSymlinksInPath()
         try ContractValidation.require(root.isFileURL, "root must be a file URL")
     }
 
     public func validateChild(_ candidate: URL) throws -> URL {
         try ContractValidation.require(candidate.isFileURL, "candidate must be a file URL")
-        let rootPath = root.standardizedFileURL.path
-        let candidatePath = candidate.standardizedFileURL.path
+        let rootPath = root.standardizedFileURL.resolvingSymlinksInPath().path
+        let candidatePath = candidate.standardizedFileURL.resolvingSymlinksInPath().path
         try ContractValidation.require(
             candidatePath == rootPath || candidatePath.hasPrefix(rootPath + "/"),
             "path escapes root: \(candidate.path)"

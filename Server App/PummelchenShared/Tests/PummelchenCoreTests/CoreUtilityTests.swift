@@ -49,6 +49,18 @@ struct CoreUtilityTests {
         }
     }
 
+    @Test("validates production client identifiers")
+    func validatesClientIdentifiers() throws {
+        try ContractValidation.requireClientID("client-phase6-a")
+
+        #expect(throws: ContractValidationError.self) {
+            try ContractValidation.requireClientID("bad id with spaces")
+        }
+        #expect(throws: ContractValidationError.self) {
+            try ContractValidation.requireClientID("short")
+        }
+    }
+
     @Test("encodes API envelope with snake case contract fields")
     func encodesAPIEnvelope() throws {
         let report = ClientStatusReport(

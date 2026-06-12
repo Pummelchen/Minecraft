@@ -377,15 +377,15 @@ public final class PummelchenServerAPI: @unchecked Sendable {
         guard let expected = config.clientAPIToken, !expected.isEmpty else {
             throw PummelchenServerError.unauthorized("client write API token is not configured")
         }
-        guard request.headers["authorization"] == "Bearer \(expected)" else {
+        guard Self.constantTimeEquals(request.headers["authorization"] ?? "", "Bearer \(expected)") else {
             throw PummelchenServerError.unauthorized("invalid client API token")
         }
     }
 
     private func validateClientID(_ bodyClientID: String, header: String?) throws {
         let trimmed = bodyClientID.trimmingCharacters(in: .whitespacesAndNewlines)
-        try ContractValidation.require(trimmed.count >= 8 && trimmed.count <= 128, "client_id must be 8-128 characters")
-        if let header, !header.isEmpty, header != bodyClientID {
+        try ContractValidation.requireClientID(trimmed)
+        if let header, !header.isEmpty, header.trimmingCharacters(in: .whitespacesAndNewlines) != trimmed {
             throw PummelchenServerError.unauthorized("client id header does not match payload")
         }
     }
@@ -451,7 +451,7 @@ public final class PummelchenServerAPI: @unchecked Sendable {
     }
 
     private func errorResponse(status: Int, message: String) -> HTTPResponse {
-        let escaped = message
+        let escaped = Self.redactSecrets(message)
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         let body = #"{"api_version":"v1","error":"\#(escaped)","request_id":"\#(UUID().uuidString)","server_time":"\#(Self.isoNow())"}"#
@@ -462,6 +462,26 @@ public final class PummelchenServerAPI: @unchecked Sendable {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.string(from: Date())
+    }
+
+    private static func constantTimeEquals(_ left: String, _ right: String) -> Bool {
+        let leftBytes = [UInt8](left.utf8)
+        let rightBytes = [UInt8](right.utf8)
+        var difference = UInt8(leftBytes.count ^ rightBytes.count)
+        for index in 0..<max(leftBytes.count, rightBytes.count) {
+            let leftByte = index < leftBytes.count ? leftBytes[index] : 0
+            let rightByte = index < rightBytes.count ? rightBytes[index] : 0
+            difference |= leftByte ^ rightByte
+        }
+        return difference == 0
+    }
+
+    private static func redactSecrets(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: #"Bearer\s+[A-Za-z0-9._~+/\-=]+"#, with: "Bearer [REDACTED]", options: .regularExpression)
+            .replacingOccurrences(of: #"(--rcon-password\s+)(\S+)"#, with: "$1[REDACTED]", options: .regularExpression)
+            .replacingOccurrences(of: #"(rcon\.password\s*=\s*)(\S+)"#, with: "$1[REDACTED]", options: .regularExpression)
+            .replacingOccurrences(of: #""client_secret"\s*:\s*"[^"]+""#, with: #""client_secret":"[REDACTED]""#, options: .regularExpression)
     }
 }
 
@@ -812,7 +832,7 @@ public struct ServerClientReportStore: Sendable {
 
     private static func validateClientID(_ clientID: String) throws {
         let trimmed = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
-        try ContractValidation.require(trimmed.count >= 8 && trimmed.count <= 128, "client_id must be 8-128 characters")
+        try ContractValidation.requireClientID(trimmed)
     }
 
     private static func validateStatus(_ status: String) throws {
