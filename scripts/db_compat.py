@@ -46,6 +46,9 @@ class DuckDBCursor:
     def fetchall(self) -> list[MappingRow]:
         return [MappingRow(self._columns, row) for row in self._cursor.fetchall()]
 
+    def __iter__(self) -> Iterator[MappingRow]:
+        return iter(self.fetchall())
+
 
 class DuckDBCompatConnection:
     is_duckdb_compat = True
