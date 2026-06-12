@@ -320,19 +320,7 @@ REMOTE
 
 sync_local_release_backups() {
   [ "$CREATE_RELEASE" = "1" ] || return 0
-  local backup_cmd=(
-    python3 "$ROOT_DIR/scripts/backup_releases_local.py"
-    --remote "$HOST"
-    --release-root "$PROJECT_DIR/releases"
-    --output-dir "$ROOT_DIR/Backup"
-  )
-  if [ "$DRY_RUN" = "1" ]; then
-    printf 'DRY-RUN'
-    printf ' %q' "${backup_cmd[@]}"
-    printf '\n'
-    return 0
-  fi
-  "${backup_cmd[@]}"
+  echo "legacy root Backup/ export retired; release backups are managed by the daily pipeline in /var/minecraft_mods/release_backups"
 }
 
 run_local_validate

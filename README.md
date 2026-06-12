@@ -45,6 +45,8 @@ Every new or updated mod is tested in a throwaway NeoForge server instance befor
 ### Immutable releases
 Each release is a directory under `/var/minecraft_mods/releases/<release-id>` containing server files, client manifest, ZIP/MRPack/DMG artifacts, DB snapshot, checksums, and changelog. Once created, a release is never mutated. Rollback switches the active pointer to a previous release. This was chosen to make deploys atomic and reversible.
 
+The old root-level `Backup/` export folder is retired. Do not create new artifacts there; durable release rollback backups are managed by the daily pipeline under `/var/minecraft_mods/release_backups`.
+
 ### Daily automated pipeline
 Cron at 12:00 UTC runs the full release pipeline: scan for compatible updates → acceptance test → rebuild client package → create immutable release → deploy → cleanup. The pipeline uses staging copies and only mutates live files at deploy time. Rollback is automatic if a late step fails.
 
