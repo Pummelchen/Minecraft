@@ -185,6 +185,15 @@ bash scripts/validate_project.sh
 # Swift migration contract tests only
 swift test --package-path swift/PummelchenSwift
 
+# Phase 4 read-only macOS client GUI
+swift build --package-path swift/PummelchenSwift --product PummelchenClient
+
+# Phase 4 ad-hoc signed macOS app bundle
+bash scripts/build_pummelchen_client_app.sh
+
+# Phase 4 non-interactive client status smoke
+swift run --package-path swift/PummelchenSwift PummelchenClient --once
+
 # Build temporary DuckDB parity database on a host with duckdb installed
 swift run --package-path swift/PummelchenSwift pummelchen-duckdb phase1-build \
   --duckdb /tmp/pummelchen_phase1.duckdb \

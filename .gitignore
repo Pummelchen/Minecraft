@@ -35,6 +35,7 @@ site/public/
 __pycache__/
 *.py[cod]
 .DS_Store
+build/
 tmp/
 
 # Local editor/tooling

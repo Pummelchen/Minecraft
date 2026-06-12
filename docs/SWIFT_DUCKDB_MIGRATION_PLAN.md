@@ -1244,6 +1244,14 @@ Acceptance:
 - Does not mutate Minecraft folder yet.
 - Clearly reports whether shader/resource-pack/memory/server-entry defaults are OK.
 
+Implementation status:
+
+- Implemented `PummelchenClientCore` for read-only client status checks, local installed-release discovery, default-health inspection, and local DuckDB status persistence.
+- Implemented `PummelchenClient`, a macOS SwiftUI/AppKit status app with a server URL setting, refresh action, synced/outdated/offline/repair-needed state, server and local release display, and default-health table.
+- Added `PummelchenClient --once` as the non-interactive Phase 4 smoke path. It fetches the live `current-release.json`, reads `~/Library/Application Support/minecraft/.pummelchen/installed-release.txt`, inspects defaults without writing Minecraft files, and records status in `~/Library/Application Support/Pummelchen/client.duckdb`.
+- The Phase 4 local DuckDB path uses the installed DuckDB executable from common macOS/Linux paths, with a clear repair-needed error if DuckDB is missing. Direct embedded DuckDB linking remains a later migration hardening step.
+- Verified on macOS against the live server: `state=synced`, server and client release both `release_20260612_V16_duck-goose-no-follow-defaults-v2`, default health OK, and `client_state`, `client_defaults`, and `sync_runs` rows written.
+
 ### Phase 5: Swift Client Sync Engine
 
 Implement native sync in macOS client:
