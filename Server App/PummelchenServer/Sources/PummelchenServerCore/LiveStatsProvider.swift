@@ -87,8 +87,9 @@ final class LiveStatsProvider: @unchecked Sendable {
         stats["Network traffic"] = networkSummary(percent: metrics.networkTrafficPercent)
         stats["Server Address"] = serverAddress()
         stats["Web Address"] = webAddress()
-        stats["Server Mods"] = "\(serverModCount(release: release) ?? clientModCount(release: release) ?? 0) Server Mods"
-        stats["Client Mods"] = "\(clientModCount(release: release) ?? 0) Client Mods"
+        let clientCounts = clientPackageCounts(release: release)
+        stats["Server Mods"] = "\(serverModCount(release: release) ?? clientCounts.mods) Server Mods"
+        stats["Client Mods"] = "\(clientCounts.mods) Client Mods · \(clientCounts.shaderpacks) Shaders · \(clientCounts.resourcepacks) Resource Packs · \(clientCounts.config) Config Files"
         stats["Failed Mods"] = "\(failedModCount()) Failed Mods"
         stats["Mac Installer DMG URL"] = macInstallerDMGURL(release: release)
 
@@ -292,15 +293,26 @@ final class LiveStatsProvider: @unchecked Sendable {
             .count
     }
 
-    private func clientModCount(release: CurrentRelease?) -> Int? {
+    private func clientPackageCounts(release: CurrentRelease?) -> (mods: Int, shaderpacks: Int, resourcepacks: Int, config: Int) {
         guard let release,
               let manifest = urlForPublicPath(release.manifestURL),
               let data = try? String(contentsOf: manifest, encoding: .utf8) else {
-            return nil
+            return (0, 0, 0, 0)
         }
-        return data.split(separator: "\n").reduce(0) { count, line in
-            guard !line.hasPrefix("#") else { return count }
-            return line.split(separator: "\t").first == "mods" ? count + 1 : count
+        return data.split(separator: "\n").reduce(into: (mods: 0, shaderpacks: 0, resourcepacks: 0, config: 0)) { counts, line in
+            guard !line.hasPrefix("#"), let section = line.split(separator: "\t").first else { return }
+            switch section {
+            case "mods":
+                counts.mods += 1
+            case "shaderpacks":
+                counts.shaderpacks += 1
+            case "resourcepacks":
+                counts.resourcepacks += 1
+            case "config", "configs", "configuration":
+                counts.config += 1
+            default:
+                break
+            }
         }
     }
 
