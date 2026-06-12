@@ -11,6 +11,7 @@ enum DuckDBCommandError: Error, CustomStringConvertible {
         case .usage:
             return """
             Usage:
+              pummelchen-duckdb migrate --duckdb <file> --migrations-dir <dir>
               pummelchen-duckdb health --duckdb <file>
               pummelchen-duckdb export-parquet --duckdb <file> --output-dir <dir>
               pummelchen-duckdb verify-parquet --duckdb <file> --input-dir <dir>
@@ -147,6 +148,80 @@ func requireCheck(_ condition: Bool, _ message: String) throws {
     }
 }
 
+struct MigrationFile {
+    let version: Int
+    let name: String
+    let url: URL
+}
+
+func migrationFiles(in directory: String) throws -> [MigrationFile] {
+    let root = URL(fileURLWithPath: directory, isDirectory: true)
+    let urls = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isRegularFileKey])
+    let migrations = try urls
+        .filter { url in
+            let name = url.lastPathComponent
+            return !name.hasPrefix(".") && url.pathExtension.lowercased() == "sql"
+        }
+        .map { url in
+            let base = url.deletingPathExtension().lastPathComponent
+            guard let prefix = base.split(separator: "_", maxSplits: 1).first,
+                  let version = Int(prefix) else {
+                throw DuckDBCommandError.invalidOutput("migration filename must start with a numeric version: \(url.lastPathComponent)")
+            }
+            return MigrationFile(version: version, name: base, url: url)
+        }
+        .sorted { $0.version < $1.version }
+    var seenVersions: Set<Int> = []
+    for migration in migrations {
+        guard seenVersions.insert(migration.version).inserted else {
+            throw DuckDBCommandError.invalidOutput("duplicate migration version \(migration.version): \(migration.name)")
+        }
+    }
+    return migrations
+}
+
+func appliedMigrationVersions(duckdb: DuckDB) throws -> Set<Int> {
+    try duckdb.execute(
+        """
+        CREATE SCHEMA IF NOT EXISTS core;
+        CREATE TABLE IF NOT EXISTS core.schema_migrations (
+            version INTEGER PRIMARY KEY,
+            name VARCHAR NOT NULL,
+            applied_at TIMESTAMP NOT NULL,
+            checksum VARCHAR NOT NULL
+        );
+        """
+    )
+    let csv = try duckdb.queryCSV("SELECT version FROM core.schema_migrations;")
+    return Set(csv.split(separator: "\n").compactMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) })
+}
+
+func migrate(args: Arguments) throws {
+    let duckdb = DuckDB(databasePath: try args.require("--duckdb"))
+    let migrationsDir = try args.require("--migrations-dir")
+    let applied = try appliedMigrationVersions(duckdb: duckdb)
+    let migrations = try migrationFiles(in: migrationsDir)
+    guard !migrations.isEmpty else {
+        throw DuckDBCommandError.invalidOutput("no migration files found in \(migrationsDir)")
+    }
+
+    for migration in migrations where !applied.contains(migration.version) {
+        let sql = try String(contentsOf: migration.url, encoding: .utf8)
+        let checksum = try Hashing.sha256(path: migration.url.path)
+        try duckdb.execute(
+            """
+            BEGIN TRANSACTION;
+            \(sql)
+            INSERT INTO core.schema_migrations(version, name, applied_at, checksum)
+            VALUES (\(migration.version), \(sqlString(migration.name)), now(), \(sqlString(checksum)));
+            COMMIT;
+            """
+        )
+        print("duckdb_migration_applied version=\(migration.version) name=\(migration.name)")
+    }
+    print("duckdb_migrate=ok")
+}
+
 func requireReportingFields(duckdb: DuckDB) throws {
     let failedMissing = firstCSVValue(
         try duckdb.queryCSV(
@@ -195,7 +270,7 @@ func health(args: Arguments) throws {
             FROM (
                 SELECT table_schema, COUNT(*) AS table_count
                 FROM information_schema.tables
-                WHERE table_schema IN ('core', 'audit', 'reporting', 'archive')
+                WHERE table_schema IN ('core', 'client', 'control', 'release', 'world', 'audit', 'reporting', 'archive')
                 GROUP BY table_schema
             );
             """
@@ -307,6 +382,8 @@ func verifyParquet(args: Arguments) throws {
 func run() throws {
     let args = try Arguments(CommandLine.arguments)
     switch args.command {
+    case "migrate":
+        try migrate(args: args)
     case "health":
         try health(args: args)
     case "export-parquet":

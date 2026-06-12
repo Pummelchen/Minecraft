@@ -7,21 +7,34 @@ DuckDB is the production database and the only supported project database.
 ## Files
 
 - `schema.sql`: canonical schema entrypoint for operators.
-- `migrations/001_foundation.sql`: creates `raw`, `core`, `audit`, `reporting`, and `archive` schemas plus reporting views.
+- `migrations/001_foundation.sql`: creates `core`, `audit`, `reporting`, and `archive` schemas plus reporting views.
+- `migrations/002_operational_schemas_and_indexes.sql`: creates the operational `client`, `control`, `release`, and `world` schemas and DuckDB ART indexes used by frequent status, release, control-event, and world-reset lookups.
+
+## Apply Migrations
+
+Apply pending migrations before starting or upgrading the Swift server app:
+
+```sh
+swift run --package-path "Server App/PummelchenServer" pummelchen-duckdb migrate \
+  --duckdb /opt/pummelchen-swift/runtime/data/pummelchen.duckdb \
+  --migrations-dir "Server App/Database/duckdb/migrations"
+```
+
+The migration command records applied files in `core.schema_migrations`. Runtime Swift write paths still keep minimal `CREATE TABLE IF NOT EXISTS` guards, but migrations are the canonical schema source.
 
 ## Health Check
 
 On a host with Swift 6.3.2 and DuckDB installed:
 
 ```sh
-swift run --package-path swift/PummelchenSwift pummelchen-duckdb health \
+swift run --package-path "Server App/PummelchenServer" pummelchen-duckdb health \
   --duckdb /opt/pummelchen-swift/runtime/data/pummelchen.duckdb
 ```
 
 Export reporting views to Parquet:
 
 ```sh
-swift run --package-path swift/PummelchenSwift pummelchen-duckdb export-parquet \
+swift run --package-path "Server App/PummelchenServer" pummelchen-duckdb export-parquet \
   --duckdb /opt/pummelchen-swift/runtime/data/pummelchen.duckdb \
   --output-dir /tmp/pummelchen_parquet
 ```
@@ -29,7 +42,7 @@ swift run --package-path swift/PummelchenSwift pummelchen-duckdb export-parquet 
 Verify the exported Parquet files can be read back by DuckDB:
 
 ```sh
-swift run --package-path swift/PummelchenSwift pummelchen-duckdb verify-parquet \
+swift run --package-path "Server App/PummelchenServer" pummelchen-duckdb verify-parquet \
   --duckdb /opt/pummelchen-swift/runtime/data/pummelchen.duckdb \
   --input-dir /tmp/pummelchen_parquet
 ```
