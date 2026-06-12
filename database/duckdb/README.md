@@ -44,6 +44,14 @@ swift run --package-path swift/PummelchenSwift pummelchen-duckdb export-parquet 
   --output-dir /tmp/pummelchen_phase1_parquet
 ```
 
+Verify the exported Parquet files can be read back by DuckDB:
+
+```sh
+swift run --package-path swift/PummelchenSwift pummelchen-duckdb verify-parquet \
+  --duckdb /tmp/pummelchen_phase1.duckdb \
+  --input-dir /tmp/pummelchen_phase1_parquet
+```
+
 ## Current Boundary
 
 The Swift runner invokes the DuckDB CLI through `PATH`. Embedded DuckDB linking is intentionally deferred until the parity database, reporting views, and migration contracts stabilize.

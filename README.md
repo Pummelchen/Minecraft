@@ -193,6 +193,9 @@ swift run --package-path swift/PummelchenSwift pummelchen-duckdb phase1-build \
 swift run --package-path swift/PummelchenSwift pummelchen-duckdb phase1-check \
   --duckdb /tmp/pummelchen_phase1.duckdb \
   --sqlite data/minecraft_mods.sqlite
+swift run --package-path swift/PummelchenSwift pummelchen-duckdb verify-parquet \
+  --duckdb /tmp/pummelchen_phase1.duckdb \
+  --input-dir /tmp/pummelchen_phase1_parquet
 
 # Deploy to VPS (runs gate + syncs + smoke tests)
 bash scripts/deploy_project.sh --host root@91.99.176.243

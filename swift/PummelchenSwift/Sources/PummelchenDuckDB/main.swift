@@ -15,6 +15,7 @@ enum DuckDBCommandError: Error, CustomStringConvertible {
               pummelchen-duckdb phase1-check --duckdb <file> --sqlite <file> [--current-release-json <file>] [--tested-updates-json <file>]
               pummelchen-duckdb health --duckdb <file>
               pummelchen-duckdb export-parquet --duckdb <file> --output-dir <dir>
+              pummelchen-duckdb verify-parquet --duckdb <file> --input-dir <dir>
             """
         case .missingValue(let option):
             return "missing value for \(option)"
@@ -345,6 +346,26 @@ func health(args: Arguments) throws {
         )
     )
     print("duckdb_extension sqlite_scanner=\(sqliteExtension)")
+
+    let schemaCounts = firstCSVValue(
+        try duckdb.queryCSV(
+            """
+            SELECT string_agg(table_schema || '=' || CAST(table_count AS VARCHAR), ';' ORDER BY table_schema)
+            FROM (
+                SELECT table_schema, COUNT(*) AS table_count
+                FROM information_schema.tables
+                WHERE table_schema IN ('raw', 'core', 'audit', 'reporting', 'archive')
+                GROUP BY table_schema
+            );
+            """
+        )
+    )
+    print("duckdb_table_counts \(schemaCounts)")
+
+    let databaseSize = firstCSVValue(try duckdb.queryCSV("PRAGMA database_size;"))
+    if !databaseSize.isEmpty {
+        print("duckdb_database_size \(databaseSize)")
+    }
 }
 
 func exportParquet(args: Arguments) throws {
@@ -390,6 +411,47 @@ func exportParquet(args: Arguments) throws {
     }
 }
 
+func verifyParquet(args: Arguments) throws {
+    let duckdb = DuckDB(databasePath: try args.require("--duckdb"))
+    let inputDir = try args.require("--input-dir")
+    let views = [
+        "v_tested_updates_table",
+        "v_failed_mods_table",
+        "v_release_health_latest",
+        "v_client_sync_status",
+        "v_custom_datapack_status",
+        "v_world_reset_history"
+    ]
+
+    for view in views {
+        let input = URL(fileURLWithPath: inputDir).appendingPathComponent("\(view).parquet").path
+        try requireCheck(FileManager.default.fileExists(atPath: input), "missing Parquet export: \(input)")
+        let parquetRows = firstCSVValue(
+            try duckdb.queryCSV("SELECT COUNT(*) FROM read_parquet(\(sqlString(input)));")
+        )
+        let auditRows = firstCSVValue(
+            try duckdb.queryCSV(
+                """
+                SELECT COALESCE(CAST(row_count AS VARCHAR), '')
+                FROM audit.parquet_exports
+                WHERE source_name = \(sqlString("reporting.\(view)"))
+                  AND output_path = \(sqlString(input))
+                ORDER BY exported_at DESC
+                LIMIT 1;
+                """
+            )
+        )
+        if !auditRows.isEmpty {
+            try requireCheck(
+                parquetRows == auditRows,
+                "Parquet row count mismatch for \(view): parquet=\(parquetRows) audit=\(auditRows)"
+            )
+        }
+        print("parquet_verify=\(view) rows=\(parquetRows)")
+    }
+    print("parquet_verify=ok")
+}
+
 func run() throws {
     let args = try Arguments(CommandLine.arguments)
     switch args.command {
@@ -401,6 +463,8 @@ func run() throws {
         try health(args: args)
     case "export-parquet":
         try exportParquet(args: args)
+    case "verify-parquet":
+        try verifyParquet(args: args)
     default:
         throw DuckDBCommandError.usage
     }
