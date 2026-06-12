@@ -136,6 +136,55 @@ assert {"minecraft:bread", "minecraft:cooked_beef", "minecraft:apple"} <= food_n
 assert pools[1]["entries"][0] == {"type": "minecraft:loot_table", "value": "chems_guns:guns/starter_pistol"}
 assert pools[2]["entries"][0] == {"type": "minecraft:loot_table", "value": "chems_guns:ammo/standard/pistol_magazine"}
 PY
+  "$PYTHON_BIN" - "$ROOT_DIR/server-datapacks/pummelchen-tropical-worldgen.zip" <<'PY' \
+    || fail "tropical worldgen datapack does not enforce requested biome bias"
+import json
+import sys
+import zipfile
+
+targets = {
+    "minecraft:bamboo_jungle",
+    "minecraft:jungle",
+    "minecraft:sparse_jungle",
+    "terralith:tropical_jungle",
+    "terralith:jungle_mountains",
+    "terralith:rocky_jungle",
+    "terralith:amethyst_rainforest",
+}
+cherry = {
+    "minecraft:cherry_grove",
+    "terralith:sakura_grove",
+    "terralith:sakura_valley",
+}
+keys = ("weirdness", "continentalness", "erosion", "temperature", "humidity")
+
+def width(value):
+    return max(0.0, float(value[1]) - float(value[0])) if isinstance(value, list) else 0.0
+
+def volume(entry):
+    result = 1.0
+    for key in keys:
+        result *= width(entry["parameters"][key])
+    return result
+
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    data = json.loads(archive.read("data/minecraft/worldgen/multi_noise_biome_source_parameter_list/overworld.json"))
+    pack = json.loads(archive.read("pack.mcmeta"))
+
+assert pack["pack"]["max_format"] == 101
+assert data["preset"] == "minecraft:overworld"
+biomes = data["lithostitched:biomes"]
+counts = {}
+for entry in biomes:
+    counts[entry["biome"]] = counts.get(entry["biome"], 0) + 1
+tropical_volume = sum(volume(entry) for entry in biomes if entry["biome"] in targets)
+cherry_volume = sum(volume(entry) for entry in biomes if entry["biome"] in cherry)
+assert len(biomes) == 1713
+assert counts["minecraft:bamboo_jungle"] >= 100
+assert counts["terralith:sakura_valley"] >= 35
+assert tropical_volume >= 7.0
+assert cherry_volume >= 1.5
+PY
 fi
 
 SAFE_RESET_SERVER="$TMP_DIR/safe-reset-server"
