@@ -1903,8 +1903,8 @@ def render_page(
       </div>
       <div class="manual-update">
         <h4>Manual Client Update (Terminal)</h4>
-        <p class="note">Clients auto-update every 5 minutes in the background. To force a manual sync with a live progress bar, paste this in macOS Terminal:</p>
-        <pre class="terminal-cmd"><code>~/Library/Application\\ Support/Pummelchen/bin/pummelchen-auto-update.sh --force</code></pre>
+        <p class="note">Clients auto-update every 5 minutes in the background. To force a manual sync with terminal progress output, paste this in macOS Terminal. This refreshes the updater scripts first, so older silent clients are repaired before the sync starts. A progress bar is shown when files need downloading; if everything is current, the updater reports that all files are already up to date.</p>
+        <pre class="terminal-cmd"><code>mkdir -p "$HOME/Library/Application Support/Pummelchen/bin" &amp;&amp; curl -fsSL http://91.99.176.243:7788/downloads/client-files/tools/pummelchen-auto-update.sh -o "$HOME/Library/Application Support/Pummelchen/bin/pummelchen-auto-update.sh" &amp;&amp; curl -fsSL http://91.99.176.243:7788/downloads/client-files/tools/pummelchen-updater.sh -o "$HOME/Library/Application Support/Pummelchen/bin/pummelchen-updater.sh" &amp;&amp; chmod +x "$HOME/Library/Application Support/Pummelchen/bin/pummelchen-auto-update.sh" "$HOME/Library/Application Support/Pummelchen/bin/pummelchen-updater.sh" &amp;&amp; "$HOME/Library/Application Support/Pummelchen/bin/pummelchen-auto-update.sh" --force</code></pre>
         <div class="progress-example">
           <p class="note">Example output:</p>
           <pre class="terminal-output"><code>  Pummelchen Client Updater
@@ -1925,8 +1925,9 @@ def render_page(
         </div>
         <p class="note">To check status without updating:</p>
         <pre class="terminal-cmd"><code>~/Library/Application\\ Support/Pummelchen/bin/pummelchen-auto-update.sh --check-only</code></pre>
-        <p class="note">If the local updater scripts are damaged or stuck, repair them directly from the VPS and immediately run a forced sync:</p>
-        <pre class="terminal-cmd"><code>mkdir -p "$HOME/Library/Application Support/Pummelchen/bin" &amp;&amp; curl -fsSL http://91.99.176.243:7788/downloads/client-files/tools/pummelchen-auto-update.sh -o "$HOME/Library/Application Support/Pummelchen/bin/pummelchen-auto-update.sh" &amp;&amp; curl -fsSL http://91.99.176.243:7788/downloads/client-files/tools/pummelchen-updater.sh -o "$HOME/Library/Application Support/Pummelchen/bin/pummelchen-updater.sh" &amp;&amp; chmod +x "$HOME/Library/Application Support/Pummelchen/bin/pummelchen-auto-update.sh" "$HOME/Library/Application Support/Pummelchen/bin/pummelchen-updater.sh" &amp;&amp; "$HOME/Library/Application Support/Pummelchen/bin/pummelchen-auto-update.sh" --force</code></pre>
+        <p class="note">If you only want to rerun an already-repaired updater later, use:</p>
+        <pre class="terminal-cmd"><code>~/Library/Application\\ Support/Pummelchen/bin/pummelchen-auto-update.sh --force</code></pre>
+        <p class="note">If the local updater scripts are damaged or stuck, rerun the full refresh command above.</p>
       </div>
     </section>
 
