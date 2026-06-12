@@ -809,11 +809,6 @@
   </div>
   <div id="pipelineActivityGrid" class="sheet-grid" aria-label="Pipeline activity data grid"></div>
 </div>
-<div class="toolbar update-table-toolbar">
-  <input id="updateChecksSearch" class="search" type="search" placeholder="Filter update checks by name, source, file, version, or test">
-  <span id="updateChecksCount" class="table-count">Loading update checks...</span>
-</div>
-<div id="updateChecksGrid" class="sheet-grid" aria-label="Update checks data grid"></div>
 
     </section>
 
@@ -7377,18 +7372,9 @@ spiral_tower_village-0.0.3.jar   server reached done and survived idle/chunk exe
     async function refreshUpdateTables() {
       const payload = await fetchTestedUpdates(true);
       const rows = normalizeUpdateRows(payload);
-      updateLiveUpdatesGrid('updateChecks', rows);
       updateLiveUpdatesGrid('testedUpdates', rows);
     }
     function wireLiveUpdatesTables() {
-      liveUpdateTables.updateChecks = {
-        grid: document.getElementById('updateChecksGrid'),
-        input: document.getElementById('updateChecksSearch'),
-        countId: 'updateChecksCount',
-        countLabel: 'checks',
-        placeholder: 'No update checks',
-        rows: [],
-      };
       liveUpdateTables.testedUpdates = {
         grid: document.getElementById('testedUpdatesGrid'),
         input: document.getElementById('updatesSearch'),
