@@ -23,6 +23,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+from check_client_mod_dependencies import add_metadata, nested_jar_metadata, read_mods_toml, satisfies_range
 from moddb import HEADERS, connect, row_hash, slugify, source_kind, status_rank, utc_now
 import random
 
@@ -31,6 +32,7 @@ API_BASE = "https://api.curse.tools/v1/cf"
 MODRINTH_API_BASE = "https://api.modrinth.com/v2"
 USER_AGENT = "Mozilla/5.0 Codex Minecraft Mod Tracker"
 TARGET_MC = "26.1.2"
+TARGET_NEOFORGE = "26.1.2.75"
 COMPATIBLE_GAME_VERSIONS = ("26.1.2", "26.1.1", "26.1")
 SERVER_DIR = Path("/var/minecraft_26.1.2")
 RUN_PREFIX = "url_batch"
@@ -808,6 +810,33 @@ def run_isolated_acceptance_test(label: str, files: Sequence[Path], db_path: Pat
     return ok, status, severe, log_path
 
 
+def candidate_platform_dependency_problems(jar_path: Path) -> list[str]:
+    """Validate Minecraft/NeoForge requirements declared inside a candidate jar."""
+    mods: dict[str, Any] = {}
+    dependencies: list[Any] = []
+    try:
+        metadata = read_mods_toml(jar_path)
+    except Exception as exc:
+        return [str(exc)]
+    if metadata:
+        add_metadata(metadata, jar_path.name, mods, dependencies)
+    for source, nested_metadata in nested_jar_metadata(jar_path):
+        add_metadata(nested_metadata, source, mods, dependencies)
+
+    special_versions = {"minecraft": TARGET_MC, "neoforge": TARGET_NEOFORGE}
+    problems: list[str] = []
+    for dependency in dependencies:
+        actual = special_versions.get(dependency.mod_id)
+        if actual is None or not dependency.version_range:
+            continue
+        if not satisfies_range(actual, dependency.version_range):
+            problems.append(
+                f"{dependency.source}: {dependency.requester} requires "
+                f"{dependency.mod_id} {dependency.version_range} but actual is {actual}"
+            )
+    return problems
+
+
 def required_dependency_ids(file_info: dict[str, Any]) -> list[int]:
     return [
         int(dep["modId"])
@@ -942,6 +971,24 @@ def process_item(
             f"Selected {source_name} {channel} file {file_info['id']} "
             f"({file_info['fileName']}) for NeoForge 26.1.x."
         )
+        platform_problems = candidate_platform_dependency_problems(file_path)
+        if platform_problems:
+            note = f"{file_note} Rejected by jar metadata check: " + "; ".join(platform_problems[:3]) + "."
+            set_mod_state(
+                conn,
+                mod_id=mod_id,
+                project=project,
+                file_info=file_info,
+                status="Failed",
+                server_status="Rejected: incompatible jar metadata",
+                client_package="Not included",
+                installed_server=False,
+                included_client=False,
+                files=[file_path.name],
+                note=note,
+            )
+            update_batch_item(conn, int(item["batch_item_id"]), "failed", note)
+            return f"failed {slug}: incompatible jar metadata"
 
         if selected_side == "client":
             dependencies, dependency_problems = resolve_required_dependencies(
