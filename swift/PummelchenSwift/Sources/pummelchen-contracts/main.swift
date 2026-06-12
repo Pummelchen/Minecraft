@@ -48,6 +48,8 @@ func run(arguments: [String]) throws {
 do {
     try run(arguments: CommandLine.arguments)
 } catch {
-    fputs("ERROR: \(error)\n", stderr)
+    if let data = "ERROR: \(error)\n".data(using: .utf8) {
+        FileHandle.standardError.write(data)
+    }
     exit(1)
 }
