@@ -1695,6 +1695,7 @@ printf '{"general":{"showTutorial":{"value":true}}}\n' > "$AUTO_MC/config/mtscon
     "$AUTO_REMOTE/downloads/client-files/shaderpacks/wanted-shader.zip"
 } > "$AUTO_REMOTE/client-sync-manifest.tsv"
 PUMMELCHEN_SYNC_MANIFEST_URL="file://$AUTO_REMOTE/client-sync-manifest.tsv" \
+  PUMMELCHEN_RELEASE_ID="qa-auto-release" \
   PUMMELCHEN_BASE_URL="file://$AUTO_REMOTE" \
   MINECRAFT_DIR="$AUTO_MC" \
   PUMMELCHEN_HOME="$AUTO_HOME" \
@@ -1718,6 +1719,20 @@ grep -Fxq 'showLoadWarnings=false' "$AUTO_MC/config/forge-client.toml" || fail "
 grep -Fxq 'showCheckScreen=false' "$AUTO_MC/config/yuushya-client.toml" || fail "auto-updater did not quiet Yuushya check screen"
 grep -Fq '"enableInGameMessage":{"value":false}' "$AUTO_MC/config/underground_village/common.json" || fail "auto-updater did not disable underground village message"
 grep -Fq '"showTutorial":{"value":false}' "$AUTO_MC/config/mtsconfigclient.json" || fail "auto-updater did not disable MTS tutorial"
+mkdir -p "$AUTO_MC/.pummelchen"
+printf 'qa-auto-release\n' > "$AUTO_MC/.pummelchen/installed-release.txt"
+PUMMELCHEN_SYNC_MANIFEST_URL="file://$AUTO_REMOTE/client-sync-manifest.tsv" \
+  PUMMELCHEN_RELEASE_ID="qa-auto-release" \
+  PUMMELCHEN_BASE_URL="file://$AUTO_REMOTE" \
+  MINECRAFT_DIR="$AUTO_MC" \
+  PUMMELCHEN_HOME="$AUTO_HOME" \
+  PUMMELCHEN_LOG_DIR="$AUTO_LOGS" \
+  PUMMELCHEN_CACHE_DIR="$AUTO_CACHE" \
+  PUMMELCHEN_LOG_TO_STDOUT=1 \
+  bash "$ROOT_DIR/client-package/tools/pummelchen-auto-update.sh" --force > "$TMP_DIR/auto-update-current.txt"
+grep -Fq 'Server mod release:' "$TMP_DIR/auto-update-current.txt" || fail "auto-updater current run did not print server release"
+grep -Fq 'Client mod release:' "$TMP_DIR/auto-update-current.txt" || fail "auto-updater current run did not print client release"
+grep -Fq 'Status:             all synced, no downloads required' "$TMP_DIR/auto-update-current.txt" || fail "auto-updater current run did not print no-download summary"
 
 log "macOS client smoke launcher fixture"
 SMOKE_MC="$TMP_DIR/client-smoke-mc"

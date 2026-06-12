@@ -1922,6 +1922,12 @@ def render_page(
   Done! 3 file(s) updated, 254 verified.
 
   Pummelchen client is current.</code></pre>
+          <p class="note">When no downloads are needed, the updater prints a sync summary instead:</p>
+          <pre class="terminal-output"><code>  Server mod release: release_20260612_V3_updater-summary
+  Client mod release: release_20260612_V3_updater-summary
+  Manifest files:     271
+  Verified files:     271
+  Status:             all synced, no downloads required</code></pre>
         </div>
         <p class="note">To check status without updating:</p>
         <pre class="terminal-cmd"><code>~/Library/Application\\ Support/Pummelchen/bin/pummelchen-auto-update.sh --check-only</code></pre>

@@ -71,13 +71,6 @@ mkdir -p "$PUMMELCHEN_HOME" "$LOG_DIR" "$CACHE_DIR" "$STATE_DIR"
 if [ "$QUIET" = "1" ] && [ "${PUMMELCHEN_LOG_TO_STDOUT:-0}" != "1" ] && [ "$CHECK_ONLY" != "1" ]; then
   exec >> "$LOG_FILE" 2>&1
 fi
-# Terminal output: interactive runs write to stdout. LaunchAgent/background runs
-# pass --quiet and keep this on /dev/null.
-TTY_OUT="/dev/null"
-if [ "$QUIET" != "1" ]; then
-  TTY_OUT="/dev/stdout"
-fi
-
 log() {
   if [ "$QUIET" != "1" ] || [ "${PUMMELCHEN_LOG_TO_STDOUT:-0}" = "1" ] || [ "$CHECK_ONLY" = "1" ]; then
     printf '%s\n' "$*"
@@ -90,7 +83,7 @@ progress_bar() {
   local current="$1" total="$2" label="$3" bar_width=30
   [ "$QUIET" = "1" ] && return 0
   if [ "$total" -eq 0 ]; then
-    if [ "$current" -eq 0 ]; then echo > "$TTY_OUT"; fi
+    if [ "$current" -eq 0 ]; then echo; fi
     return 0
   fi
   local pct=$((current * 100 / total))
@@ -104,14 +97,37 @@ progress_bar() {
   if [ "${#label}" -gt "$max_label" ]; then
     label="...${label: -$((max_label - 3))}"
   fi
-  printf '\r  [%s] %d/%d (%d%%) %s' "$bar" "$current" "$total" "$pct" "$label" > "$TTY_OUT"
-  if [ "$current" -eq "$total" ]; then echo > "$TTY_OUT"; fi
+  printf '\r  [%s] %d/%d (%d%%) %s' "$bar" "$current" "$total" "$pct" "$label"
+  if [ "$current" -eq "$total" ]; then echo; fi
 }
 
 # Print a status line to the terminal (visible during interactive runs).
 tty_log() {
   [ "$QUIET" = "1" ] && return 0
-  printf '%s\n' "$*" > "$TTY_OUT"
+  printf '%s\n' "$*"
+}
+
+sync_summary() {
+  local installed_release="${1:-}"
+  local target_release="${2:-}"
+  local entries="${3:-0}"
+  local verified="${4:-0}"
+  local downloaded="${5:-0}"
+  local installed_label="${installed_release:-none}"
+  local target_label="${target_release:-legacy}"
+  tty_log ""
+  tty_log "  Server mod release: ${target_label}"
+  tty_log "  Client mod release: ${installed_label}"
+  tty_log "  Manifest files:     ${entries}"
+  tty_log "  Verified files:     ${verified}"
+  if [ "$downloaded" = "0" ] && [ -n "$installed_release" ] && [ "$installed_release" = "$target_label" ]; then
+    tty_log "  Status:             all synced, no downloads required"
+  elif [ "$downloaded" = "0" ]; then
+    tty_log "  Status:             verified current release, no downloads required"
+  else
+    tty_log "  Status:             synced after ${downloaded} download(s)"
+  fi
+  tty_log ""
 }
 
 fail() {
@@ -613,9 +629,7 @@ sync_files() {
     tty_log "  Done! $changed file(s) updated, $verified verified."
     tty_log ""
   elif [ "$dl_total" -eq 0 ]; then
-    tty_log ""
-    tty_log "  All $verified file(s) already up to date. Nothing to do."
-    tty_log ""
+    sync_summary "$LOCAL_RELEASE_ID" "${TARGET_RELEASE_ID:-legacy}" "$ENTRY_COUNT" "$verified" "0"
   fi
   SYNC_CHANGED_COUNT="$changed"
 }
@@ -756,9 +770,7 @@ if [ "$FORCE_UPDATE" = "1" ]; then
 fi
 if [ "$FORCE_UPDATE" != "1" ] && [ "$SERVER_REQUIRES_UPDATE" = "0" ] && [ -n "${LOCAL_RELEASE_ID:-}" ] && [ "$LOCAL_RELEASE_ID" = "${TARGET_RELEASE_ID:-legacy}" ]; then
   log "Server status check says this client is up to date; skipping full sync."
-  tty_log ""
-  tty_log "  Client is up to date! No changes needed."
-  tty_log ""
+  sync_summary "$LOCAL_RELEASE_ID" "${TARGET_RELEASE_ID:-legacy}" "$ENTRY_COUNT" "$ENTRY_COUNT" "0"
   write_status "up_to_date" "no changes required" "$LOCAL_RELEASE_ID" "${TARGET_RELEASE_ID:-legacy}"
   report_update_status "up_to_date" "$LOCAL_RELEASE_ID" "${TARGET_RELEASE_ID:-legacy}" "0" "$ENTRY_COUNT" "server reported up-to-date"
   log "Pummelchen client is current."
