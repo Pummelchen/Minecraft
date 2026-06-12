@@ -35,4 +35,4 @@ At present, the project supports the following environment:
 
 ## Documentation
 
-Additional setup details, architecture notes, and operational guidance are available in the project wiki.
+Additional setup details, architecture notes, and operational guidance are available in the [project wiki](https://github.com/Pummelchen/Minecraft/wiki).
