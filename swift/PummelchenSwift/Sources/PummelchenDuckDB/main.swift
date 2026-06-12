@@ -366,6 +366,17 @@ func health(args: Arguments) throws {
     if !databaseSize.isEmpty {
         print("duckdb_database_size \(databaseSize)")
     }
+
+    let settings = firstCSVValue(
+        try duckdb.queryCSV(
+            """
+            SELECT string_agg(name || '=' || value, ';' ORDER BY name)
+            FROM duckdb_settings()
+            WHERE name IN ('memory_limit', 'temp_directory', 'threads', 'max_temp_directory_size');
+            """
+        )
+    )
+    print("duckdb_settings \(settings)")
 }
 
 func exportParquet(args: Arguments) throws {

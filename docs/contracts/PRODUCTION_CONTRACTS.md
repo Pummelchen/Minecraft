@@ -12,6 +12,8 @@ Reason:
 - It allows SwiftPM build/test gates without changing production behavior.
 - It can later produce both the Debian server service and the macOS client app from shared contract code.
 
+The client identity/token model is frozen in `docs/contracts/CLIENT_IDENTITY.md`.
+
 ## Updater Flow
 
 1. Client resolves `/downloads/current-release.json`.
