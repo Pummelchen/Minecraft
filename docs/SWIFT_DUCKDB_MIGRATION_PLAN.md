@@ -5,6 +5,7 @@ Audience: AI coding agents and human maintainers
 Target platforms: Debian 13 VPS server, macOS Apple Silicon clients
 Current production system: Python, Bash, nginx, systemd, LaunchAgent, generated static website, DuckDB/SQLite-style project state
 Target system: nginx edge, Swift server daemon with embedded DuckDB, Swift macOS client app/helper with embedded DuckDB
+Last revised: 2026-06-12 after release/client/webpage hardening work
 
 ## 1. Executive Summary
 
@@ -18,6 +19,17 @@ nginx remains the public edge for the website, large downloads, HTTPS, static re
 DuckDB must be embedded locally on each side. Do not attempt to expose DuckDB directly over TCP or share one database file across clients. Server and client apps communicate through versioned HTTPS APIs and, later, WebSocket events.
 
 The migration should be staged. The current scripts are production safety rails and must not be removed until the Swift implementation proves equivalent through repeated live releases.
+
+Recent production work changed the migration target. The Swift system must now preserve the full release updater experience, not merely replace the old script set. The current baseline includes immutable release folders, DMG generation, a manual website repair command, client defaults enforcement, BSL shader defaults, ModernArch resource-pack ordering, release health monitoring, a safe world reset workflow with 1000-block radius pregeneration, and a compact sortable Tested Updates table on the website.
+
+Current scale snapshot from the generated status page:
+
+```text
+283 server-side active mods
+29 client-side extras
+312 client install entries
+29 failed/inactive mods
+```
 
 ## 2. Goals
 
@@ -33,9 +45,16 @@ The migration should be staged. The current scripts are production safety rails 
    - checksum validation
    - stale/unmanaged mod quarantine
    - client update reporting
+   - terminal manual updater with clear progress and no-download summary
+   - DMG installer generation and publication
+   - client default config enforcement
+   - shader/resource-pack default activation
    - server health checks
+   - release health monitoring
    - world reset safety workflow
+   - 1000-block radius spawn pregeneration after safe reset
    - status website
+   - tested updates feed and sortable/filterable web table
 7. Keep nginx for public traffic, static downloads, caching, logs, TLS, and reverse proxying.
 
 ## 3. Non-Goals
@@ -59,6 +78,7 @@ nginx :80/:443
   |
   |-- /                         -> generated/static website
   |-- /downloads/...             -> static releases, DMG, client files
+  |-- /downloads/client-files/... -> manual repair/helper downloads during migration
   |-- /api/v1/...                -> reverse proxy to PummelchenServer
   |-- /ws/v1                     -> reverse proxy to PummelchenServer WebSocket
   |-- /client-logs/...           -> compatibility route during migration
@@ -71,6 +91,8 @@ PummelchenServer.service
   |-- release/mod/client state
   |-- Minecraft systemd control
   |-- safe world reset orchestration
+  |-- release health monitor state
+  |-- tested updates feed generation
   |-- manifest/report generation
   |-- client status receiver
 ```
@@ -85,6 +107,7 @@ PummelchenClient.app
   |-- local DuckDB inventory/cache
   |-- HTTPS manifest/status sync
   |-- static file downloads from nginx
+  |-- built-in CLI repair/sync helper
   |-- optional WebSocket for near-realtime notices
   |
 Minecraft folder
@@ -139,6 +162,7 @@ nginx proxies public /api/v1 and /ws/v1 to 127.0.0.1:8787
 - Distribution: unsigned or ad-hoc signed for private group initially
 - Networking: URLSession for HTTPS, URLSessionWebSocketTask for WebSocket
 - File sync: native Swift file operations, checksum validation, resumable downloads where practical
+- CLI helper: same sync engine as GUI, with text progress suitable for Terminal support
 
 ### DuckDB
 
@@ -155,6 +179,83 @@ Client DB:
 ```text
 ~/Library/Application Support/Pummelchen/client.duckdb
 ```
+
+## 6.1 Current Production Contracts To Preserve
+
+The Swift migration must treat the following behaviors as compatibility contracts.
+
+### Release and Packaging
+
+- Release directories remain immutable once activated.
+- `current-release.json`, `client-sync-manifest.tsv`, client ZIP, MRPACK, DMG, and SHA256 sidecars remain published under `/downloads`.
+- Client sync manifests keep section/name/size/sha256/url semantics so old Bash clients and new Swift clients can coexist.
+- DMG builds include the current updater/helper, default config files, resource packs, shader packs, and launch defaults.
+- NeoForge preflight remains part of release/DMG build gating. The system should report whether the configured NeoForge version is current before publishing.
+- Release health checks must run after release activation and DMG publication.
+
+### Client Defaults
+
+The Swift client must apply the same defaults that the current Bash updater applies:
+
+- 8 GB standard Minecraft memory allocation for clients.
+- Pummelchen multiplayer server entry.
+- BSL shader active by default when shader support is installed.
+- Complementary Reimagined available as an alternate shader.
+- ModernArch resource pack stack enabled in order:
+  1. base mod resources
+  2. `ModernArch v2.8.2 [26.1] [128x]`
+  3. `ModernArch FA Extension v2.2`
+  4. `ModernArch Denser Grass Addon`
+- Known-compatible resource packs must not be left in the incompatible-resource-pack list after sync.
+- NeoForge/Forge load warning popups and noisy client checks stay suppressed where current defaults suppress them.
+- Untitled Duck server/client config defaults set:
+  ```toml
+  duck_tamed_no_follow = true
+  goose_tamed_no_follow = true
+  ```
+
+### Manual Repair and Terminal UX
+
+- The website keeps a one-line Terminal repair command.
+- During migration, that command may download Bash or Swift helpers, but it must keep the same user promise: repair updater/helper files, make them executable, and run a forced sync.
+- Manual forced sync must print a clear terminal status.
+- If no downloads are required, it must still print a friendly summary with server release, client release, file count, verified count, and "all synced, no downloads required".
+- If downloads are required, it must show deterministic progress suitable for non-technical macOS users.
+
+### Server Defaults and World Reset
+
+- Server config overrides are first-class release inputs, not ad-hoc files.
+- Safe world reset must:
+  - require dry-run support
+  - backup before destructive changes
+  - delete the old world only after backup succeeds
+  - write the requested seed
+  - reinstall datapacks and server config overrides
+  - preserve bonus chest behavior
+  - apply gamerules such as keep inventory and block-damage controls
+  - detect spawn after first boot
+  - pregenerate a 1000-block radius around spawn
+  - record the operation and result
+
+### Website
+
+- The website remains a static nginx-served page during migration.
+- Server/VPS stats and charts remain visible.
+- Manual client update and safe reset sections remain documented.
+- Tested Updates remains a compact table with:
+  - first column `Updated At`
+  - timestamp format `YYYY-MM-DD HH:MM:SS`
+  - sortable headers
+  - free-text filtering
+  - hyperlink support for mod/update names
+- Every script or command shown on the website keeps a copy-to-clipboard icon button.
+
+### Watch Agents and Health
+
+- Existing systemd timers/services remain active until Swift replacements prove equivalent.
+- Release health must continue to report a single pass/fail/warn summary.
+- Client log receiver/client status ingestion must remain backward compatible with installed clients.
+- Failed mod tracking and Tested Updates generation remain part of the live site.
 
 ## 7. Protocol Design
 
@@ -186,11 +287,15 @@ GET  /api/v1/status
 GET  /api/v1/releases/current
 GET  /api/v1/releases/{release_id}
 GET  /api/v1/releases/{release_id}/manifest
+GET  /api/v1/releases/{release_id}/health
+GET  /api/v1/tested-updates
+GET  /api/v1/site/status
 POST /api/v1/clients/register
 POST /api/v1/clients/{client_id}/heartbeat
 POST /api/v1/clients/{client_id}/sync-runs
 POST /api/v1/clients/{client_id}/inventory
 POST /api/v1/clients/{client_id}/diagnostics
+POST /api/v1/clients/{client_id}/installer-events
 GET  /api/v1/messages
 ```
 
@@ -217,6 +322,7 @@ Event examples:
 {"type":"message.server","severity":"info","title":"Restart in 10 minutes","body":"Please finish your current activity."}
 {"type":"client.sync.request","reason":"critical_mod_update"}
 {"type":"server.health","minecraft_up":true,"players_online":4}
+{"type":"release.health","release_id":"release_20260612_V16_duck-goose-no-follow-defaults-v2","status":"healthy"}
 ```
 
 ## 8. Authentication and Security
@@ -354,6 +460,67 @@ CREATE TABLE server_messages (
   body VARCHAR NOT NULL,
   expires_at TIMESTAMP
 );
+
+CREATE TABLE release_health_runs (
+  run_id VARCHAR PRIMARY KEY,
+  release_id VARCHAR,
+  created_at TIMESTAMP NOT NULL,
+  status VARCHAR NOT NULL,
+  ok_count INTEGER NOT NULL,
+  warn_count INTEGER NOT NULL,
+  error_count INTEGER NOT NULL,
+  summary VARCHAR NOT NULL,
+  payload_json VARCHAR NOT NULL
+);
+
+CREATE TABLE tested_updates (
+  update_id VARCHAR PRIMARY KEY,
+  tested_at TIMESTAMP NOT NULL,
+  title VARCHAR NOT NULL,
+  event_type VARCHAR NOT NULL,
+  source VARCHAR NOT NULL,
+  source_url VARCHAR,
+  file_name VARCHAR,
+  file_version VARCHAR,
+  test_label VARCHAR,
+  notes VARCHAR
+);
+
+CREATE TABLE client_installer_events (
+  event_id VARCHAR PRIMARY KEY,
+  client_id VARCHAR,
+  created_at TIMESTAMP NOT NULL,
+  session_id VARCHAR,
+  phase VARCHAR,
+  status VARCHAR NOT NULL,
+  message VARCHAR,
+  payload_json VARCHAR
+);
+
+CREATE TABLE server_config_overrides (
+  override_id VARCHAR PRIMARY KEY,
+  path VARCHAR NOT NULL,
+  sha256 VARCHAR NOT NULL,
+  applied_at TIMESTAMP,
+  payload_text VARCHAR NOT NULL
+);
+
+CREATE TABLE world_reset_runs (
+  run_id VARCHAR PRIMARY KEY,
+  requested_at TIMESTAMP NOT NULL,
+  started_at TIMESTAMP,
+  finished_at TIMESTAMP,
+  status VARCHAR NOT NULL,
+  seed VARCHAR NOT NULL,
+  radius_blocks INTEGER NOT NULL,
+  backup_path VARCHAR,
+  spawn_x INTEGER,
+  spawn_z INTEGER,
+  chunks_requested INTEGER,
+  chunks_completed INTEGER,
+  error_message VARCHAR,
+  payload_json VARCHAR
+);
 ```
 
 ### Client DuckDB Tables
@@ -412,6 +579,24 @@ CREATE TABLE settings (
   value VARCHAR NOT NULL,
   updated_at TIMESTAMP NOT NULL
 );
+
+CREATE TABLE client_defaults (
+  key VARCHAR PRIMARY KEY,
+  desired_value VARCHAR NOT NULL,
+  applied_value VARCHAR,
+  applied_at TIMESTAMP,
+  status VARCHAR NOT NULL,
+  source VARCHAR NOT NULL
+);
+
+CREATE TABLE installer_events (
+  event_id VARCHAR PRIMARY KEY,
+  timestamp TIMESTAMP NOT NULL,
+  phase VARCHAR,
+  status VARCHAR NOT NULL,
+  message VARCHAR,
+  payload_json VARCHAR
+);
 ```
 
 ## 10. macOS Client GUI
@@ -439,6 +624,10 @@ Show:
 - last check
 - background helper state
 - Minecraft folder path
+- active shader
+- active resource-pack stack
+- client memory allocation
+- default config health
 
 Actions:
 
@@ -446,6 +635,7 @@ Actions:
 - Repair Client
 - Open Minecraft Folder
 - Copy Diagnostics
+- Reapply Client Defaults
 
 Success copy:
 
@@ -498,6 +688,28 @@ Filters:
 - Outdated
 - Problem
 
+### Defaults View
+
+Show enforced defaults and their current state:
+
+```text
+Memory: 8 GB
+Shader: BSL_v10.1.3.zip active
+Resource packs: ModernArch base, FA Extension, Denser Grass
+Server entry: present
+Duck/goose no-follow: true
+Warnings suppressed: true
+```
+
+Each row should show:
+
+- desired value
+- detected value
+- status: `OK`, `Needs Repair`, `Unknown`
+- last applied timestamp
+
+The `Reapply Client Defaults` action runs the same default writer used after sync.
+
 ### Settings View
 
 Fields:
@@ -514,6 +726,7 @@ Advanced actions:
 - Reset Local Sync State
 - Reinstall Current Release
 - Quarantine Unmanaged Mods
+- Reapply Client Defaults
 
 ## 11. Server App Responsibilities
 
@@ -529,6 +742,11 @@ Advanced actions:
 8. Minecraft service health and systemd control.
 9. Status website data generation, or direct API data for a static/SSR page.
 10. Compatibility endpoints while old clients still exist.
+11. Release health monitoring and health history.
+12. Tested Updates feed generation.
+13. Server config override inventory and application.
+14. DMG/client package publication metadata.
+15. Website repair command payload/version management.
 
 It should not:
 
@@ -547,9 +765,15 @@ Tasks:
 
 1. Freeze current behavior in documentation:
    - updater flows
+   - manual repair one-liner
+   - client no-download summary
+   - DMG contents
+   - client default config writer
    - release creation
    - manifest format
    - server health checks
+   - release health checks
+   - tested updates table/feed shape
    - world reset behavior
 2. Define JSON API schemas.
 3. Define DuckDB schemas and migrations.
@@ -580,12 +804,17 @@ Responsibilities:
 - JSON API models
 - logging primitives
 - filesystem safety helpers
+- Minecraft options/config default writer
+- resource-pack and shader option model
+- timestamp formatting for website/API output
 
 Acceptance:
 
 - Unit tests pass on macOS and Debian.
 - Can parse current `client-sync-manifest.tsv`.
 - Can hash and verify current client files.
+- Can apply client defaults into fixture Minecraft config folders without duplicate keys.
+- Can render Tested Updates timestamps as `YYYY-MM-DD HH:MM:SS`.
 
 ### Phase 2: Server Read-Only API
 
@@ -614,6 +843,7 @@ Create macOS app:
 - current release fetch
 - local installed release read
 - display synced/outdated/offline state
+- display current default-config health
 
 Acceptance:
 
@@ -622,6 +852,7 @@ Acceptance:
 - Shows local release.
 - Writes local status into DuckDB.
 - Does not mutate Minecraft folder yet.
+- Clearly reports whether shader/resource-pack/memory/server-entry defaults are OK.
 
 ### Phase 4: Swift Client Sync Engine
 
@@ -633,6 +864,7 @@ Implement native sync in macOS client:
 - verify SHA256
 - install atomically
 - quarantine unmanaged files
+- apply client defaults after sync
 - update local DuckDB
 - report sync run to server
 
@@ -645,6 +877,8 @@ Acceptance:
 - Failed checksum leaves original file untouched.
 - Minecraft-running state is handled explicitly.
 - Local DuckDB history is accurate.
+- BSL shader, ModernArch stack, 8 GB memory, server entry, suppressed warnings, and duck/goose no-follow defaults are applied idempotently.
+- Re-running sync does not duplicate config keys.
 
 ### Phase 5: Server Write APIs and Client Reports
 
@@ -655,6 +889,7 @@ Implement:
 - sync run report
 - inventory upload
 - diagnostics upload
+- installer/defaults event upload
 
 Acceptance:
 
@@ -662,6 +897,7 @@ Acceptance:
 - Status page can show aggregate client health.
 - Bad tokens are rejected.
 - Request payloads are size-limited.
+- Server can distinguish `synced`, `needs defaults repair`, `failed checksum`, and `stale release`.
 
 ### Phase 6: Release Pipeline in Swift
 
@@ -671,8 +907,14 @@ Move release logic into `PummelchenServer` or a companion Swift CLI:
 - validate dependencies
 - create release directory
 - activate current release
+- build/publish client ZIP
+- build/publish DMG metadata and checksums
+- write/publish current release pointer
+- publish manual repair/helper artifacts
 - trigger service restart if required
 - generate status page data
+- generate tested updates feed
+- run release health monitor
 
 During transition, Swift should call existing scripts only through narrow wrappers. Remove wrappers only after equivalent Swift logic exists and tests pass.
 
@@ -681,6 +923,9 @@ Acceptance:
 - Swift-created release matches current release format.
 - Client can sync from Swift-created release.
 - Rollback remains possible.
+- DMG contains the correct helper/defaults files.
+- Release health result is persisted and visible.
+- Tested Updates website table data is generated from Swift-owned state or an equivalent compatibility feed.
 
 ### Phase 7: WebSocket Realtime Events
 
@@ -705,12 +950,14 @@ Acceptance:
 Port safe reset workflow:
 
 - backup world
+- delete existing world after backup
 - write seed
 - ensure datapacks
+- ensure server config overrides
 - ensure gamerules
 - start/restart server
 - detect spawn
-- pregenerate configured diameter
+- pregenerate configured radius; current production default is 1000 blocks around spawn
 - record operation in DuckDB
 
 Acceptance:
@@ -719,6 +966,8 @@ Acceptance:
 - Backup is created before destructive changes.
 - Gamerules/datapacks are verified after reset.
 - Pregeneration completion is recorded.
+- Existing world is gone after successful reset.
+- New world uses the requested seed.
 
 ### Phase 9: Decommission Scripts
 
@@ -740,9 +989,15 @@ Keep emergency fallback scripts in `legacy/` until the new system has lived thro
 - API contract tests
 - manifest generation comparison tests
 - release activation dry-run tests
+- release health monitor tests
+- tested updates feed/table contract tests
+- DMG publication metadata tests
+- server config override application tests
 - nginx proxy smoke tests
 - systemd restart tests
 - world reset dry-run tests
+- world reset new-seed and old-world deletion tests
+- pregeneration plan/result tests
 - backup/rollback tests
 
 ### Client Tests
@@ -756,6 +1011,11 @@ Keep emergency fallback scripts in `legacy/` until the new system has lived thro
 - interrupted download tests
 - unmanaged mod quarantine tests
 - Minecraft-running detection tests
+- client defaults idempotency tests
+- shader/resource-pack activation tests
+- incompatible resource-pack cleanup tests
+- manual repair CLI output tests
+- no-download summary output tests
 - GUI state tests
 
 ### End-to-End Tests
@@ -766,6 +1026,8 @@ Keep emergency fallback scripts in `legacy/` until the new system has lived thro
 - client reports status
 - server records inventory
 - website shows client health
+- website shows Tested Updates table with sortable/filterable data
+- manual repair command still works
 - rollback release
 - client downgrades or holds based on policy
 
@@ -840,6 +1102,10 @@ LaunchAgent:
 7. Always keep one known-good release available for rollback.
 8. Always include a manual repair path on the website.
 9. Always maintain compatibility with the existing updater during migration.
+10. Always apply client defaults idempotently; duplicate config keys are release blockers.
+11. Always validate DMG contents before publishing.
+12. Always run release health after release activation and package publication.
+13. Always keep old Bash/Python repair path available until the Swift CLI has survived multiple real client repairs.
 
 ## 16. AI Coding Agent Instructions
 
@@ -855,6 +1121,8 @@ When implementing this plan:
 8. Use explicit schema migrations.
 9. Treat the macOS client as a user-facing app; every sync failure needs a clear UI state and a repair option.
 10. Treat the server app as production infrastructure; every destructive operation needs dry-run, backup, and rollback.
+11. Before replacing a script, write a fixture test that proves the Swift result matches the current script result.
+12. Preserve the current website user contract: manual commands have copy buttons, Tested Updates is a table, and status/release information is visible without logging in.
 
 ## 17. Server Perspective Review
 
@@ -988,14 +1256,17 @@ After server and client review, the recommended order is:
 2. Build `PummelchenCore` Swift package.
 3. Build server read-only API behind nginx.
 4. Build macOS read-only client GUI.
-5. Build client DuckDB history and inventory.
-6. Build Swift client sync engine while keeping Bash fallback.
-7. Add client report APIs and server-side client dashboard data.
-8. Add server job queue and audit log.
-9. Port release pipeline into Swift job system.
-10. Add WebSocket events.
-11. Port safe world reset into Swift job system.
-12. Decommission legacy scripts only after repeated live success.
+5. Build Swift config/defaults engine with fixture parity against the current updater.
+6. Build client DuckDB history and inventory.
+7. Build Swift CLI helper with `status`, `sync --force`, `repair`, and `diagnostics`, while keeping Bash fallback.
+8. Build Swift client sync engine and wire it into both GUI and CLI.
+9. Add client report APIs and server-side client dashboard data.
+10. Add server job queue and audit log.
+11. Port release health and Tested Updates feed generation.
+12. Port release pipeline into Swift job system, including DMG metadata/publication.
+13. Add WebSocket events.
+14. Port safe world reset into Swift job system.
+15. Decommission legacy scripts only after repeated live success.
 
 ## 20. Sign-Off Criteria
 
@@ -1005,10 +1276,15 @@ Do not declare the migration complete until:
 - the server can create and activate releases through Swift
 - nginx serves downloads and proxies APIs correctly
 - current website/manual repair path still exists
+- Tested Updates table remains sortable/filterable and timestamped
+- DMG publication and manifest publication are verified
+- client defaults are applied idempotently without duplicate config keys
+- shader/resource-pack/memory defaults are visible in the client GUI
 - safe world reset is implemented with dry-run and backup
+- safe world reset deletes the old world, applies the requested seed, and pregenerates 1000 blocks around spawn
 - DuckDB migrations are tested and backed up
 - rollback from bad release is tested
 - at least two production releases complete without using legacy scripts
 - player-facing GUI clearly reports synced/update/error states
 - server-side health monitoring reports clean after release activation
-
+- the website manual repair command can recover at least one real macOS client using the Swift CLI/helper path
