@@ -3,7 +3,7 @@ Minecraft 26.1.2 Client Package for macOS Apple Silicon
 Target client: macOS on Apple Silicon (M2/M3), official Minecraft launcher.
 Target loader: NeoForge 26.1.2.75.
 Target server: 91.99.176.243:25565.
-Package contents: 285 mod jars, 9 resource packs, 1 shader pack, and updater tooling scripts.
+Package contents: 257 mod jars, 9 resource packs, 2 shader packs, and updater tooling scripts.
 Generated: 2026-06-04.
 
 Recommended install:
@@ -54,8 +54,8 @@ Automatic updates:
 Notes:
 - This package is generated from the SQLite tracker in /var/minecraft_mods, not from Google Sheets.
 - AutoFishing is included as autofishing-1.0.1.jar.
-- Core client entries are included: Sodium, Iris, BSL Classic, ModernArch, and Dramatic Skys.
-- BSL Classic is installed as a shader pack for Iris. Its latest stable CurseForge file is tagged for 1.21.9/Iris, not 26.1.x, so SQLite records it as a client-side compatibility override.
+- Core client entries are included: Sodium, Iris, Complementary Reimagined, BSL Shaders, ModernArch, and Dramatic Skys.
+- Complementary Reimagined is the recommended Apple Silicon shader for Iris. BSL Shaders is included as the lighter fallback. BSL Classic was removed because it is discontinued.
 - Failed server candidates are not included in the client package unless separately marked client-only in SQLite.
 - Final server validation reached Done. Remaining ERROR-tagged content/model/version-check lines are nonfatal and covered by the tracker baseline filter.
 - The full file list and SHA256 hashes are in manifest.txt.

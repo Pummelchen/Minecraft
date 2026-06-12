@@ -16,9 +16,9 @@
 | SSH access | `root@91.99.176.243` (key-based, ed25519) |
 | Production project dir | `/var/minecraft_mods` (control plane, scripts, DB) |
 | Production server dir | `/var/minecraft_26.1.2` (runtime, mods, worlds) |
-| Active release | `release_20260611_V7_neoforge-26.1.2.75` |
+| Active release | `release_20260612_V5_shaders-refresh` |
 | Server-side jars | 253 |
-| Client package | 255 mods, 9 resource packs, 1 shader pack |
+| Client package | 257 mods, 9 resource packs, 2 shader packs |
 | Central config file | `config.toml` (single source of truth for all paths/ports/limits) |
 
 ## Network Topology
