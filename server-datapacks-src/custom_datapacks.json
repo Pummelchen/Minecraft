@@ -5,8 +5,8 @@
       "file_name": "pummelchen-welcome.zip",
       "canonical_key": "pummelchen-welcome",
       "target_mc": "26.1.2",
-      "notes": "Replaces Gamingbarn's Guns and Chems' Guns welcome dialogs with a Pummelchen Server welcome screen. Disables Raid Mode permanently. Enforces new-world safety gamerules and replaces the generated bonus chest with food, fully loaded starter guns, and pistol magazines.",
-      "sha256": "20ffa01a1cb0501f3843a23fdf9f1ed18e403c18c6a46ee6b04c250d2a39113a"
+      "notes": "Replaces Gamingbarn's Guns and Chems' Guns welcome dialogs with a Pummelchen Server welcome screen. Disables Raid Mode permanently. Enforces new-world safety gamerules, replaces the generated bonus chest with food, fully loaded starter guns, and pistol magazines, and keeps JEG gunners from targeting protected wildlife by assigning gunners and passive animals to a no-friendly-fire team.",
+      "sha256": "4173679f93876924316e01bf1acdd9e4e0a9239df617952b0dfd0ac117a5aa8a"
     }
   ]
 }

@@ -105,6 +105,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     tick = archive.read("data/pummelchen/function/tick.mcfunction").decode()
     tick_tag = archive.read("data/minecraft/tags/function/tick.json").decode()
     bonus_chest = json.loads(archive.read("data/minecraft/loot_table/chests/spawn_bonus_chest.json"))
+    protected_wildlife = json.loads(archive.read("data/pummelchen/tags/entity_type/protected_wildlife.json"))
 
 required_load = [
     "gamerule keep_inventory true",
@@ -120,6 +121,13 @@ for command in required_load:
 assert "kill @e[type=minecraft:tnt]" in tick
 assert "kill @e[type=minecraft:tnt_minecart]" in tick
 assert "pummelchen:tick" in tick_tag
+assert "team add pummelchen_wildlife" in load
+assert "team modify pummelchen_wildlife friendlyFire false" in load
+assert "team join pummelchen_wildlife @e[type=#jeg:gunner,team=!pummelchen_wildlife]" in tick
+assert "team join pummelchen_wildlife @e[type=#pummelchen:protected_wildlife,team=!pummelchen_wildlife]" in tick
+protected_values = protected_wildlife["values"]
+assert "minecraft:cow" in protected_values
+assert {"id": "untitledduckmod:duck", "required": False} in protected_values
 pools = bonus_chest["pools"]
 assert len(pools) == 3
 assert [pool["rolls"] for pool in pools] == [3, 3, 3]

@@ -6,3 +6,6 @@ gamerule block_explosion_drop_decay false
 gamerule mob_explosion_drop_decay false
 gamerule tnt_explodes false
 gamerule tnt_explosion_drop_decay false
+team add pummelchen_wildlife
+team modify pummelchen_wildlife friendlyFire false
+team modify pummelchen_wildlife seeFriendlyInvisibles false
