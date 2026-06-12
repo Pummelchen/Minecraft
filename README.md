@@ -35,7 +35,7 @@ The system then performs the full update pipeline automatically:
 
 At present, the project supports the following environment:
 
-- Server: Debian 13
+- Server: Debian 13 (Intel x86-64)
 - Clients: macOS 26 on Apple Silicon (M1-M5)
 
 ## Documentation
