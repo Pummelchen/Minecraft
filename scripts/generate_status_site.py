@@ -1027,6 +1027,34 @@ def _resolve_update_display_file(event: dict[str, Any]) -> tuple[str, str]:
     return file_name, version
 
 
+def _format_table_timestamp(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        parsed = dt.datetime.fromisoformat(normalized)
+    except ValueError:
+        return raw.replace("T", " ")[:19]
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(dt.timezone.utc).replace(tzinfo=None)
+    return parsed.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _update_file_summary(event: dict[str, Any], primary_file: str) -> str:
+    raw = str(event.get("new_file") or event.get("file_name") or event.get("old_file") or "").strip()
+    files = [
+        line.strip()
+        for line in re.split(r"\r?\n", raw)
+        if line.strip() and _looks_like_file_name(line.strip())
+    ]
+    if files:
+        first = primary_file or files[0]
+        extra = len(files) - 1
+        return f"{first} (+{extra} files)" if extra > 0 else first
+    return primary_file
+
+
 def _dedupe_updates_for_render(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     first_pass: list[dict[str, Any]] = []
     seen: dict[tuple[Any, ...], tuple[int, int]] = {}
@@ -1250,33 +1278,73 @@ def render_updates(updates: list[dict[str, Any]]) -> str:
         return f'<p class="note">No tested successful updates have been logged in the last {UPDATE_LOG_DAYS} days. The daily updater only publishes entries here after a change passes validation and the client package is rebuilt when needed.</p>'
 
     updates = _dedupe_updates_for_render(updates)
-    cards = []
+    rows = []
     for event in updates:
         tested_at = escape(event.get("tested_at", ""))
-        tested_at_display = escape(event.get("tested_at_display", event.get("tested_at", "")))
+        tested_at_display = escape(_format_table_timestamp(event.get("tested_at")) or event.get("tested_at_display", event.get("tested_at", "")))
         title = escape(clean_update_title(event.get("title") or event.get("mod_name") or "Pack update"))
         homepage_url = event.get("source_url") or event.get("homepage_url")
         title_html = update_title_link(homepage_url, title)
         source_badge = escape(event.get("source", "unknown"))
         event_type = escape(event.get("event_type", "update"))
         file_name, file_version = _resolve_update_display_file(event)
-        file_name_html = f'<p><strong>Filename:</strong> {escape(file_name)}</p>' if file_name else ""
-        version_html = f'<p><strong>Mod Version:</strong> {escape(file_version)}</p>' if file_version else ""
-        cards.append(
+        file_summary = escape(_update_file_summary(event, file_name))
+        file_version = escape(file_version)
+        test_label = escape(event.get("test_label") or "")
+        row_search = escape(
+            " ".join(
+                str(value or "")
+                for value in (
+                    tested_at_display,
+                    title,
+                    event.get("source", ""),
+                    event.get("event_type", ""),
+                    event.get("status", ""),
+                    event.get("test_label", ""),
+                    event.get("new_file", ""),
+                    event.get("old_file", ""),
+                    event.get("file_name", ""),
+                    event.get("notes", ""),
+                )
+            ).lower()
+        )
+        rows.append(
             f"""
-<article class="update-card">
-  <div class="mod-topline">
-    <h4>{title_html}</h4>
-    <span class="badge">{event_type}</span>
-    <span class="badge" style="background:#1a2a1a; border-color:#3d5c3d; color:#9fdfaf;">{source_badge}</span>
-  </div>
-  <p><strong>When:</strong> <time class="relative-time" datetime="{tested_at}" title="{tested_at}">{tested_at_display}</time></p>
-  {file_name_html}
-  {version_html}
-</article>
+<tr data-search="{row_search}">
+  <td data-sort-value="{tested_at}"><time datetime="{tested_at}" title="{tested_at}">{tested_at_display}</time></td>
+  <td class="update-title-cell">{title_html}</td>
+  <td><span class="badge">{event_type}</span></td>
+  <td><span class="badge muted-badge">{source_badge}</span></td>
+  <td class="filename-cell" title="{file_summary}">{file_summary}</td>
+  <td>{file_version}</td>
+  <td>{test_label}</td>
+</tr>
 """
         )
-    return '<div class="update-grid">' + "\n".join(cards) + "</div>"
+    return f"""
+<div class="toolbar update-table-toolbar">
+  <input id="updatesSearch" class="search" type="search" placeholder="Filter tested updates by name, source, file, version, or test">
+  <span id="updatesCount" class="table-count">{len(rows)} updates</span>
+</div>
+<div class="table-shell">
+  <table id="testedUpdatesTable" class="updates-table">
+    <thead>
+      <tr>
+        <th scope="col" data-sort-type="text" aria-sort="descending">Updated At</th>
+        <th scope="col" data-sort-type="text">Mod / Update</th>
+        <th scope="col" data-sort-type="text">Type</th>
+        <th scope="col" data-sort-type="text">Source</th>
+        <th scope="col" data-sort-type="text">Filename</th>
+        <th scope="col" data-sort-type="text">Version</th>
+        <th scope="col" data-sort-type="text">Test</th>
+      </tr>
+    </thead>
+    <tbody>
+      {"".join(rows)}
+    </tbody>
+  </table>
+</div>
+"""
 
 
 def render_update_checks(runs: list[dict[str, Any]]) -> str:
@@ -1575,6 +1643,85 @@ def render_page(
       grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
       gap: 10px;
       margin-top: 12px;
+    }}
+    .table-shell {{
+      width: 100%;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }}
+    .updates-table {{
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 980px;
+      font-size: 14px;
+    }}
+    .updates-table th,
+    .updates-table td {{
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: middle;
+    }}
+    .updates-table th {{
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      color: var(--stone);
+      background: #0c120d;
+      font-weight: 800;
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+    }}
+    .updates-table th::after {{
+      content: "^v";
+      display: inline-block;
+      margin-left: 7px;
+      color: var(--muted);
+      font-size: 11px;
+    }}
+    .updates-table th[aria-sort="ascending"]::after {{
+      content: "^";
+      color: var(--green);
+    }}
+    .updates-table th[aria-sort="descending"]::after {{
+      content: "v";
+      color: var(--green);
+    }}
+    .updates-table tr:last-child td {{ border-bottom: 0; }}
+    .updates-table tbody tr:nth-child(even) {{ background: rgba(255,255,255,0.018); }}
+    .updates-table tbody tr:hover {{ background: rgba(87, 217, 115, 0.06); }}
+    .updates-table a {{
+      color: var(--accent);
+      text-decoration: underline;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }}
+    .updates-table a:hover,
+    .updates-table a:focus-visible {{ color: #bff5cb; }}
+    .update-title-cell {{
+      min-width: 170px;
+      font-weight: 800;
+    }}
+    .filename-cell {{
+      max-width: 320px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--stone);
+    }}
+    .muted-badge {{
+      background: #1a2a1a;
+      border-color: #3d5c3d;
+      color: #9fdfaf;
+    }}
+    .table-count {{
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+      white-space: nowrap;
     }}
     .mod-card {{
       background: var(--panel);
@@ -1876,6 +2023,7 @@ def render_page(
       pre {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
       .copy-snippet {{ grid-template-columns: minmax(0, 1fr); }}
       .copy-button {{ justify-self: end; }}
+      .updates-table {{ min-width: 860px; }}
     }}
   </style>
 </head>
@@ -2186,6 +2334,62 @@ def render_page(
         }});
       }});
     }}
+    function cellSortValue(row, columnIndex) {{
+      const cell = row.cells[columnIndex];
+      if (!cell) return '';
+      return (cell.dataset.sortValue || cell.textContent || '').trim().toLowerCase();
+    }}
+    function updateTestedUpdatesCount(table) {{
+      const count = document.getElementById('updatesCount');
+      if (!count) return;
+      const visible = Array.from(table.tBodies[0].rows).filter(row => row.style.display !== 'none').length;
+      const total = table.tBodies[0].rows.length;
+      count.textContent = visible === total ? `${{total}} updates` : `${{visible}} of ${{total}} updates`;
+    }}
+    function sortTestedUpdatesTable(table, columnIndex, direction) {{
+      const tbody = table.tBodies[0];
+      const rows = Array.from(tbody.rows);
+      rows.sort((a, b) => {{
+        const left = cellSortValue(a, columnIndex);
+        const right = cellSortValue(b, columnIndex);
+        const compared = left.localeCompare(right, undefined, {{ numeric: true, sensitivity: 'base' }});
+        return direction === 'ascending' ? compared : -compared;
+      }});
+      rows.forEach(row => tbody.appendChild(row));
+    }}
+    function wireTestedUpdatesTable() {{
+      const table = document.getElementById('testedUpdatesTable');
+      if (!table || !table.tBodies.length) return;
+      const input = document.getElementById('updatesSearch');
+      if (input) {{
+        input.addEventListener('input', () => {{
+          const query = input.value.trim().toLowerCase();
+          Array.from(table.tBodies[0].rows).forEach(row => {{
+            const haystack = row.dataset.search || row.textContent.toLowerCase();
+            row.style.display = !query || haystack.includes(query) ? '' : 'none';
+          }});
+          updateTestedUpdatesCount(table);
+        }});
+      }}
+      table.querySelectorAll('th[data-sort-type]').forEach((header, index) => {{
+        header.tabIndex = 0;
+        header.addEventListener('click', () => {{
+          const current = header.getAttribute('aria-sort');
+          const direction = current === 'ascending' ? 'descending' : 'ascending';
+          table.querySelectorAll('th[aria-sort]').forEach(th => th.removeAttribute('aria-sort'));
+          header.setAttribute('aria-sort', direction);
+          sortTestedUpdatesTable(table, index, direction);
+        }});
+        header.addEventListener('keydown', event => {{
+          if (event.key === 'Enter' || event.key === ' ') {{
+            event.preventDefault();
+            header.click();
+          }}
+        }});
+      }});
+      sortTestedUpdatesTable(table, 0, 'descending');
+      updateTestedUpdatesCount(table);
+    }}
     function copySnippetText(text) {{
       if (navigator.clipboard && window.isSecureContext) {{
         return navigator.clipboard.writeText(text);
@@ -2364,6 +2568,7 @@ def render_page(
     window.setInterval(refreshLiveStats, 10000);
     window.addEventListener('resize', refreshLiveStats);
     wireSnippetCopyButtons();
+    wireTestedUpdatesTable();
     wireSearch('serverSearch', 'server-mods');
     wireSearch('clientSearch', 'client-mods');
   </script>
