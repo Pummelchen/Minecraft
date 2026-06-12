@@ -1,4 +1,4 @@
-# Minecraft Automatic Server/Client Mod Updater
+# Minecraft AI Server/Client Mod Updater
 
 An AI-assisted system for automatically managing Minecraft server and client mods.
 
