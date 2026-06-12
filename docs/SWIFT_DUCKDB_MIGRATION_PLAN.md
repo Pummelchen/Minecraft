@@ -5,7 +5,7 @@ Audience: AI coding agents and human maintainers
 Target platforms: Debian 13 VPS server, macOS Apple Silicon clients
 Current production system: Python, Bash, nginx, systemd, LaunchAgent, generated static website, DuckDB/SQLite-style project state
 Target system: nginx edge, Swift server daemon with embedded DuckDB, Swift macOS client app/helper with embedded DuckDB
-Last revised: 2026-06-12 after release/client/webpage hardening work
+Last revised: 2026-06-12 after release/client/webpage hardening, custom worldgen datapacks, and live safe world reset
 
 ## 1. Executive Summary
 
@@ -20,7 +20,15 @@ DuckDB must be embedded locally on each side. Do not attempt to expose DuckDB di
 
 The migration should be staged. The current scripts are production safety rails and must not be removed until the Swift implementation proves equivalent through repeated live releases.
 
-Recent production work changed the migration target. The Swift system must now preserve the full release updater experience, not merely replace the old script set. The current baseline includes immutable release folders, DMG generation, a manual website repair command, client defaults enforcement, BSL shader defaults, ModernArch resource-pack ordering, release health monitoring, a safe world reset workflow with 1000-block radius pregeneration, and a compact sortable Tested Updates table on the website.
+Recent production work changed the migration target. The Swift system must now preserve the full release updater experience, not merely replace the old script set. The current baseline includes immutable release folders, DMG generation, a manual website repair command, client defaults enforcement, BSL shader defaults, ModernArch resource-pack ordering, release health monitoring, project-owned custom datapack generation/registration, a safe world reset workflow with 1000-block radius pregeneration and old-world cleanup, and compact sortable/filterable Tested Updates and Failed Mods tables on the website.
+
+The current server also has gameplay/worldgen policy encoded as release-managed datapacks, not informal operator notes:
+
+- `pummelchen-welcome.zip` for safety gamerules, bonus chest, welcome behavior, and wildlife-friendly-fire protection.
+- `pummelchen-tropical-worldgen.zip` for Terralith/Lithostitched overworld biome bias toward bamboo jungles, tropical jungle variants, and nearby sakura valleys.
+- `pummelchen-rich-ores.zip` for larger vanilla overworld iron, gold, and diamond ore veins.
+
+Any Swift migration that cannot build, validate, install, and audit these datapacks is not functionally equivalent to production.
 
 Current scale snapshot from the generated status page:
 
@@ -30,6 +38,24 @@ Current scale snapshot from the generated status page:
 312 client install entries
 29 failed/inactive mods
 ```
+
+### Recent Production Delta To Carry Forward
+
+Since the original Swift/DuckDB discussion, the production system gained several behaviors that materially affect the migration:
+
+1. Website data tables moved from large card grids to compact sortable/filterable tables. Swift must emit table-ready data for Tested Updates and Failed Mods, including stable timestamps and problem detail fields.
+2. Client defaults now include shader/resource-pack activation, 8 GB memory, ModernArch compatibility cleanup, and duck/goose no-follow config. These are product requirements, not installer conveniences.
+3. World generation policy is now project-owned:
+   - tropical biome bias is generated from Terralith's Lithostitched overworld map;
+   - rich ore veins override vanilla configured features for iron, gold, and diamonds;
+   - safety/bonus-chest/wildlife behavior lives in the welcome datapack.
+4. Safe world reset was proven live with:
+   - seed `178127232016679900`;
+   - spawn `608,67,-320`;
+   - `12,256` chunks pregenerated for a 1000-block radius circle;
+   - no leftover force-loaded chunks;
+   - old reset backups deleted after success to recover disk space.
+5. The Swift server must therefore model operations as auditable jobs with phases, progress, cleanup, and artifact validation, not as single request/response actions.
 
 ## 2. Goals
 
@@ -53,8 +79,10 @@ Current scale snapshot from the generated status page:
    - release health monitoring
    - world reset safety workflow
    - 1000-block radius spawn pregeneration after safe reset
+   - old world backup deletion/retention policy after successful reset
+   - custom datapack policy generation for safety, tropical worldgen, and rich ores
    - status website
-   - tested updates feed and sortable/filterable web table
+   - tested updates and failed-mods feeds with sortable/filterable web tables
 7. Keep nginx for public traffic, static downloads, caching, logs, TLS, and reverse proxying.
 
 ## 3. Non-Goals
@@ -225,23 +253,39 @@ The Swift client must apply the same defaults that the current Bash updater appl
 ### Server Defaults and World Reset
 
 - Server config overrides are first-class release inputs, not ad-hoc files.
+- Project-owned datapacks are first-class release inputs. Swift must register, checksum, install, and validate them in both server-level and active-world datapack folders.
+- Current required datapacks:
+  - `pummelchen-welcome.zip`
+  - `pummelchen-tropical-worldgen.zip`
+  - `pummelchen-rich-ores.zip`
+- Swift must preserve generator parity for:
+  - Terralith/Lithostitched tropical biome policy: bamboo/jungle/sakura bias with schema validation.
+  - Rich ores policy: iron/gold/diamond configured feature sizes, clamped to Minecraft's valid maximum of 64 where required.
 - Safe world reset must:
   - require dry-run support
   - backup before destructive changes
-  - delete the old world only after backup succeeds
+  - move the old world out of the active path before booting the new world
   - write the requested seed
   - reinstall datapacks and server config overrides
   - preserve bonus chest behavior
   - apply gamerules such as keep inventory and block-damage controls
   - detect spawn after first boot
   - pregenerate a 1000-block radius around spawn
+  - remove all temporary forceloads after pregeneration
+  - optionally delete old world backups after a successful reset when the operator explicitly requests disk cleanup
   - record the operation and result
+  - record the cleanup result separately from the reset result
 
 ### Website
 
 - The website remains a static nginx-served page during migration.
 - Server/VPS stats and charts remain visible.
 - Manual client update and safe reset sections remain documented.
+- Failed Mods remains a compact data table with:
+  - first column timestamp
+  - failure reason
+  - detailed problem column
+  - sortable/filterable headers
 - Tested Updates remains a compact table with:
   - first column `Updated At`
   - timestamp format `YYYY-MM-DD HH:MM:SS`
@@ -505,6 +549,31 @@ CREATE TABLE server_config_overrides (
   payload_text VARCHAR NOT NULL
 );
 
+CREATE TABLE custom_datapacks (
+  datapack_id VARCHAR PRIMARY KEY,
+  name VARCHAR NOT NULL,
+  file_name VARCHAR NOT NULL,
+  sha256 VARCHAR NOT NULL,
+  target_mc VARCHAR NOT NULL,
+  policy_kind VARCHAR NOT NULL,
+  source_path VARCHAR,
+  generated_at TIMESTAMP,
+  installed_server_at TIMESTAMP,
+  installed_world_at TIMESTAMP,
+  notes VARCHAR
+);
+
+CREATE TABLE datapack_validation_runs (
+  run_id VARCHAR PRIMARY KEY,
+  datapack_id VARCHAR NOT NULL,
+  created_at TIMESTAMP NOT NULL,
+  status VARCHAR NOT NULL,
+  validator_name VARCHAR NOT NULL,
+  checked_paths_json VARCHAR NOT NULL,
+  result_json VARCHAR NOT NULL,
+  error_message VARCHAR
+);
+
 CREATE TABLE world_reset_runs (
   run_id VARCHAR PRIMARY KEY,
   requested_at TIMESTAMP NOT NULL,
@@ -514,12 +583,31 @@ CREATE TABLE world_reset_runs (
   seed VARCHAR NOT NULL,
   radius_blocks INTEGER NOT NULL,
   backup_path VARCHAR,
+  backup_deleted_at TIMESTAMP,
+  backup_delete_bytes BIGINT,
+  backup_delete_status VARCHAR,
   spawn_x INTEGER,
+  spawn_y INTEGER,
   spawn_z INTEGER,
   chunks_requested INTEGER,
   chunks_completed INTEGER,
+  forceloads_cleared BOOLEAN,
   error_message VARCHAR,
   payload_json VARCHAR
+);
+
+CREATE TABLE failed_mod_reports (
+  report_id VARCHAR PRIMARY KEY,
+  observed_at TIMESTAMP NOT NULL,
+  mod_id VARCHAR,
+  name VARCHAR NOT NULL,
+  source_url VARCHAR,
+  file_name VARCHAR,
+  failure_reason VARCHAR NOT NULL,
+  problem_details VARCHAR,
+  status VARCHAR NOT NULL,
+  test_label VARCHAR,
+  log_path VARCHAR
 );
 ```
 
@@ -747,6 +835,9 @@ Advanced actions:
 13. Server config override inventory and application.
 14. DMG/client package publication metadata.
 15. Website repair command payload/version management.
+16. Custom datapack generation, checksum registration, validation, and installation.
+17. Failed Mods feed generation with timestamp/reason/details fields.
+18. World-reset backup retention and explicit disk cleanup audit.
 
 It should not:
 
@@ -950,14 +1041,20 @@ Acceptance:
 Port safe reset workflow:
 
 - backup world
-- delete existing world after backup
+- move existing world out of the active path after backup
 - write seed
 - ensure datapacks
+- validate required custom datapacks before server boot:
+  - welcome/safety datapack
+  - tropical Terralith/Lithostitched biome policy datapack
+  - rich iron/gold/diamond ore policy datapack
 - ensure server config overrides
 - ensure gamerules
 - start/restart server
 - detect spawn
 - pregenerate configured radius; current production default is 1000 blocks around spawn
+- remove all forceloads after each pregeneration batch and verify none remain at the end
+- optionally delete old world backup data after successful pregeneration when requested
 - record operation in DuckDB
 
 Acceptance:
@@ -966,7 +1063,9 @@ Acceptance:
 - Backup is created before destructive changes.
 - Gamerules/datapacks are verified after reset.
 - Pregeneration completion is recorded.
-- Existing world is gone after successful reset.
+- Existing world is gone from the active path after successful reset.
+- Backup deletion is recorded when disk cleanup is requested.
+- No force-loaded chunks remain after pregeneration.
 - New world uses the requested seed.
 
 ### Phase 9: Decommission Scripts
@@ -993,11 +1092,17 @@ Keep emergency fallback scripts in `legacy/` until the new system has lived thro
 - tested updates feed/table contract tests
 - DMG publication metadata tests
 - server config override application tests
+- custom datapack metadata/checksum tests
+- custom datapack generator parity tests:
+  - tropical worldgen output keeps Lithostitched schema and required biome bias thresholds
+  - rich ores output keeps valid ore configured-feature schema and max size clamp
 - nginx proxy smoke tests
 - systemd restart tests
 - world reset dry-run tests
 - world reset new-seed and old-world deletion tests
 - pregeneration plan/result tests
+- forceload cleanup tests
+- old-world backup cleanup tests
 - backup/rollback tests
 
 ### Client Tests
@@ -1027,6 +1132,7 @@ Keep emergency fallback scripts in `legacy/` until the new system has lived thro
 - server records inventory
 - website shows client health
 - website shows Tested Updates table with sortable/filterable data
+- website shows Failed Mods table with timestamp, reason, and problem detail columns
 - manual repair command still works
 - rollback release
 - client downgrades or holds based on policy
@@ -1153,6 +1259,8 @@ When implementing this plan:
 3. Use least-privilege systemd configuration where possible.
 4. Keep compatibility routes for old clients until all clients are migrated.
 5. Add database backup before every schema migration and before release/world operations.
+6. Treat custom datapack builds as release artifacts with reproducible validators, not as opaque ZIP uploads.
+7. Treat old-world deletion as a separate audited step after successful reset and pregeneration.
 
 ### Revised Server Plan Additions
 
@@ -1262,11 +1370,12 @@ After server and client review, the recommended order is:
 8. Build Swift client sync engine and wire it into both GUI and CLI.
 9. Add client report APIs and server-side client dashboard data.
 10. Add server job queue and audit log.
-11. Port release health and Tested Updates feed generation.
-12. Port release pipeline into Swift job system, including DMG metadata/publication.
-13. Add WebSocket events.
-14. Port safe world reset into Swift job system.
-15. Decommission legacy scripts only after repeated live success.
+11. Port custom datapack registry/build/validation into Swift or a Swift-owned compatibility wrapper.
+12. Port release health, Tested Updates, and Failed Mods feed generation.
+13. Port release pipeline into Swift job system, including DMG metadata/publication.
+14. Add WebSocket events.
+15. Port safe world reset into Swift job system, including backup retention and cleanup.
+16. Decommission legacy scripts only after repeated live success.
 
 ## 20. Sign-Off Criteria
 
@@ -1277,11 +1386,15 @@ Do not declare the migration complete until:
 - nginx serves downloads and proxies APIs correctly
 - current website/manual repair path still exists
 - Tested Updates table remains sortable/filterable and timestamped
+- Failed Mods table remains sortable/filterable and includes timestamp, reason, and problem detail
 - DMG publication and manifest publication are verified
 - client defaults are applied idempotently without duplicate config keys
 - shader/resource-pack/memory defaults are visible in the client GUI
 - safe world reset is implemented with dry-run and backup
 - safe world reset deletes the old world, applies the requested seed, and pregenerates 1000 blocks around spawn
+- safe world reset verifies no force-loaded chunks remain
+- safe world reset can delete old world backup data after success when explicitly requested
+- required custom datapacks are generated, checksum-registered, installed, and validated by the Swift-controlled path
 - DuckDB migrations are tested and backed up
 - rollback from bad release is tested
 - at least two production releases complete without using legacy scripts
