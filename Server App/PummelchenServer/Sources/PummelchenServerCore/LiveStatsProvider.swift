@@ -85,6 +85,11 @@ final class LiveStatsProvider: @unchecked Sendable {
         stats["RAM available"] = "\(Self.gigabytes(memoryAvailableBytes())) GB"
         stats["Disk used/free"] = diskSummary(metrics: metrics)
         stats["Network traffic"] = networkSummary(percent: metrics.networkTrafficPercent)
+        stats["Server Address"] = serverAddress()
+        stats["Web Address"] = webAddress()
+        stats["Server Mods"] = "\(serverModCount(release: release) ?? clientModCount(release: release) ?? 0) Server Mods"
+        stats["Client Mods"] = "\(clientModCount(release: release) ?? 0) Client Mods"
+        stats["Failed Mods"] = "\(failedModCount()) Failed Mods"
 
         let payload = LiveStatsPayload(
             generatedAt: timestamp,
@@ -263,6 +268,45 @@ final class LiveStatsProvider: @unchecked Sendable {
     private func minecraftPlayers() -> String {
         let maxPlayers = serverProperty("max-players") ?? "100"
         return "unavailable / \(maxPlayers)"
+    }
+
+    private func serverAddress() -> String {
+        ProcessInfo.processInfo.environment["PUMMELCHEN_MINECRAFT_ADDRESS"] ?? "91.99.176.243:25565"
+    }
+
+    private func webAddress() -> String {
+        ProcessInfo.processInfo.environment["PUMMELCHEN_WEB_ADDRESS"] ?? "91.99.176.243:7788"
+    }
+
+    private func serverModCount(release: CurrentRelease?) -> Int? {
+        guard let release,
+              let mrpack = urlForPublicPath(release.mrpackURL),
+              FileManager.default.fileExists(atPath: mrpack.path),
+              let listing = runAndCapture("/usr/bin/unzip", ["-Z1", mrpack.path])
+                ?? runAndCapture("/bin/unzip", ["-Z1", mrpack.path]) else {
+            return nil
+        }
+        return listing.split(separator: "\n")
+            .filter { $0.hasPrefix("overrides/mods/") && $0.hasSuffix(".jar") }
+            .count
+    }
+
+    private func clientModCount(release: CurrentRelease?) -> Int? {
+        guard let release,
+              let manifest = urlForPublicPath(release.manifestURL),
+              let data = try? String(contentsOf: manifest, encoding: .utf8) else {
+            return nil
+        }
+        return data.split(separator: "\n").reduce(0) { count, line in
+            guard !line.hasPrefix("#") else { return count }
+            return line.split(separator: "\t").first == "mods" ? count + 1 : count
+        }
+    }
+
+    private func failedModCount() -> Int {
+        let html = projectRoot.appendingPathComponent("site/public/failed-mods.html")
+        guard let data = try? String(contentsOf: html, encoding: .utf8) else { return 0 }
+        return data.components(separatedBy: "<tr><td class=\"timestamp-cell\">").count - 1
     }
 
     private func worldSeed() -> String? {
