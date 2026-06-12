@@ -39,6 +39,7 @@ final class ClientStatusModel: ObservableObject {
         configuration = ClientStatusConfiguration(
             serverURL: url,
             minecraftDirectory: configuration.minecraftDirectory,
+            pummelchenHome: configuration.pummelchenHome,
             databaseURL: configuration.databaseURL
         )
         refresh()
@@ -48,7 +49,12 @@ final class ClientStatusModel: ObservableObject {
         guard !isSyncing else { return }
         isSyncing = true
         syncMessage = nil
-        let syncConfiguration = ClientSyncConfiguration.productionDefault()
+        let syncConfiguration = ClientSyncConfiguration(
+            serverURL: configuration.serverURL,
+            minecraftDirectory: configuration.minecraftDirectory,
+            pummelchenHome: configuration.pummelchenHome,
+            databaseURL: configuration.databaseURL
+        )
         Task {
             do {
                 let result = try await ClientSyncEngine(configuration: syncConfiguration).sync(force: true)
@@ -227,7 +233,7 @@ struct PummelchenStatusView: View {
         case .offline:
             "Cannot reach the release server."
         case .repairNeeded:
-            "Local status database needs repair."
+            "Local files need repair. Sync Now will verify and fix them."
         }
     }
 }

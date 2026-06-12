@@ -52,19 +52,31 @@ public struct ClientStatusSnapshot: Codable, Equatable, Sendable {
 public struct ClientStatusConfiguration: Sendable {
     public let serverURL: URL
     public let minecraftDirectory: URL
+    public let pummelchenHome: URL
     public let databaseURL: URL
+    public let retryPolicy: ClientHTTPRetryPolicy
 
-    public init(serverURL: URL = URL(string: "https://pummelchen.91.99.176.243.nip.io")!, minecraftDirectory: URL, databaseURL: URL) {
+    public init(
+        serverURL: URL = URL(string: "https://pummelchen.91.99.176.243.nip.io")!,
+        minecraftDirectory: URL,
+        pummelchenHome: URL,
+        databaseURL: URL,
+        retryPolicy: ClientHTTPRetryPolicy = ClientHTTPRetryPolicy()
+    ) {
         self.serverURL = serverURL
         self.minecraftDirectory = minecraftDirectory
+        self.pummelchenHome = pummelchenHome
         self.databaseURL = databaseURL
+        self.retryPolicy = retryPolicy
     }
 
     public static func productionDefault(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> ClientStatusConfiguration {
         let appSupport = homeDirectory.appendingPathComponent("Library/Application Support", isDirectory: true)
+        let pummelchenHome = appSupport.appendingPathComponent("Pummelchen", isDirectory: true)
         return ClientStatusConfiguration(
             minecraftDirectory: appSupport.appendingPathComponent("minecraft", isDirectory: true),
-            databaseURL: appSupport.appendingPathComponent("Pummelchen/client.duckdb")
+            pummelchenHome: pummelchenHome,
+            databaseURL: pummelchenHome.appendingPathComponent("client.duckdb")
         )
     }
 }
@@ -72,10 +84,12 @@ public struct ClientStatusConfiguration: Sendable {
 public struct ClientStatusService: Sendable {
     public let configuration: ClientStatusConfiguration
     public let store: ClientStatusStore
+    private let http: ClientHTTPClient
 
     public init(configuration: ClientStatusConfiguration) {
         self.configuration = configuration
         self.store = ClientStatusStore(databaseURL: configuration.databaseURL)
+        self.http = ClientHTTPClient(retryPolicy: configuration.retryPolicy)
     }
 
     public func checkAndRecord() async -> ClientStatusSnapshot {
@@ -105,7 +119,21 @@ public struct ClientStatusService: Sendable {
 
         do {
             let serverRelease = try await fetchCurrentRelease()
-            let state: ClientSyncState = localRelease == serverRelease.releaseID ? .synced : .updateAvailable
+            var state: ClientSyncState = localRelease == serverRelease.releaseID ? .synced : .updateAvailable
+            var errorMessage: String?
+            if state == .synced {
+                do {
+                    let manifest = try await fetchManifest(for: serverRelease)
+                    let audit = try auditInstalledFiles(manifest: manifest)
+                    if audit.missingOrCorrupt > 0 {
+                        state = .repairNeeded
+                        errorMessage = "\(audit.missingOrCorrupt) managed file(s) are missing or corrupt; run Sync Now to repair."
+                    }
+                } catch {
+                    state = .repairNeeded
+                    errorMessage = "installed release audit failed: \(error)"
+                }
+            }
             return ClientStatusSnapshot(
                 state: state,
                 serverURL: configuration.serverURL.absoluteString,
@@ -115,7 +143,7 @@ public struct ClientStatusService: Sendable {
                 minecraftDirectory: configuration.minecraftDirectory.path,
                 localDatabase: configuration.databaseURL.path,
                 defaultsHealth: defaultsHealth,
-                errorMessage: nil
+                errorMessage: errorMessage
             )
         } catch {
             return ClientStatusSnapshot(
@@ -135,13 +163,55 @@ public struct ClientStatusService: Sendable {
     private func fetchCurrentRelease() async throws -> CurrentRelease {
         let url = configuration.serverURL
             .appendingPathComponent("downloads/current-release.json")
-        let (data, response) = try await URLSession.shared.data(from: url)
-        if let http = response as? HTTPURLResponse {
-            try ContractValidation.require((200..<300).contains(http.statusCode), "current release fetch failed with HTTP \(http.statusCode)")
-        }
+        let data = try await http.data(from: url)
         let release = try CurrentReleaseValidator.decode(data)
         try CurrentReleaseValidator.validate(release)
         return release
+    }
+
+    private func fetchManifest(for release: CurrentRelease) async throws -> ClientSyncManifest {
+        let url = absoluteURL(from: release.manifestURL)
+        let data = try await http.data(from: url)
+        return try ClientSyncManifestParser.parse(String(decoding: data, as: UTF8.self))
+    }
+
+    private func auditInstalledFiles(manifest: ClientSyncManifest) throws -> (verified: Int, missingOrCorrupt: Int) {
+        var verified = 0
+        var missingOrCorrupt = 0
+        for entry in manifest.entries {
+            let destination = try destinationURL(for: entry)
+            if (try? FileInventory.verify(fileURL: destination, expectedSize: entry.sizeBytes, expectedSHA256: entry.sha256)) == true {
+                verified += 1
+            } else {
+                missingOrCorrupt += 1
+            }
+        }
+        return (verified, missingOrCorrupt)
+    }
+
+    private func destinationURL(for entry: ClientSyncManifestEntry) throws -> URL {
+        let root = try directory(for: entry.section)
+        return try SafePath(root: root).validateChild(root.appendingPathComponent(entry.name))
+    }
+
+    private func directory(for section: String) throws -> URL {
+        switch section {
+        case ManagedClientSection.mods.rawValue,
+             ManagedClientSection.resourcepacks.rawValue,
+             ManagedClientSection.shaderpacks.rawValue:
+            return configuration.minecraftDirectory.appendingPathComponent(section, isDirectory: true)
+        case ManagedClientSection.tools.rawValue:
+            return configuration.pummelchenHome.appendingPathComponent("bin", isDirectory: true)
+        default:
+            throw ContractValidationError.invalid("invalid client section: \(section)")
+        }
+    }
+
+    private func absoluteURL(from value: String) -> URL {
+        if let url = URL(string: value), url.scheme != nil {
+            return url
+        }
+        return configuration.serverURL.appendingPathComponent(value.hasPrefix("/") ? String(value.dropFirst()) : value)
     }
 
     private func readInstalledRelease() -> String? {

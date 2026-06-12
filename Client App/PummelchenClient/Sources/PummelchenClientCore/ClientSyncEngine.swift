@@ -14,6 +14,7 @@ public struct ClientSyncConfiguration: Sendable {
     public let manageJavaRuntime: Bool
     public let clientID: String?
     public let clientAPIToken: String?
+    public let retryPolicy: ClientHTTPRetryPolicy
 
     public init(
         serverURL: URL = URL(string: "https://pummelchen.91.99.176.243.nip.io")!,
@@ -24,7 +25,8 @@ public struct ClientSyncConfiguration: Sendable {
         reportToServer: Bool = true,
         manageJavaRuntime: Bool = true,
         clientID: String? = nil,
-        clientAPIToken: String? = ProcessInfo.processInfo.environment["PUMMELCHEN_CLIENT_API_TOKEN"]
+        clientAPIToken: String? = ProcessInfo.processInfo.environment["PUMMELCHEN_CLIENT_API_TOKEN"],
+        retryPolicy: ClientHTTPRetryPolicy = ClientHTTPRetryPolicy()
     ) {
         self.serverURL = serverURL
         self.minecraftDirectory = minecraftDirectory
@@ -35,6 +37,7 @@ public struct ClientSyncConfiguration: Sendable {
         self.manageJavaRuntime = manageJavaRuntime
         self.clientID = clientID
         self.clientAPIToken = clientAPIToken
+        self.retryPolicy = retryPolicy
     }
 
     public static func productionDefault(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> ClientSyncConfiguration {
@@ -85,10 +88,12 @@ public enum ClientSyncError: Error, CustomStringConvertible {
 public struct ClientSyncEngine: Sendable {
     public let configuration: ClientSyncConfiguration
     public let store: ClientStatusStore
+    private let http: ClientHTTPClient
 
     public init(configuration: ClientSyncConfiguration) {
         self.configuration = configuration
         self.store = ClientStatusStore(databaseURL: configuration.databaseURL)
+        self.http = ClientHTTPClient(retryPolicy: configuration.retryPolicy)
     }
 
     public func sync(force: Bool = false) async throws -> ClientSyncResult {
@@ -112,12 +117,14 @@ public struct ClientSyncEngine: Sendable {
             try writeInstalledRelease(release.releaseID)
             try writeCurrentManifest(manifest)
             let inventory = try installedInventory(manifest: manifest)
+            let defaultsHealth = ClientDefaultsInspector.inspect(minecraftDirectory: configuration.minecraftDirectory, defaults: defaults)
 
             let finished = Date()
             let downloaded = syncCounts.downloaded
             let changed = downloaded + staleRemoved + unmanagedMoved
+            let defaultsChanged = defaultsHealth.contains { $0.status != .ok && $0.status != .unknown }
             let message = downloaded == 0
-                ? "all synced, no downloads required"
+                ? (defaultsChanged ? "files synced; client defaults need attention" : "all synced, no downloads required")
                 : "synced after \(downloaded) download(s)"
             let result = ClientSyncResult(
                 runID: runID,
@@ -134,14 +141,15 @@ public struct ClientSyncEngine: Sendable {
             )
             try store.record(
                 syncResult: result,
-                defaultsHealth: ClientDefaultsInspector.inspect(minecraftDirectory: configuration.minecraftDirectory, defaults: defaults),
+                defaultsHealth: defaultsHealth,
                 installedFiles: inventory
             )
             if configuration.reportToServer {
-                await report(result: result, changedFiles: changed)
+                await report(result: result, changedFiles: changed, inventory: inventory, defaultsHealth: defaultsHealth)
             }
             return result
         } catch {
+            let defaultsHealth = ClientDefaultsInspector.inspect(minecraftDirectory: configuration.minecraftDirectory)
             let failed = ClientSyncResult(
                 runID: runID,
                 startedAt: Self.iso(started),
@@ -155,17 +163,17 @@ public struct ClientSyncEngine: Sendable {
                 filesQuarantined: 0,
                 message: String(describing: error)
             )
-            try? store.record(syncResult: failed, defaultsHealth: ClientDefaultsInspector.inspect(minecraftDirectory: configuration.minecraftDirectory))
+            try? store.record(syncResult: failed, defaultsHealth: defaultsHealth)
+            if configuration.reportToServer {
+                await report(result: failed, changedFiles: 0, inventory: [], defaultsHealth: defaultsHealth)
+            }
             throw error
         }
     }
 
     private func fetchCurrentRelease() async throws -> CurrentRelease {
         let url = configuration.serverURL.appendingPathComponent("downloads/current-release.json")
-        let (data, response) = try await URLSession.shared.data(from: url)
-        if let http = response as? HTTPURLResponse {
-            try ContractValidation.require((200..<300).contains(http.statusCode), "current release fetch failed with HTTP \(http.statusCode)")
-        }
+        let data = try await http.data(from: url)
         let release = try CurrentReleaseValidator.decode(data)
         try CurrentReleaseValidator.validate(release)
         return release
@@ -188,10 +196,7 @@ public struct ClientSyncEngine: Sendable {
 
     private func fetchManifest(for release: CurrentRelease) async throws -> ClientSyncManifest {
         let manifestURL = absoluteURL(from: release.manifestURL)
-        let (data, response) = try await URLSession.shared.data(from: manifestURL)
-        if let http = response as? HTTPURLResponse {
-            try ContractValidation.require((200..<300).contains(http.statusCode), "manifest fetch failed with HTTP \(http.statusCode)")
-        }
+        let data = try await http.data(from: manifestURL)
         return try ClientSyncManifestParser.parse(String(decoding: data, as: UTF8.self))
     }
 
@@ -216,10 +221,8 @@ public struct ClientSyncEngine: Sendable {
                 .appendingPathComponent(entry.name)
             try FileManager.default.createDirectory(at: tmp.deletingLastPathComponent(), withIntermediateDirectories: true)
             let url = absoluteURL(from: entry.urlPath)
-            let (downloadedURL, response) = try await URLSession.shared.download(from: url)
-            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                throw ClientSyncError.downloadFailed(url)
-            }
+            let downloadedURL = try await http.download(from: url)
+            try? FileManager.default.removeItem(at: tmp)
             try FileManager.default.moveItem(at: downloadedURL, to: tmp)
             guard (try? FileInventory.verify(fileURL: tmp, expectedSize: entry.sizeBytes, expectedSHA256: entry.sha256)) == true else {
                 throw ClientSyncError.checksumMismatch("\(entry.section)/\(entry.name)")
@@ -375,14 +378,27 @@ public struct ClientSyncEngine: Sendable {
         return configuration.serverURL.appendingPathComponent(value.hasPrefix("/") ? String(value.dropFirst()) : value)
     }
 
-    private func report(result: ClientSyncResult, changedFiles: Int) async {
+    private func report(
+        result: ClientSyncResult,
+        changedFiles: Int,
+        inventory: [FileInventoryEntry],
+        defaultsHealth: [ClientDefaultHealthRow]
+    ) async {
         guard let token = configuration.clientAPIToken, !token.isEmpty else {
             return
         }
         let clientID = Self.validClientID(configuration.clientID ?? Host.current().localizedName)
-        let status = result.result == "ok"
-            ? (changedFiles == 0 ? "synced" : "synced")
-            : (result.message.lowercased().contains("checksum") ? "failed_checksum" : "error")
+        let lowerMessage = result.message.lowercased()
+        let status: String
+        if result.result == "ok" {
+            status = defaultsHealth.contains { $0.status != .ok && $0.status != .unknown } ? "needs_defaults_repair" : "synced"
+        } else if lowerMessage.contains("minecraft appears to be running") {
+            status = "blocked_minecraft_running"
+        } else if lowerMessage.contains("checksum") {
+            status = "failed_checksum"
+        } else {
+            status = "error"
+        }
         let payload = ClientStatusReport(
             clientID: clientID,
             reportedAt: result.finishedAt,
@@ -399,14 +415,52 @@ public struct ClientSyncEngine: Sendable {
         guard let body = try? JSONEncoder().encode(payload) else {
             return
         }
-        var request = URLRequest(url: configuration.serverURL.appendingPathComponent("api/v1/clients/sync-runs"))
+        _ = try? await sendClientUpload(path: "api/v1/clients/sync-runs", token: token, clientID: clientID, body: body)
+
+        let inventoryUpload = ClientInventoryUpload(
+            clientID: clientID,
+            reportedAt: result.finishedAt,
+            files: inventory.map {
+                ClientInventoryFile(
+                    section: $0.section.rawValue,
+                    name: $0.name,
+                    sizeBytes: Int($0.sizeBytes),
+                    sha256: $0.sha256,
+                    status: "verified"
+                )
+            }
+        )
+        if let inventoryBody = try? JSONEncoder().encode(inventoryUpload) {
+            _ = try? await sendClientUpload(path: "api/v1/clients/inventory", token: token, clientID: clientID, body: inventoryBody)
+        }
+
+        let defaultsUpload = ClientDefaultsEventUpload(
+            clientID: clientID,
+            reportedAt: result.finishedAt,
+            defaultsOK: defaultsHealth.allSatisfy { $0.status == .ok || $0.status == .unknown },
+            events: defaultsHealth.map {
+                ClientDefaultsEvent(
+                    key: $0.id,
+                    status: $0.status.rawValue,
+                    desiredValue: $0.desiredValue,
+                    observedValue: $0.observedValue
+                )
+            }
+        )
+        if let defaultsBody = try? JSONEncoder().encode(defaultsUpload) {
+            _ = try? await sendClientUpload(path: "api/v1/clients/defaults-events", token: token, clientID: clientID, body: defaultsBody)
+        }
+    }
+
+    private func sendClientUpload(path: String, token: String, clientID: String, body: Data) async throws -> Data {
+        var request = URLRequest(url: configuration.serverURL.appendingPathComponent(path))
         request.httpMethod = "POST"
         request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(clientID, forHTTPHeaderField: "X-Pummelchen-Client-ID")
-        request.setValue("PummelchenSwiftSync/0.6", forHTTPHeaderField: "User-Agent")
+        request.setValue("PummelchenSwiftSync/0.7", forHTTPHeaderField: "User-Agent")
         request.httpBody = body
-        _ = try? await URLSession.shared.data(for: request)
+        return try await http.send(request)
     }
 
     private static func minecraftIsRunning() -> Bool {

@@ -82,6 +82,12 @@ struct ClientSyncEngineTests {
         #expect(second.filesVerified == 2)
         #expect(second.message == "all synced, no downloads required")
 
+        try "corrupt".write(to: minecraft.appendingPathComponent("mods/example.jar"), atomically: true, encoding: .utf8)
+        let repaired = try await engine.sync(force: true)
+        #expect(repaired.filesDownloaded == 1)
+        #expect(repaired.filesVerified == 2)
+        #expect((try? String(contentsOf: minecraft.appendingPathComponent("mods/example.jar"), encoding: .utf8)) == "mod-v1")
+
         let defaults = ClientDefaultsInspector.inspect(minecraftDirectory: minecraft)
         #expect(defaults.allSatisfy { $0.status == .ok || $0.id == "java_runtime" && $0.status == .unknown })
         #endif
