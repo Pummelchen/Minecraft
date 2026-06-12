@@ -23,7 +23,11 @@ public struct LiveMetricSample: Codable, Equatable, Sendable {
     public let t: String
     public let cpuPercent: Double
     public let ramUsedPercent: Double
+    public let ramUsedGB: Double
+    public let ramTotalGB: Double
     public let diskUsedPercent: Double
+    public let diskUsedGB: Double
+    public let diskTotalGB: Double
     public let diskFreePercent: Double
     public let diskFreeGB: Double
     public let networkTrafficPercent: Double
@@ -32,7 +36,11 @@ public struct LiveMetricSample: Codable, Equatable, Sendable {
         case t
         case cpuPercent = "cpu_percent"
         case ramUsedPercent = "ram_used_percent"
+        case ramUsedGB = "ram_used_gb"
+        case ramTotalGB = "ram_total_gb"
         case diskUsedPercent = "disk_used_percent"
+        case diskUsedGB = "disk_used_gb"
+        case diskTotalGB = "disk_total_gb"
         case diskFreePercent = "disk_free_percent"
         case diskFreeGB = "disk_free_gb"
         case networkTrafficPercent = "network_traffic_percent"
@@ -114,7 +122,11 @@ final class LiveStatsProvider: @unchecked Sendable {
             t: timestamp,
             cpuPercent: cpuPercent,
             ramUsedPercent: memory.usedPercent,
+            ramUsedGB: Self.decimalGigabytesDouble(memory.used),
+            ramTotalGB: Self.decimalGigabytesDouble(memory.total),
             diskUsedPercent: disk.usedPercent,
+            diskUsedGB: Self.decimalGigabytesDouble(disk.used),
+            diskTotalGB: Self.decimalGigabytesDouble(disk.total),
             diskFreePercent: disk.freePercent,
             diskFreeGB: disk.freeGB,
             networkTrafficPercent: networkPercent
@@ -182,18 +194,18 @@ final class LiveStatsProvider: @unchecked Sendable {
         return Self.roundPercent(min(100, load / cores * 100.0))
     }
 
-    private func memorySnapshot() -> (usedPercent: Double, total: UInt64, available: UInt64) {
+    private func memorySnapshot() -> (usedPercent: Double, total: UInt64, available: UInt64, used: UInt64) {
         let values = meminfo()
         let total = values["MemTotal"] ?? 0
         let available = values["MemAvailable"] ?? 0
-        guard total > 0 else { return (0, 0, 0) }
+        guard total > 0 else { return (0, 0, 0, 0) }
         let used = total > available ? total - available : 0
-        return (Self.roundPercent(Double(used) * 100.0 / Double(total)), total, available)
+        return (Self.roundPercent(Double(used) * 100.0 / Double(total)), total, available, used)
     }
 
     private func memoryUsedBytes() -> UInt64 {
         let snapshot = memorySnapshot()
-        return snapshot.total > snapshot.available ? snapshot.total - snapshot.available : 0
+        return snapshot.used
     }
 
     private func memoryAvailableBytes() -> UInt64 {
@@ -214,19 +226,20 @@ final class LiveStatsProvider: @unchecked Sendable {
         return result
     }
 
-    private func diskSnapshot() -> (usedPercent: Double, freePercent: Double, freeGB: Double, total: UInt64, free: UInt64) {
+    private func diskSnapshot() -> (usedPercent: Double, freePercent: Double, freeGB: Double, total: UInt64, free: UInt64, used: UInt64) {
         let url = projectRoot
         guard let values = try? FileManager.default.attributesOfFileSystem(forPath: url.path),
               let totalNumber = values[.systemSize] as? NSNumber,
               let freeNumber = values[.systemFreeSize] as? NSNumber else {
-            return (0, 0, 0, 0, 0)
+            return (0, 0, 0, 0, 0, 0)
         }
         let total = totalNumber.uint64Value
         let free = freeNumber.uint64Value
-        guard total > 0 else { return (0, 0, 0, total, free) }
-        let usedPercent = Self.roundPercent(Double(total - free) * 100.0 / Double(total))
+        let used = total > free ? total - free : 0
+        guard total > 0 else { return (0, 0, 0, total, free, used) }
+        let usedPercent = Self.roundPercent(Double(used) * 100.0 / Double(total))
         let freePercent = Self.roundPercent(Double(free) * 100.0 / Double(total))
-        return (usedPercent, freePercent, Self.gigabytesDouble(free), total, free)
+        return (usedPercent, freePercent, Self.gigabytesDouble(free), total, free, used)
     }
 
     private func currentNetworkPercent(now: Date) -> Double {
@@ -508,6 +521,10 @@ final class LiveStatsProvider: @unchecked Sendable {
 
     private static func gigabytesDouble(_ bytes: UInt64) -> Double {
         Double(bytes) / 1_073_741_824.0
+    }
+
+    private static func decimalGigabytesDouble(_ bytes: UInt64) -> Double {
+        Double(bytes) / 1_000_000_000.0
     }
 
     private static func percent(_ value: Double) -> String {

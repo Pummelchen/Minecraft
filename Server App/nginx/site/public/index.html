@@ -7071,10 +7071,21 @@ spiral_tower_village-0.0.3.jar   server reached done and survived idle/chunk exe
       const config = liveMetricConfig[key] || { suffix: '' };
       const number = boundedLiveValue(value, config);
       if (number === '--') return '--';
+      if (key === 'ram_used_percent') {
+        const usedGb = Number(metrics.ram_used_gb);
+        const totalGb = Number(metrics.ram_total_gb);
+        const capacityText = Number.isFinite(usedGb) && Number.isFinite(totalGb)
+          ? ` (${Math.max(0, usedGb).toFixed(1)}/${Math.max(0, totalGb).toFixed(1)}GB)`
+          : '';
+        return `${number.toFixed(1)}%${capacityText}`;
+      }
       if (key === 'disk_used_percent') {
-        const freeGb = Number(metrics.disk_free_gb);
-        const freeText = Number.isFinite(freeGb) ? ` (${Math.max(0, freeGb).toFixed(1)} GB free)` : '';
-        return `${number.toFixed(1)}%${freeText}`;
+        const usedGb = Number(metrics.disk_used_gb);
+        const totalGb = Number(metrics.disk_total_gb);
+        const capacityText = Number.isFinite(usedGb) && Number.isFinite(totalGb)
+          ? ` (${Math.max(0, usedGb).toFixed(1)}/${Math.max(0, totalGb).toFixed(1)}GB)`
+          : '';
+        return `${number.toFixed(1)}%${capacityText}`;
       }
       const decimals = 1;
       return `${number.toFixed(decimals)}${config.suffix || ''}`;

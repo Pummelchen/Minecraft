@@ -98,7 +98,11 @@ struct PummelchenServerCoreTests {
         #expect(payload.history.count == 1)
         #expect(payload.metrics.cpuPercent >= 0)
         #expect(payload.metrics.ramUsedPercent >= 0)
+        #expect(payload.metrics.ramUsedGB >= 0)
+        #expect(payload.metrics.ramTotalGB >= payload.metrics.ramUsedGB)
         #expect(payload.metrics.diskUsedPercent >= 0)
+        #expect(payload.metrics.diskUsedGB >= 0)
+        #expect(payload.metrics.diskTotalGB >= payload.metrics.diskUsedGB)
 
         let cachedResponse = api.response(for: HTTPRequest(method: "GET", path: "/api/v1/site/live-stats"))
         let cachedPayload = try JSONDecoder().decode(LiveStatsPayload.self, from: cachedResponse.body)
