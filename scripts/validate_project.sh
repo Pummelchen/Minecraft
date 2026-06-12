@@ -1790,6 +1790,26 @@ grep -q "Client Mod Pack Generated" "$SITE_OUT/index.html" || fail "status site 
 if grep -q "Minecraft RSS" "$SITE_OUT/index.html"; then
   fail "status site still exposes Minecraft RSS"
 fi
+"$PYTHON_BIN" - "$ROOT_DIR/scripts" <<'PY'
+import sys
+
+scripts_dir = sys.argv[1]
+sys.path.insert(0, scripts_dir)
+import tested_updates_worker
+
+cases = {
+    "antiquetradingship-1.0.0 Neoforge 26.1.2.jar": "antiquetradingship",
+    "cleanswing-1.9-26.1.jar": "cleanswing",
+    "epherolib-neoforge-26.1-1.3.0.jar": "epherolib",
+}
+for file_name, expected_slug in cases.items():
+    slug = tested_updates_worker.slug_from_file_name(file_name)
+    if slug != expected_slug:
+        raise SystemExit(f"bad tested update slug for {file_name}: {slug!r}")
+basenames = tested_updates_worker.file_name_basenames("antiquetradingship-1.0.0 Neoforge 26.1.2.jar")
+if basenames != ["antiquetradingship-1.0.0-Neoforge-26.1.2"]:
+    raise SystemExit(f"bad tested update basenames: {basenames!r}")
+PY
 
 log "Live stats and exporter"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/live_stats_feed.py" --db "$DB" --server-dir "$SERVER" --output "$TMP_DIR/live-stats.json" --state "$TMP_DIR/live-state.json"

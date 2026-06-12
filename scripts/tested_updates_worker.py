@@ -30,7 +30,12 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from moddb import connect, source_kind
 from pummelchen_utils import table_exists
-from process_url_batch import get_modrinth_project, project_name as process_project_name, search_project
+from process_url_batch import (
+    get_modrinth_project,
+    project_name as process_project_name,
+    search_project,
+    stable_project_url,
+)
 
 
 DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
@@ -73,13 +78,18 @@ def looks_like_version_token(token: str) -> bool:
     return False
 
 
+def strip_artifact_extension(file_name: str) -> str:
+    """Remove only managed pack artifact suffixes, preserving dotted MC versions."""
+    return re.sub(r"\.(?:jar|zip)(?:\.disabled)?$", "", file_name.strip(), flags=re.IGNORECASE)
+
+
 def file_name_basenames(file_name: str) -> list[str]:
     """Yield normalized filename candidates, including codex-fixed variants."""
     raw = file_name.strip()
     if not raw:
         return []
 
-    base = re.sub(r"\.[a-z0-9]+(?:\.[a-z0-9-]+)?$", "", raw, flags=re.IGNORECASE)
+    base = strip_artifact_extension(raw)
     base = base.replace("_", "-").replace(" ", "-")
     base = base.strip(" -_.")
 
@@ -130,6 +140,23 @@ def resolve_mod_from_file(conn: sqlite3.Connection, file_name: str) -> tuple[int
     if cache_key in _FILE_MATCH_CACHE:
         return cached
 
+    row = conn.execute(
+        """
+        SELECT m.id AS mod_id, m.name AS mod_name, COALESCE(NULLIF(su.url, ''), m.primary_url) AS source_url
+        FROM mod_files f
+        JOIN mods m ON m.id = f.mod_id
+        LEFT JOIN source_urls su ON su.mod_id = m.id AND su.is_primary = 1
+        WHERE lower(f.file_name) = ?
+        ORDER BY f.id DESC
+        LIMIT 1
+        """,
+        (file_name.lower(),),
+    ).fetchone()
+    if row:
+        payload = (int(row["mod_id"]), str(row["mod_name"]), str(row["source_url"] or ""))
+        _FILE_MATCH_CACHE[cache_key] = payload
+        return payload
+
     for base in file_name_basenames(file_name):
         needle = base.lower()
         row = conn.execute(
@@ -179,7 +206,7 @@ def readable_title_from_file_name(file_name: str) -> str:
     base = file_name.strip()
     if not base:
         return "Pack update"
-    base = re.sub(r"\.[a-z0-9]+(?:\.[a-z0-9-]+)?$", "", base, flags=re.IGNORECASE)
+    base = strip_artifact_extension(base)
     base = base.replace("_", "-").replace(" ", "-")
     parts = [part for part in base.split("-") if part]
     while parts and looks_like_version_token(parts[-1]):
@@ -198,7 +225,7 @@ def slug_from_file_name(file_name: str) -> str:
     base = file_name.strip()
     if not base:
         return ""
-    base = re.sub(r"\.[a-z0-9]+(?:\.[a-z0-9-]+)?$", "", base, flags=re.IGNORECASE)
+    base = strip_artifact_extension(base)
     base = base.replace("_", "-").replace(" ", "-")
     parts = [part for part in base.split("-") if part]
     while parts and looks_like_version_token(parts[-1]):
@@ -300,6 +327,14 @@ def fetch_mod_url_from_file(conn: sqlite3.Connection, file_name: str) -> str:
         _, _, url = row_data
         if url:
             return url
+    slug = slug_from_file_name(file_name)
+    try:
+        if slug and looks_like_file_name(file_name):
+            project = search_project(slug)
+            if project:
+                return stable_project_url(project)
+    except Exception:
+        pass
     return ""
 
 
