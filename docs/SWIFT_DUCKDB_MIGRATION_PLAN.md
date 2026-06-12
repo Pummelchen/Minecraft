@@ -1383,6 +1383,15 @@ Acceptance:
 - No downloads happen over the QUIC control channel.
 - UDP/QUIC blocked-network behavior is handled gracefully through polling fallback.
 
+Implementation status:
+
+- Implemented the Phase 8 control-event contract in `PummelchenCore` with typed events for release availability, server messages, restart notices, client sync requests, and health updates.
+- Added `/h3/v1/control` as the advertised bidirectional HTTP/3/QUIC control endpoint. It declares the polling fallback endpoint and explicitly marks downloads as disallowed on the control channel.
+- Added authenticated `/api/v1/control/events` and `/api/v1/control/acks` HTTP fallback APIs backed by `control.control_events` and `control.control_acks` in DuckDB.
+- Server-side validation bounds event text and JSON payload size and rejects downloadable file references such as ZIP/JAR/DMG paths or download URLs. Large artifacts remain nginx-served static files.
+- Added a Swift client control-channel wrapper that checks the control endpoint, reconnects safely, fetches missed events through the HTTP API fallback, and acknowledges received events.
+- Fixture coverage verifies event creation, missed-message fetch, acknowledgements, download-payload rejection, and client fallback behavior when using the local test HTTP server.
+
 ### Phase 9: Safe World Reset in Swift
 
 Port safe reset workflow:

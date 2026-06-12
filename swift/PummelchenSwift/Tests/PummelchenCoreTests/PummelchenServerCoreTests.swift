@@ -4,6 +4,12 @@ import PummelchenCore
 import PummelchenClientCore
 @testable import PummelchenServerCore
 
+#if os(Linux)
+import Glibc
+#else
+import Darwin
+#endif
+
 @Suite("Pummelchen read-only server API")
 struct PummelchenServerCoreTests {
     @Test("serves current release identical to static JSON")
@@ -281,6 +287,145 @@ struct PummelchenServerCoreTests {
         #expect(activeRows == "true")
     }
 
+    @Test("phase 8 control events use safe payloads and HTTP fallback")
+    func phase8ControlEventsUseFallbackAndRejectDownloads() async throws {
+        try requireDuckDB()
+        let fixture = try makeProjectFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let api = makeAPI(fixture: fixture, token: "phase8-token")
+        let clientID = "client-phase8-a"
+        let headers = authHeaders(token: "phase8-token", clientID: clientID)
+        let encoder = JSONEncoder()
+
+        let infoResponse = api.response(for: HTTPRequest(method: "GET", path: "/h3/v1/control"))
+        let info = try JSONDecoder().decode(ControlChannelInfo.self, from: infoResponse.body)
+        #expect(info.transportTarget == "bidirectional_http3_quic")
+        #expect(info.bidirectional)
+        #expect(!info.downloadsAllowed)
+        #expect(info.supportedEvents.contains("release_available"))
+
+        let eventRequest = ControlEventCreateRequest(
+            eventType: .releaseAvailable,
+            targetClientID: clientID,
+            releaseID: "release_20260613_V88_phase8",
+            priority: "high",
+            title: "Release available",
+            message: "A new Pummelchen release is ready.",
+            payload: ["action": "sync"]
+        )
+        let create = api.response(for: HTTPRequest(
+            method: "POST",
+            path: "/api/v1/control/events",
+            headers: headers,
+            body: try encoder.encode(eventRequest)
+        ))
+        #expect(create.statusCode == 201)
+        let event = try JSONDecoder().decode(ControlEvent.self, from: create.body)
+
+        let fetch = api.response(for: HTTPRequest(
+            method: "GET",
+            path: "/api/v1/control/events?client_id=\(clientID)",
+            headers: headers
+        ))
+        let batch = try JSONDecoder().decode(ControlEventBatch.self, from: fetch.body)
+        #expect(batch.events.map(\.eventID) == [event.eventID])
+        #expect(batch.transport == "http_polling_fallback")
+
+        let secondCreate = api.response(for: HTTPRequest(
+            method: "POST",
+            path: "/api/v1/control/events",
+            headers: headers,
+            body: try encoder.encode(ControlEventCreateRequest(
+                eventType: .healthUpdate,
+                targetClientID: clientID,
+                releaseID: nil,
+                priority: "normal",
+                title: "Health update",
+                message: "Server health changed.",
+                payload: ["status": "watch"]
+            ))
+        ))
+        let secondEvent = try JSONDecoder().decode(ControlEvent.self, from: secondCreate.body)
+        let afterFirst = api.response(for: HTTPRequest(
+            method: "GET",
+            path: "/api/v1/control/events?client_id=\(clientID)&after_event_id=\(event.eventID)",
+            headers: headers
+        ))
+        let afterFirstBatch = try JSONDecoder().decode(ControlEventBatch.self, from: afterFirst.body)
+        #expect(afterFirstBatch.events.map(\.eventID).contains(secondEvent.eventID))
+
+        let ack = ControlEventAck(clientID: clientID, eventID: event.eventID, receivedAt: "2026-06-13T00:00:00+00:00")
+        #expect(api.response(for: HTTPRequest(method: "POST", path: "/api/v1/control/acks", headers: headers, body: try encoder.encode(ack))).statusCode == 200)
+        let secondAck = ControlEventAck(clientID: clientID, eventID: secondEvent.eventID, receivedAt: "2026-06-13T00:00:01+00:00")
+        #expect(api.response(for: HTTPRequest(method: "POST", path: "/api/v1/control/acks", headers: headers, body: try encoder.encode(secondAck))).statusCode == 200)
+        let afterAck = api.response(for: HTTPRequest(
+            method: "GET",
+            path: "/api/v1/control/events?client_id=\(clientID)",
+            headers: headers
+        ))
+        let empty = try JSONDecoder().decode(ControlEventBatch.self, from: afterAck.body)
+        #expect(empty.events.isEmpty)
+
+        let downloadPayload = ControlEventCreateRequest(
+            eventType: .clientSyncRequested,
+            targetClientID: clientID,
+            releaseID: nil,
+            priority: "normal",
+            title: "Bad payload",
+            message: "This should be rejected.",
+            payload: ["download_url": "/downloads/releases/x/client.zip"]
+        )
+        #expect(api.response(for: HTTPRequest(
+            method: "POST",
+            path: "/api/v1/control/events",
+            headers: headers,
+            body: try encoder.encode(downloadPayload)
+        )).statusCode == 400)
+    }
+
+    @Test("phase 8 client reconnect fetches missed events through polling fallback")
+    func phase8ClientReconnectFetchesMissedEvents() async throws {
+        try requireDuckDB()
+        let fixture = try makeProjectFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let api = makeAPI(fixture: fixture, token: "phase8-token")
+        let clientID = "client-phase8-b"
+        let headers = authHeaders(token: "phase8-token", clientID: clientID)
+        let eventRequest = ControlEventCreateRequest(
+            eventType: .serverRestartNotice,
+            targetClientID: clientID,
+            releaseID: nil,
+            priority: "critical",
+            title: "Restart notice",
+            message: "Server restart soon.",
+            payload: ["seconds": "120"]
+        )
+        _ = api.response(for: HTTPRequest(
+            method: "POST",
+            path: "/api/v1/control/events",
+            headers: headers,
+            body: try JSONEncoder().encode(eventRequest)
+        ))
+
+        let server = APIRouterHTTPServer(api: api)
+        try server.start()
+        defer { server.stop() }
+
+        let client = ClientControlChannel(configuration: ClientControlChannelConfiguration(
+            serverURL: URL(string: "http://127.0.0.1:\(server.port)")!,
+            clientID: clientID,
+            clientAPIToken: "phase8-token"
+        ))
+        let batch = try await client.reconnectWithFallback()
+        #expect(batch.events.count == 1)
+        #expect(batch.events[0].eventType == .serverRestartNotice)
+        try await client.acknowledge(batch.events[0])
+        let afterAck = try await client.fetchMissedEvents()
+        #expect(afterAck.events.isEmpty)
+    }
+
     private func makeProjectFixture() throws -> (root: URL, currentReleaseJSON: String, manifestTSV: String) {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("pummelchen-server-\(UUID().uuidString)", isDirectory: true)
@@ -349,5 +494,143 @@ struct PummelchenServerCoreTests {
         let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         #expect(process.terminationStatus == 0)
         return output.split(separator: "\n").last.map(String.init) ?? ""
+    }
+}
+
+final class APIRouterHTTPServer: @unchecked Sendable {
+    let api: PummelchenServerAPI
+    let port: Int
+    private var socketFD: Int32 = -1
+    private var thread: Thread?
+    private var running = false
+
+    init(api: PummelchenServerAPI) {
+        self.api = api
+        self.port = Int.random(in: 29_000...39_000)
+    }
+
+    func start() throws {
+        #if os(Linux)
+        let stream = Int32(SOCK_STREAM.rawValue)
+        #else
+        let stream = Int32(SOCK_STREAM)
+        #endif
+        socketFD = socket(AF_INET, stream, 0)
+        var enabled: Int32 = 1
+        setsockopt(socketFD, SOL_SOCKET, SO_REUSEADDR, &enabled, socklen_t(MemoryLayout<Int32>.size))
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(UInt16(port).bigEndian)
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let bindResult = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(socketFD, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        #expect(bindResult == 0)
+        #expect(listen(socketFD, 16) == 0)
+        running = true
+        thread = Thread { [weak self] in
+            self?.acceptLoop()
+        }
+        thread?.start()
+        Thread.sleep(forTimeInterval: 0.2)
+    }
+
+    func stop() {
+        running = false
+        if socketFD >= 0 {
+            close(socketFD)
+        }
+    }
+
+    private func acceptLoop() {
+        while running {
+            let client = accept(socketFD, nil, nil)
+            if client < 0 {
+                continue
+            }
+            handle(client: client)
+            close(client)
+        }
+    }
+
+    private func handle(client: Int32) {
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 8192)
+        while true {
+            let count = read(client, &buffer, buffer.count)
+            if count <= 0 {
+                break
+            }
+            data.append(contentsOf: buffer.prefix(count))
+            guard let headerEnd = data.range(of: Data("\r\n\r\n".utf8)) else {
+                continue
+            }
+            let header = String(decoding: data.prefix(upTo: headerEnd.lowerBound), as: UTF8.self)
+            let contentLength = header
+                .split(separator: "\r\n")
+                .dropFirst()
+                .first { $0.lowercased().hasPrefix("content-length:") }
+                .flatMap { Int($0.split(separator: ":", maxSplits: 1).last?.trimmingCharacters(in: .whitespaces) ?? "") } ?? 0
+            if data.count >= headerEnd.upperBound + contentLength {
+                break
+            }
+        }
+        let request = parse(data) ?? HTTPRequest(method: "GET", path: "/bad-request")
+        let response = api.response(for: request)
+        write(response: response, client: client)
+    }
+
+    private func parse(_ data: Data) -> HTTPRequest? {
+        let text = String(decoding: data, as: UTF8.self)
+        let headerText = text.components(separatedBy: "\r\n\r\n").first ?? text
+        let lines = headerText.split(separator: "\r\n")
+        guard let first = lines.first else { return nil }
+        let parts = first.split(separator: " ")
+        guard parts.count >= 2 else { return nil }
+        var headers: [String: String] = [:]
+        for line in lines.dropFirst() {
+            let pieces = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard pieces.count == 2 else { continue }
+            headers[String(pieces[0])] = String(pieces[1]).trimmingCharacters(in: .whitespaces)
+        }
+        let marker = Data("\r\n\r\n".utf8)
+        let body: Data
+        if let range = data.range(of: marker) {
+            body = data.subdata(in: range.upperBound..<data.endIndex)
+        } else {
+            body = Data()
+        }
+        return HTTPRequest(method: String(parts[0]), path: String(parts[1]), headers: headers, body: body)
+    }
+
+    private func write(response: HTTPResponse, client: Int32) {
+        let head = [
+            "HTTP/1.1 \(response.statusCode) \(response.statusCode == 200 ? "OK" : "Status")",
+            "Content-Type: \(response.contentType)",
+            "Content-Length: \(response.body.count)",
+            "Connection: close",
+            "",
+            ""
+        ].joined(separator: "\r\n")
+        writeAll(Data(head.utf8), client: client)
+        writeAll(response.body, client: client)
+    }
+
+    private func writeAll(_ data: Data, client: Int32) {
+        data.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            var sent = 0
+            while sent < data.count {
+                #if os(Linux)
+                let result = Glibc.write(client, base.advanced(by: sent), data.count - sent)
+                #else
+                let result = Darwin.write(client, base.advanced(by: sent), data.count - sent)
+                #endif
+                if result <= 0 { break }
+                sent += result
+            }
+        }
     }
 }

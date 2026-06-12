@@ -249,6 +249,167 @@ public struct ClientWriteAck: Codable, Equatable, Sendable {
     }
 }
 
+public enum ControlEventType: String, Codable, CaseIterable, Sendable {
+    case releaseAvailable = "release_available"
+    case serverMessage = "server_message"
+    case serverRestartNotice = "server_restart_notice"
+    case clientSyncRequested = "client_sync_requested"
+    case healthUpdate = "health_update"
+}
+
+public struct ControlEvent: Codable, Equatable, Sendable {
+    public let eventID: String
+    public let eventType: ControlEventType
+    public let createdAt: String
+    public let targetClientID: String?
+    public let releaseID: String?
+    public let priority: String
+    public let title: String
+    public let message: String
+    public let payload: [String: String]
+
+    enum CodingKeys: String, CodingKey {
+        case eventID = "event_id"
+        case eventType = "event_type"
+        case createdAt = "created_at"
+        case targetClientID = "target_client_id"
+        case releaseID = "release_id"
+        case priority
+        case title
+        case message
+        case payload
+    }
+
+    public init(
+        eventID: String,
+        eventType: ControlEventType,
+        createdAt: String,
+        targetClientID: String?,
+        releaseID: String?,
+        priority: String,
+        title: String,
+        message: String,
+        payload: [String: String] = [:]
+    ) {
+        self.eventID = eventID
+        self.eventType = eventType
+        self.createdAt = createdAt
+        self.targetClientID = targetClientID
+        self.releaseID = releaseID
+        self.priority = priority
+        self.title = title
+        self.message = message
+        self.payload = payload
+    }
+}
+
+public struct ControlEventCreateRequest: Codable, Equatable, Sendable {
+    public let eventType: ControlEventType
+    public let targetClientID: String?
+    public let releaseID: String?
+    public let priority: String
+    public let title: String
+    public let message: String
+    public let payload: [String: String]
+
+    enum CodingKeys: String, CodingKey {
+        case eventType = "event_type"
+        case targetClientID = "target_client_id"
+        case releaseID = "release_id"
+        case priority
+        case title
+        case message
+        case payload
+    }
+
+    public init(
+        eventType: ControlEventType,
+        targetClientID: String?,
+        releaseID: String?,
+        priority: String = "normal",
+        title: String,
+        message: String,
+        payload: [String: String] = [:]
+    ) {
+        self.eventType = eventType
+        self.targetClientID = targetClientID
+        self.releaseID = releaseID
+        self.priority = priority
+        self.title = title
+        self.message = message
+        self.payload = payload
+    }
+}
+
+public struct ControlEventBatch: Codable, Equatable, Sendable {
+    public let events: [ControlEvent]
+    public let nextAfterEventID: String?
+    public let transport: String
+    public let fallback: String
+
+    enum CodingKeys: String, CodingKey {
+        case events
+        case nextAfterEventID = "next_after_event_id"
+        case transport
+        case fallback
+    }
+
+    public init(events: [ControlEvent], nextAfterEventID: String?, transport: String, fallback: String) {
+        self.events = events
+        self.nextAfterEventID = nextAfterEventID
+        self.transport = transport
+        self.fallback = fallback
+    }
+}
+
+public struct ControlChannelInfo: Codable, Equatable, Sendable {
+    public let endpoint: String
+    public let transportTarget: String
+    public let bidirectional: Bool
+    public let fallbackEndpoint: String
+    public let maxPayloadBytes: Int
+    public let downloadsAllowed: Bool
+    public let supportedEvents: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case endpoint
+        case transportTarget = "transport_target"
+        case bidirectional
+        case fallbackEndpoint = "fallback_endpoint"
+        case maxPayloadBytes = "max_payload_bytes"
+        case downloadsAllowed = "downloads_allowed"
+        case supportedEvents = "supported_events"
+    }
+
+    public init(endpoint: String, transportTarget: String, bidirectional: Bool, fallbackEndpoint: String, maxPayloadBytes: Int, downloadsAllowed: Bool, supportedEvents: [String]) {
+        self.endpoint = endpoint
+        self.transportTarget = transportTarget
+        self.bidirectional = bidirectional
+        self.fallbackEndpoint = fallbackEndpoint
+        self.maxPayloadBytes = maxPayloadBytes
+        self.downloadsAllowed = downloadsAllowed
+        self.supportedEvents = supportedEvents
+    }
+}
+
+public struct ControlEventAck: Codable, Equatable, Sendable {
+    public let clientID: String
+    public let eventID: String
+    public let receivedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case clientID = "client_id"
+        case eventID = "event_id"
+        case receivedAt = "received_at"
+    }
+
+    public init(clientID: String, eventID: String, receivedAt: String) {
+        self.clientID = clientID
+        self.eventID = eventID
+        self.receivedAt = receivedAt
+    }
+}
+
 public struct ReleaseHistoryEntry: Codable, Equatable, Sendable {
     public let releaseID: String
     public let status: String

@@ -7,6 +7,7 @@ CREATE SCHEMA IF NOT EXISTS release;
 CREATE SCHEMA IF NOT EXISTS client;
 CREATE SCHEMA IF NOT EXISTS moddb;
 CREATE SCHEMA IF NOT EXISTS world;
+CREATE SCHEMA IF NOT EXISTS control;
 
 CREATE TABLE IF NOT EXISTS ops.schema_migrations (
     version INTEGER PRIMARY KEY,
@@ -141,6 +142,25 @@ CREATE TABLE IF NOT EXISTS client.client_defaults_events (
     status TEXT NOT NULL,
     desired_value TEXT NOT NULL,
     observed_value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS control.control_events (
+    event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    target_client_id TEXT,
+    release_id TEXT,
+    priority TEXT NOT NULL,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS control.control_acks (
+    client_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    received_at TIMESTAMP NOT NULL,
+    PRIMARY KEY (client_id, event_id)
 );
 
 CREATE TABLE IF NOT EXISTS moddb.mods (

@@ -57,8 +57,8 @@ public struct HTTPResponse: Equatable, Sendable {
         HTTPResponse(statusCode: statusCode, contentType: contentType, body: Data(value.utf8))
     }
 
-    public static func json(_ value: Data, statusCode: Int = 200) -> HTTPResponse {
-        HTTPResponse(statusCode: statusCode, contentType: "application/json; charset=utf-8", body: value)
+    public static func json(_ value: Data, statusCode: Int = 200, headers: [String: String] = [:]) -> HTTPResponse {
+        HTTPResponse(statusCode: statusCode, contentType: "application/json; charset=utf-8", body: value, headers: headers)
     }
 }
 
@@ -116,6 +116,7 @@ public final class PummelchenServerAPI: @unchecked Sendable {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private let store: ServerClientReportStore
+    private let controlStore: ControlEventStore
 
     public init(config: PummelchenServerConfig) {
         self.config = config
@@ -124,6 +125,7 @@ public final class PummelchenServerAPI: @unchecked Sendable {
         self.encoder = encoder
         self.decoder = JSONDecoder()
         self.store = ServerClientReportStore(databaseURL: config.duckDBURL)
+        self.controlStore = ControlEventStore(databaseURL: config.duckDBURL)
     }
 
     public func response(for request: HTTPRequest) -> HTTPResponse {
@@ -136,6 +138,17 @@ public final class PummelchenServerAPI: @unchecked Sendable {
                 return try currentRelease()
             case ("GET", "/api/v1/clients/health"):
                 return try clientHealth()
+            case ("GET", "/h3/v1/control"):
+                return try controlInfo()
+            case ("POST", "/api/v1/control/events"):
+                try requireAuthorized(request)
+                return try createControlEvent(request)
+            case ("GET", "/api/v1/control/events"):
+                try requireAuthorized(request)
+                return try controlEvents(request)
+            case ("POST", "/api/v1/control/acks"):
+                try requireAuthorized(request)
+                return try acknowledgeControlEvent(request)
             case ("POST", "/api/v1/clients/register"):
                 try requireAuthorized(request)
                 return try registerClient(request)
@@ -171,6 +184,8 @@ public final class PummelchenServerAPI: @unchecked Sendable {
         } catch PummelchenServerError.notFound(let message) {
             return errorResponse(status: 404, message: message)
         } catch PummelchenServerError.badRequest(let message) {
+            return errorResponse(status: 400, message: message)
+        } catch ContractValidationError.invalid(let message) {
             return errorResponse(status: 400, message: message)
         } catch {
             return errorResponse(status: 500, message: String(describing: error))
@@ -209,6 +224,51 @@ public final class PummelchenServerAPI: @unchecked Sendable {
 
     private func clientHealth() throws -> HTTPResponse {
         try .json(encoder.encode(store.healthSummary()))
+    }
+
+    private func controlInfo() throws -> HTTPResponse {
+        let payload = ControlChannelInfo(
+            endpoint: "/h3/v1/control",
+            transportTarget: "bidirectional_http3_quic",
+            bidirectional: true,
+            fallbackEndpoint: "/api/v1/control/events",
+            maxPayloadBytes: ControlEventStore.maxControlPayloadBytes,
+            downloadsAllowed: false,
+            supportedEvents: ControlEventType.allCases.map(\.rawValue)
+        )
+        return .json(try encoder.encode(payload), headers: ["X-Pummelchen-Downloads-Allowed": "false"])
+    }
+
+    private func createControlEvent(_ request: HTTPRequest) throws -> HTTPResponse {
+        let payload: ControlEventCreateRequest = try decodeBody(request)
+        let event = try controlStore.create(payload)
+        return .json(try encoder.encode(event), statusCode: 201)
+    }
+
+    private func controlEvents(_ request: HTTPRequest) throws -> HTTPResponse {
+        let params = queryParameters(request.path)
+        let clientID = params["client_id"] ?? request.headers["x-pummelchen-client-id"] ?? ""
+        try validateClientID(clientID, header: request.headers["x-pummelchen-client-id"])
+        let limit = params["limit"].flatMap(Int.init) ?? 50
+        let events = try controlStore.pendingEvents(
+            clientID: clientID,
+            afterEventID: params["after_event_id"],
+            limit: limit
+        )
+        let batch = ControlEventBatch(
+            events: events,
+            nextAfterEventID: events.last?.eventID ?? params["after_event_id"],
+            transport: "http_polling_fallback",
+            fallback: "udp_quic_unavailable_or_not_established"
+        )
+        return .json(try encoder.encode(batch), headers: ["X-Pummelchen-Downloads-Allowed": "false"])
+    }
+
+    private func acknowledgeControlEvent(_ request: HTTPRequest) throws -> HTTPResponse {
+        let payload: ControlEventAck = try decodeBody(request)
+        try validateClientID(payload.clientID, header: request.headers["x-pummelchen-client-id"])
+        try controlStore.acknowledge(payload)
+        return .json(try encoder.encode(ClientWriteAck(clientID: payload.clientID, events: 1)))
     }
 
     private func registerClient(_ request: HTTPRequest) throws -> HTTPResponse {
@@ -323,6 +383,22 @@ public final class PummelchenServerAPI: @unchecked Sendable {
     private func normalizedPath(_ path: String) -> String {
         let withoutQuery = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? path
         return withoutQuery.isEmpty ? "/" : withoutQuery
+    }
+
+    private func queryParameters(_ path: String) -> [String: String] {
+        guard let query = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).dropFirst().first else {
+            return [:]
+        }
+        var result: [String: String] = [:]
+        for item in query.split(separator: "&") {
+            let parts = item.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let key = parts.first else {
+                continue
+            }
+            let value = parts.count > 1 ? String(parts[1]) : ""
+            result[String(key).removingPercentEncoding ?? String(key)] = value.removingPercentEncoding ?? value
+        }
+        return result
     }
 
     private func errorResponse(status: Int, message: String) -> HTTPResponse {
