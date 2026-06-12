@@ -2,7 +2,7 @@
 
 Status: implementation planning document
 Audience: AI coding agents and human maintainers
-Target platforms: Debian 13 VPS server, macOS Apple Silicon clients
+Target platforms: Debian 13 x86-64 VPS server, macOS Apple Silicon clients
 Current production system: Python, Bash, nginx, systemd, LaunchAgent, generated static website, DuckDB/SQLite-style project state
 Target system: nginx edge, Swift server daemon with embedded DuckDB, Swift macOS client app/helper with embedded DuckDB
 Last revised: 2026-06-12 after release/client/webpage hardening, custom worldgen datapacks, and live safe world reset
@@ -11,8 +11,8 @@ Last revised: 2026-06-12 after release/client/webpage hardening, custom worldgen
 
 The project should migrate toward two compiled Swift applications:
 
-- `PummelchenServer`: a Debian 13 Swift service running behind nginx, owning the authoritative project DuckDB.
-- `PummelchenClient`: a macOS Swift app plus background helper, owning a local client DuckDB inventory/cache.
+- `PummelchenServer`: a Debian 13 x86-64 Swift service running behind nginx, owning the authoritative project DuckDB.
+- `PummelchenClient`: a macOS Swift app plus background helper optimized for Apple Silicon M-series chips, owning a local client DuckDB inventory/cache.
 
 nginx remains the public edge for the website, large downloads, HTTPS, static release files, and HTTP/3/QUIC routing to the Swift server app.
 
@@ -189,7 +189,9 @@ nginx serves public static files and exposes HTTP/3 on the public edge. The Swif
 ### Server
 
 - Language: Swift 6.3.2
-- Platform: Debian 13
+- Platform: Debian 13 on Intel/AMD x86-64
+- Build target: `x86_64-unknown-linux-gnu`
+- Optimization target: production server builds must use Swift release optimization for throughput and predictable memory use on the VPS CPU family.
 - Runtime: systemd service
 - Database: DuckDB embedded file
 - HTTP/3/QUIC framework: prefer a SwiftNIO-compatible QUIC stack if mature enough on Debian/macOS; otherwise use a narrow C-backed QUIC library wrapper. Vapor may still be used for ordinary HTTP API routing only if it does not block the QUIC transport requirement.
@@ -199,7 +201,9 @@ nginx serves public static files and exposes HTTP/3 on the public edge. The Swif
 ### Client
 
 - Language: Swift 6.3.2 or current Xcode Swift equivalent on macOS development machine
-- Platform: macOS Apple Silicon
+- Platform: macOS Apple Silicon only for the first private client line
+- Build target: `arm64-apple-macosx`
+- Optimization target: production client builds must be optimized for Apple M1, M2, M3, M4, and M5 class chips. Do not ship Intel slices unless a future Intel Mac support requirement is explicitly added.
 - UI: SwiftUI with narrow AppKit interop where needed
 - Database: DuckDB embedded file in `~/Library/Application Support/Pummelchen/client.duckdb`
 - Background agent: LaunchAgent helper
@@ -207,6 +211,38 @@ nginx serves public static files and exposes HTTP/3 on the public edge. The Swif
 - Networking: URLSession for ordinary HTTPS/HTTP requests and a dedicated HTTP/3/QUIC client transport for the bidirectional control channel
 - File sync: native Swift file operations, checksum validation, resumable downloads where practical
 - CLI helper: same sync engine as GUI, with text progress suitable for Terminal support
+
+### CPU Architecture And Build Requirements
+
+The Swift migration has two different production CPU targets:
+
+```text
+PummelchenClient.app      arm64-apple-macosx, Apple M1-M5 optimized
+PummelchenServer.service  x86_64-unknown-linux-gnu, Debian 13 VPS optimized
+```
+
+Client build rules:
+
+- Build the DMG client app/helper as Apple Silicon `arm64` release binaries.
+- Prefer modern macOS APIs and concurrency patterns that perform well on Apple M-series efficiency/performance core scheduling.
+- Keep file hashing, download verification, DuckDB writes, and inventory scans off the main SwiftUI thread.
+- Keep background sync power-aware: avoid tight polling, batch filesystem scans, and respect sleep/wake behavior.
+- Treat Intel Mac support as out of scope unless a later requirement adds a universal build.
+
+Server build rules:
+
+- Build the Debian service as `x86_64-unknown-linux-gnu` release binaries on the VPS or a matching Linux builder.
+- Tune for long-running service stability: bounded memory, explicit job concurrency limits, controlled DuckDB connection ownership, and no unbounded task creation under load.
+- Keep Minecraft/systemd operations outside request handlers and inside the job queue.
+- Validate the release binary on the actual VPS CPU before cutover.
+
+Architecture acceptance:
+
+- `file`/platform checks prove the client app/helper are `arm64` Mach-O binaries.
+- `file`/platform checks prove the server service is an `x86-64` ELF binary.
+- Release builds pass the same contract tests as debug builds.
+- The client smoke test runs on at least two Apple Silicon Macs before production cutover.
+- The server smoke test runs on the Debian 13 x86-64 VPS under systemd before production cutover.
 
 ### DuckDB
 
@@ -1336,6 +1372,8 @@ Keep emergency fallback scripts in `legacy/` until the new system has lived thro
 
 ### Server Tests
 
+- x86-64 release build test on Debian 13
+- server binary architecture check: `x86-64` ELF
 - DuckDB migration tests
 - DuckDB SQLite-extension import tests
 - DuckDB schema migration/checksum tests
@@ -1365,6 +1403,8 @@ Keep emergency fallback scripts in `legacy/` until the new system has lived thro
 
 ### Client Tests
 
+- Apple Silicon release build test on macOS
+- client app/helper architecture check: `arm64` Mach-O
 - local DB migration tests
 - manifest parse tests
 - hash verification tests
@@ -1566,6 +1606,7 @@ PummelchenServer.service
 
 ### Server Go-Live Gates
 
+- Server service is built as an optimized `x86_64-unknown-linux-gnu` release binary and verified on the Debian 13 VPS.
 - DuckDB foundation rebuilds from current SQLite/project files and passes parity checks.
 - Current scripts and Swift shadow outputs match for release manifests, Tested Updates, Failed Mods, release health, custom datapacks, and world reset dry-run plans.
 - At least two full releases are created, activated, validated, and rolled back successfully in staging.
@@ -1699,6 +1740,7 @@ PummelchenClient.app
 
 ### Client Go-Live Gates
 
+- Client app/helper are built as optimized `arm64-apple-macosx` release binaries for Apple M1-M5 class Macs.
 - Fresh install from DMG works on at least two macOS Apple Silicon machines.
 - Background LaunchAgent starts after login and survives reboot.
 - Manual Sync Now and CLI `sync --force` produce the same filesystem result.
@@ -1738,6 +1780,8 @@ After server and client review, the recommended order is:
 Do not declare the migration complete until:
 
 - all clients can sync through the Swift client
+- client app/helper binaries are optimized Apple Silicon `arm64` builds
+- server service binary is an optimized Debian `x86-64` build
 - the server can create and activate releases through Swift
 - DuckDB foundation can rebuild from current SQLite/project files and pass parity checks
 - reporting views are the source for Tested Updates, Failed Mods, release health, client sync status, datapack status, and world reset history
