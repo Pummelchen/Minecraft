@@ -1450,41 +1450,84 @@ When implementing this plan:
 11. Before replacing a script, write a fixture test that proves the Swift result matches the current script result.
 12. Preserve the current website user contract: manual commands have copy buttons, Tested Updates is a table, and status/release information is visible without logging in.
 
-## 17. Server Perspective Review
+## 17. Server Perspective Production Review
 
-### Strengths
+The server-side Swift/DuckDB system is production-ready only if it can run the Pummelchen operation as a reliable control plane, not merely as an API wrapper around existing files.
 
-- The target architecture keeps nginx, which reduces risk for downloads, TLS, static content, and reverse proxying.
-- The server owns the authoritative database and release state, which is correct.
-- The staged migration avoids breaking existing update/release workflows.
-- DuckDB is suitable for release metadata, client health, inventory snapshots, and audit logs.
-- A Swift daemon can centralize current script logic and reduce operational drift.
+### Server Must Own
 
-### Risks
+1. **Authoritative state**
+   - DuckDB stores releases, release files, mod state, failed mods, tested updates, custom datapacks, client reports, health runs, jobs, and audit logs.
+   - Current SQLite import remains available only for migration/parity until cutover.
+   - Reporting views are the contract for website/API outputs.
 
-1. Swift on Linux has fewer operations libraries than Python. Some scripting tasks may take longer to port.
-2. Running process-control actions from a server daemon can become unsafe if permissions are too broad.
-3. Release creation and world reset workflows are destructive and need stronger transactional boundaries than ordinary API calls.
-4. WebSocket should not become a second control plane that bypasses HTTPS validation.
-5. DuckDB concurrency must be managed carefully. A single server process should own writes, and background jobs must serialize schema-changing operations.
+2. **Release pipeline**
+   - Create immutable release directories.
+   - Generate manifests, checksums, MRPack/ZIP/DMG metadata, and current-release pointer.
+   - Run NeoForge preflight before publication.
+   - Run release health after activation.
+   - Roll back atomically to a previous known-good release.
 
-### Required Server Revisions
+3. **Client distribution**
+   - Publish static release files for nginx to serve.
+   - Keep old manifest semantics until all clients are migrated.
+   - Expose versioned API endpoints for current release, manifest metadata, client status ingestion, and update history.
+   - Send WebSocket notices only for small control/status events. Downloads remain static HTTPS files via nginx.
 
-1. Add explicit job queue semantics for long-running server work:
-   - release creation
-   - world reset
-   - pregeneration
-   - large validation runs
-2. Server API should submit jobs and expose job status, not run destructive workflows directly inside request handlers.
-3. Use least-privilege systemd configuration where possible.
-4. Keep compatibility routes for old clients until all clients are migrated.
-5. Add database backup before every schema migration and before release/world operations.
-6. Treat custom datapack builds as release artifacts with reproducible validators, not as opaque ZIP uploads.
-7. Treat old-world deletion as a separate audited step after successful reset and pregeneration.
+4. **Custom datapack policy**
+   - Build or validate `pummelchen-welcome.zip`, `pummelchen-tropical-worldgen.zip`, and `pummelchen-rich-ores.zip`.
+   - Store checksums and validation results in DuckDB.
+   - Install required datapacks in both server-level and active-world datapack folders.
+   - Treat datapack failure as a release/reset blocker.
 
-### Revised Server Plan Additions
+5. **Safe world reset**
+   - Run only through a job queue.
+   - Require dry-run, explicit confirmation, backup/move of active world, seed write, datapack/config reinstall, gamerule verification, spawn detection, 1000-block radius pregeneration, forceload cleanup, and optional backup deletion.
+   - Persist progress and final result in DuckDB.
+   - Never delete old world backup data until the new world has booted, pregenerated, and passed health checks.
 
-Add tables:
+6. **Observability and operations**
+   - Expose health endpoints for Swift service, DuckDB, nginx proxy, active release, Minecraft server ping, disk space, datapack status, and client-report ingestion.
+   - Persist job logs and audit events.
+   - Export Parquet history after release activation and destructive operations.
+   - Provide an admin-safe view of failed jobs and recovery steps.
+
+### Server Must Not Do
+
+- Do not serve large downloads directly unless nginx is unavailable and an emergency mode is explicitly enabled.
+- Do not expose DuckDB over TCP or to clients.
+- Do not allow multiple processes to write the server DuckDB file.
+- Do not perform release activation, world reset, backup deletion, or Minecraft restart directly inside an HTTP request handler.
+- Do not run as unrestricted root if narrow `sudo`/systemd permissions can do the job.
+- Do not use WebSocket as a second write/control plane.
+
+### Required Server Runtime Shape
+
+```text
+nginx public edge
+  -> static site/download files
+  -> /api/v1 reverse proxy to 127.0.0.1:8787
+  -> /ws/v1 reverse proxy to 127.0.0.1:8787
+
+PummelchenServer.service
+  -> single process owning server DuckDB writes
+  -> internal job queue
+  -> restricted systemd/RCON/Minecraft control helpers
+  -> static artifact writer under release/download roots
+```
+
+### Server Go-Live Gates
+
+- DuckDB foundation rebuilds from current SQLite/project files and passes parity checks.
+- Current scripts and Swift shadow outputs match for release manifests, Tested Updates, Failed Mods, release health, custom datapacks, and world reset dry-run plans.
+- At least two full releases are created, activated, validated, and rolled back successfully in staging.
+- At least one staging safe world reset completes with seed write, datapack validation, 1000-block pregeneration, no leftover forceloads, and optional backup cleanup.
+- Release health and DB health are visible and green after each staging operation.
+- nginx serves all large files while Swift only serves API/WebSocket.
+- A server reboot restores nginx, Swift service, Minecraft service, health timers, and current release state without manual repair.
+- Production cutover has a rollback command that restores the old script-controlled path.
+
+### Server Schema Additions
 
 ```sql
 CREATE TABLE jobs (
@@ -1520,38 +1563,68 @@ GET  /api/v1/jobs
 
 Long-running operations must run through this job system.
 
-## 18. Client Perspective Review
+## 18. Client Perspective Production Review
 
-### Strengths
+The client-side Swift/DuckDB system is production-ready only if a non-technical player can install it, stay synced, understand status, and recover from common failures without Terminal scripting.
 
-- Native SwiftUI client is the right fit for private macOS players.
-- Local DuckDB gives clear history and diagnostics.
-- The proposed UI answers the player's main question quickly: "am I synced?"
-- Keeping Bash updater fallback during migration reduces support risk.
-- A LaunchAgent helper maps well to background sync.
+### Client Must Own
 
-### Risks
+1. **Installation and identity**
+   - DMG installs `PummelchenClient.app`.
+   - App creates/loads client identity and stores secrets in Keychain when mature; a locked-down file token is acceptable only for early private builds.
+   - App initializes local DuckDB and records installer/sync history.
 
-1. Unsigned/ad-hoc signed apps will still trigger macOS trust friction.
-2. Clipboard, quarantine, file permissions, and background execution behavior vary across macOS versions.
-3. If the app tries to do too much initially, it can become less reliable than the current simple updater.
-4. Detecting whether Minecraft is running must be conservative.
-5. A GUI-only updater is not enough; a command-line repair path is still needed for broken installs.
+2. **Background sync**
+   - LaunchAgent helper checks for updates in the background.
+   - Helper uses the same sync engine as the GUI and CLI.
+   - Helper does not mutate files while Minecraft is running unless the operation is explicitly safe.
+   - Helper recovers from sleep/offline/interrupted downloads.
 
-### Required Client Revisions
+3. **Manual sync and repair**
+   - GUI has a clear Sync Now action.
+   - App bundle includes CLI helper for Terminal repair:
+     ```text
+     PummelchenClient.app/Contents/MacOS/pummelchen-client-cli
+     ```
+   - Website manual repair command remains available until the Swift path survives real client recoveries.
+   - No-download sync still prints/shows useful status: server release, client release, verified files, and all-synced message.
 
-1. Keep a CLI-compatible helper inside the app bundle:
-   ```text
-   PummelchenClient.app/Contents/MacOS/pummelchen-client-cli
-   ```
-2. Website manual repair command should continue to exist and can later download the Swift helper/app instead of Bash scripts.
-3. Add a clear "Copy Diagnostics" action from day one.
-4. Add a first-run permission/trust page explaining private-group unsigned app behavior.
-5. Treat Minecraft-running detection as a blocking warning unless user chooses a safe check-only action.
+4. **Minecraft folder management**
+   - Syncs mods, resource packs, shader packs, tools, config defaults, and server entry.
+   - Downloads to temp files, verifies SHA256, then atomically installs.
+   - Quarantines unmanaged files instead of deleting them.
+   - Applies client defaults idempotently:
+     - 8 GB memory
+     - Pummelchen server entry
+     - BSL active shader
+     - Complementary Reimagined available
+     - ModernArch stack active and ordered correctly
+     - compatible resource packs removed from incompatible list
+     - duck/goose no-follow config
 
-### Revised Client Plan Additions
+5. **Player-facing GUI**
+   - Shows current server release and installed release.
+   - Shows synced/outdated/downloading/error/offline states.
+   - Shows last sync, next background sync, file counts, downloaded bytes, and failed files.
+   - Shows active shader/resource-pack/memory defaults health.
+   - Shows release history and recent update notes.
+   - Provides Copy Diagnostics and Upload Diagnostics actions.
 
-Client app bundle should contain:
+6. **Near-realtime notices**
+   - Uses WebSocket for update notices, restart warnings, server messages, and sync requests.
+   - Falls back to HTTPS polling if WebSocket fails.
+   - Never downloads files over WebSocket.
+
+### Client Must Not Do
+
+- Do not require players to run Bash/Python scripts for normal operation.
+- Do not hide errors behind silent background failure.
+- Do not overwrite live mod/resource files before checksum validation.
+- Do not duplicate config keys or reset player-owned settings unnecessarily.
+- Do not force updates while Minecraft is running without a clear user-facing warning.
+- Do not require an Apple Developer account for the first private-group build.
+
+### Required Client Bundle
 
 ```text
 PummelchenClient.app
@@ -1561,7 +1634,7 @@ PummelchenClient.app
   Contents/Resources/default-config.json
 ```
 
-Minimum first useful version:
+### Minimum First Useful Client Version
 
 1. Status screen
 2. Sync Now
@@ -1575,6 +1648,20 @@ Minimum first useful version:
    pummelchen-client-cli repair
    pummelchen-client-cli diagnostics
    ```
+
+### Client Go-Live Gates
+
+- Fresh install from DMG works on at least two macOS Apple Silicon machines.
+- Background LaunchAgent starts after login and survives reboot.
+- Manual Sync Now and CLI `sync --force` produce the same filesystem result.
+- No-download path clearly reports all-synced status.
+- Interrupted download resumes or restarts safely without corrupting files.
+- Minecraft-running detection blocks unsafe mutation and explains the issue.
+- Client defaults are idempotent across at least five repeated syncs.
+- BSL/ModernArch/8 GB/server-entry defaults are visible in GUI and verified on disk.
+- Client can recover from missing helper, missing local DB, stale manifest, bad checksum, and offline server.
+- Client reports status to server DuckDB and appears in server-side health/client views.
+- At least three real player machines run one week with background sync before legacy updater removal.
 
 ## 19. Final Revised Implementation Order
 
@@ -1626,3 +1713,25 @@ Do not declare the migration complete until:
 - player-facing GUI clearly reports synced/update/error states
 - server-side health monitoring reports clean after release activation
 - the website manual repair command can recover at least one real macOS client using the Swift CLI/helper path
+
+## 21. Production Cutover Matrix
+
+Use this matrix before switching production ownership from the legacy script path to Swift.
+
+| Area | Legacy remains owner until | Swift can become owner when |
+|---|---|---|
+| DuckDB state | SQLite import parity is incomplete | DuckDB rebuilds from SQLite/project files, views match current site/API outputs, and DB health is green |
+| Client sync | Swift client has not survived real installs | DMG install, GUI sync, CLI repair, background LaunchAgent, and diagnostics pass on real macOS clients |
+| Release creation | Swift release output differs from legacy | Swift creates immutable release artifacts matching legacy format and release health passes |
+| Website data | Swift table feeds are not contract-tested | Tested Updates and Failed Mods views generate sortable/filterable table data with required timestamps/details |
+| Custom datapacks | Swift cannot validate policy datapacks | Swift builds or validates welcome, tropical worldgen, and rich ores datapacks with matching checksums/contracts |
+| Safe world reset | Swift reset has not completed staging | Swift completes staging reset with backup, seed, datapacks, gamerules, 1000-block pregeneration, no forceloads, and cleanup audit |
+| WebSocket notices | HTTPS polling is not enough yet | WebSocket reconnect/fallback works and never carries file downloads |
+| Rollback | No tested fallback exists | Old release/script path can be restored and Minecraft returns healthy |
+
+Final go-live rule:
+
+```text
+Swift may replace a legacy responsibility only after it runs that responsibility in shadow or staging,
+produces matching artifacts/results, records the operation in DuckDB, and has a tested rollback path.
+```
