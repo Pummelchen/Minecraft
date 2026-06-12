@@ -37,7 +37,7 @@
 ## Architecture — Why This Shape
 
 ### SQLite as source of truth
-All mod metadata, test results, release state, and update history live in one SQLite database (`data/minecraft_mods.sqlite`). This was chosen over a web service because the project is single-operator, single-VPS, and needs transactional consistency between mod state, test runs, and release artifacts.
+Legacy Python writer jobs still use the SQLite database (`data/minecraft_mods.sqlite`) until their workflows are migrated. nginx-served website/feed generation reads from the DuckDB read model (`data/pummelchen.duckdb`), which is rebuilt atomically from SQLite before static pages and tested-updates JSON are regenerated.
 
 ### Isolated acceptance testing
 Every new or updated mod is tested in a throwaway NeoForge server instance before touching the live server. This prevents a broken mod from crashing the production pack. The test uses the candidate + its dependency closure + 9 known-good mods to keep the candidate as the likely failure source.
@@ -98,7 +98,7 @@ Clients resolve `/downloads/current-release.json` to find the active release ID,
 | `gameplay_load_lab.py` | Gameplay scenarios: fresh world idle, chunk spiral, manual join |
 | `import_url_batch.py` | Import CurseForge/Modrinth URL batches into SQLite |
 | `process_url_batch.py` | Resolve batch imports: download, test, install |
-| `generate_status_site.py` | Generate static status page from SQLite + VPS stats |
+| `generate_status_site.py` | Generate static status page from DuckDB read model + VPS stats |
 | `live_stats_feed.py` | Write `live-stats.json` every 10 seconds for browser graphs |
 | `minecraft_metrics_exporter.py` | Prometheus exporter for Minecraft metrics on port 7792 |
 | `client_log_receiver.py` | HTTP receiver for client diagnostic uploads on port 7791 |

@@ -28,7 +28,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from moddb import connect, source_kind
+from db_compat import connect_readonly as connect
+from moddb import source_kind
 from pummelchen_utils import table_exists
 from process_url_batch import (
     get_modrinth_project,
@@ -38,7 +39,7 @@ from process_url_batch import (
 )
 
 
-DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
+DEFAULT_DB = Path("/var/minecraft_mods/data/pummelchen.duckdb")
 DEFAULT_OUTPUT = Path("/var/minecraft_mods/site/public/tested-updates.json")
 UPDATE_LOG_DAYS = 30
 
@@ -629,7 +630,7 @@ def deduplicate_updates(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def main():
     parser = argparse.ArgumentParser(description="Tested Updates Worker")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite database path")
+    parser.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite or DuckDB database path")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output JSON path")
     parser.add_argument("--days", type=int, default=UPDATE_LOG_DAYS, help="Days of history to include")
     parser.add_argument("--dry-run", action="store_true", help="Print to stdout instead of writing file")

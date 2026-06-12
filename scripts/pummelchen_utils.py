@@ -74,6 +74,8 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 def table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
     """Return ``True`` if *table_name* exists as a table or view."""
+    if hasattr(conn, "has_table"):
+        return bool(conn.has_table(table_name))
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
         (table_name,),

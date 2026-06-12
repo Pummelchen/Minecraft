@@ -22,11 +22,11 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from moddb import connect
+from db_compat import connect_readonly as connect
 from pummelchen_utils import MRPACK_NAME, SERVER_HOST, SERVER_MC_PORT, SERVER_PUBLIC_URL, display_release_version, human_bytes, table_exists
 
 
-DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
+DEFAULT_DB = Path("/var/minecraft_mods/data/pummelchen.duckdb")
 DEFAULT_OUTPUT = Path("/var/minecraft_mods/site/public")
 DEFAULT_SERVER = Path("/var/minecraft_26.1.2")
 DEFAULT_PUBLIC_URL = SERVER_PUBLIC_URL

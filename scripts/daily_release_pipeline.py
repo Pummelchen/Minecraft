@@ -24,6 +24,7 @@ from pummelchen_utils import SERVER_PUBLIC_URL
 
 
 DEFAULT_DB = Path("/var/minecraft_mods/data/minecraft_mods.sqlite")
+DEFAULT_DUCKDB = Path("/var/minecraft_mods/data/pummelchen.duckdb")
 DEFAULT_SERVER_DIR = Path("/var/minecraft_26.1.2")
 DEFAULT_RELEASE_ROOT = Path("/var/minecraft_mods/releases")
 DEFAULT_PUBLIC_DOWNLOADS = Path("/var/minecraft_mods/site/public/downloads")
@@ -315,7 +316,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
 
     started_at = utc_now()
     clear_activity(activity_path=args.activity_path)
-    TOTAL_STEPS = 15
+    TOTAL_STEPS = 16
     emit(f"Step 1/{TOTAL_STEPS}: Daily pipeline started", stage="init", status="running")
     original_release = active_release_id(args.db, args.server_key) if not args.dry_run else ""
     release_key = args.release_key or (next_release_key(args.db) if not args.dry_run else dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_V1"))
@@ -617,13 +618,29 @@ def run_pipeline(args: argparse.Namespace) -> int:
         deployed = True
         emit(f"Step 11/{TOTAL_STEPS}: Release deployed", stage="deploy", status="ok")
 
-        emit(f"Step 12/{TOTAL_STEPS}: Regenerating status site", stage="site")
+        emit(f"Step 12/{TOTAL_STEPS}: Refreshing DuckDB read model", stage="duckdb")
+        run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "rebuild_duckdb_from_sqlite.py"),
+                "--sqlite",
+                str(args.db),
+                "--duckdb",
+                str(args.site_db),
+                "--project-root",
+                str(args.project_root),
+            ],
+            dry_run=args.dry_run,
+        )
+        emit(f"Step 12/{TOTAL_STEPS}: DuckDB read model refreshed", stage="duckdb", status="ok")
+
+        emit(f"Step 13/{TOTAL_STEPS}: Regenerating status site", stage="site")
         run(
             [
                 sys.executable,
                 str(SCRIPT_DIR / "generate_status_site.py"),
                 "--db",
-                str(args.db),
+                str(args.site_db),
                 "--server-dir",
                 str(args.server_dir),
                 "--output-dir",
@@ -633,8 +650,8 @@ def run_pipeline(args: argparse.Namespace) -> int:
             ],
             dry_run=args.dry_run,
         )
-        emit(f"Step 12/{TOTAL_STEPS}: Status site regenerated", stage="site", status="ok")
-        emit(f"Step 13/{TOTAL_STEPS}: Cleanup", stage="cleanup")
+        emit(f"Step 13/{TOTAL_STEPS}: Status site regenerated", stage="site", status="ok")
+        emit(f"Step 14/{TOTAL_STEPS}: Cleanup", stage="cleanup")
         run(
             [
                 sys.executable,
@@ -660,7 +677,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
             ],
             dry_run=args.dry_run,
         )
-        emit(f"Step 14/{TOTAL_STEPS}: Backing up release", stage="backup")
+        emit(f"Step 15/{TOTAL_STEPS}: Backing up release", stage="backup")
         run(
             [
                 sys.executable,
@@ -674,7 +691,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
             ],
             dry_run=args.dry_run,
         )
-        emit(f"Step 15/{TOTAL_STEPS}: Pipeline complete — release {release_id} deployed", stage="done", status="ok")
+        emit(f"Step 16/{TOTAL_STEPS}: Pipeline complete — release {release_id} deployed", stage="done", status="ok")
         print(f"pipeline_status=released\trelease_id={release_id}", flush=True)
         return 0
     except Exception as exc:
@@ -692,6 +709,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument("--site-db", type=Path, default=DEFAULT_DUCKDB)
     parser.add_argument("--server-dir", type=Path, default=DEFAULT_SERVER_DIR)
     parser.add_argument("--server-key", default=DEFAULT_SERVER_KEY)
     parser.add_argument("--project-root", type=Path, default=Path("/var/minecraft_mods"))
