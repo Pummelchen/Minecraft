@@ -1,0 +1,15 @@
+{
+  "activated_at": "2026-06-12T17:04:35+00:00",
+  "client_zip_sha256": "47aea4e438d1753575006f6b8b00667402bd4cbd291cc534aa9892ee6f0307a0",
+  "client_zip_url": "/downloads/releases/release_20260612_V17_bsl-shader-config/minecraft_26.1.2_client_macos_apple_silicon.zip",
+  "created_at": "2026-06-12T17:04:13+00:00",
+  "loader_version": "26.1.2.75",
+  "manifest_url": "/downloads/releases/release_20260612_V17_bsl-shader-config/client-sync-manifest.tsv",
+  "minecraft_version": "26.1.2",
+  "mrpack_sha256": "a5825992114956f680b88319738ec52e4b51bbc54bd46f9fad1817f92dddebf7",
+  "mrpack_url": "/downloads/releases/release_20260612_V17_bsl-shader-config/pummelchen-server-26.1.2.mrpack",
+  "notes": "Updated BSL shader sidecar config from Mac client and rebuilt DMG/client ZIP.",
+  "release_id": "release_20260612_V17_bsl-shader-config",
+  "server_key": "minecraft_26_1_2",
+  "status": "tested"
+}

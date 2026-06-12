@@ -1,0 +1,4 @@
+*
+!/.gitignore
+!/current-release.json
+!/current-release.txt

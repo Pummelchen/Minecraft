@@ -1,0 +1,10 @@
+{
+  "checked_at": "2026-06-12T17:00:48+00:00",
+  "current_neoforge_version": "26.1.2.75",
+  "latest_neoforge_version": "26.1.2.76",
+  "message": "Newer NeoForge 26.1.2.76 is available for Minecraft 26.1.2",
+  "metadata_url": "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml",
+  "minecraft_version": "26.1.2",
+  "status": "update_available",
+  "update_available": true
+}
