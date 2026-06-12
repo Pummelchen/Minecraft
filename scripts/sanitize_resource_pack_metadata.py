@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -24,6 +25,15 @@ class Change:
 
 ROOT_SCHEMA_TRANSITION_FORMAT = 82
 OVERLAY_SCHEMA_TRANSITION_FORMAT = 65
+FORMAT_KEYS = {
+    "pack_format",
+    "min_format",
+    "max_format",
+    "supported_formats",
+    "formats",
+    "min_inclusive",
+    "max_inclusive",
+}
 
 
 def candidate_files(path: Path) -> list[Path]:
@@ -59,6 +69,58 @@ def format_major(value: Any) -> int | None:
             if major is not None:
                 return major
     return None
+
+
+def parse_pack_metadata(raw: bytes) -> dict[str, Any]:
+    text = raw.decode("utf-8-sig")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Several hand-authored resource packs ship trailing commas. Minecraft
+        # may be more forgiving in some paths, but strict JSON keeps releases
+        # deterministic and prevents pack-manager compatibility drift.
+        repaired = re.sub(r",(\s*[}\]])", r"\1", text)
+        return json.loads(repaired)
+
+
+def normalize_number(value: Any) -> tuple[Any, int]:
+    if isinstance(value, float) and value.is_integer():
+        return int(value), 1
+    if isinstance(value, list):
+        changed = 0
+        normalized: list[Any] = []
+        for item in value:
+            new_item, item_changed = normalize_number(item)
+            normalized.append(new_item)
+            changed += item_changed
+        return normalized, changed
+    if isinstance(value, dict):
+        changed = 0
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            new_item, item_changed = normalize_number(item)
+            normalized[key] = new_item
+            changed += item_changed
+        return normalized, changed
+    return value, 0
+
+
+def normalize_format_numbers(entry: Any) -> int:
+    if not isinstance(entry, dict):
+        return 0
+    changed = 0
+    for key, value in list(entry.items()):
+        if key in FORMAT_KEYS:
+            normalized, item_changed = normalize_number(value)
+            if item_changed:
+                entry[key] = normalized
+                changed += item_changed
+        elif isinstance(value, dict):
+            changed += normalize_format_numbers(value)
+        elif isinstance(value, list):
+            for item in value:
+                changed += normalize_format_numbers(item)
+    return changed
 
 
 def format_max_major(value: Any) -> int | None:
@@ -218,7 +280,9 @@ def sanitize_overlay_entries(entries: Any, *, pack: Any, target: str) -> tuple[i
 
 
 def sanitize_pack_metadata(metadata: dict[str, Any], *, target: str) -> tuple[int, int]:
-    added, removed = sanitize_root_pack(metadata.get("pack"))
+    added = normalize_format_numbers(metadata)
+    root_added, removed = sanitize_root_pack(metadata.get("pack"))
+    added += root_added
     pack = metadata.get("pack")
     for key, value in metadata.items():
         if key == "overlays" or key.endswith(":overlays"):
@@ -269,7 +333,7 @@ def sanitize_zip(path: Path, *, write: bool, target: str) -> list[Change]:
                 if not member.endswith("pack.mcmeta"):
                     continue
                 try:
-                    metadata = json.loads(archive.read(member).decode("utf-8-sig"))
+                    metadata = parse_pack_metadata(archive.read(member))
                 except Exception as exc:
                     raise ValueError(f"{path}:{member}: invalid pack.mcmeta JSON: {exc}") from exc
                 added, removed = sanitize_pack_metadata(metadata, target=target)

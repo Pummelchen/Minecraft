@@ -1328,6 +1328,17 @@ pack = {
 with zipfile.ZipFile(sys.argv[1], "w") as archive:
     archive.writestr("pack.mcmeta", json.dumps(pack))
 PY
+"$PYTHON_BIN" - "$RESOURCE_PACKAGE/resourcepacks/decimal-pack.zip" <<'PY'
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1], "w") as archive:
+    archive.writestr(
+        "pack.mcmeta",
+        '{"pack":{"pack_format":68.0,"min_format":65.0,"max_format":99.0,'
+        '"description":"fixture",}}',
+    )
+PY
 "$PYTHON_BIN" - "$RESOURCE_PACKAGE/resourcepacks/legacy-missing-formats.zip" <<'PY'
 import json
 import sys
@@ -1411,7 +1422,7 @@ with zipfile.ZipFile(sys.argv[1], "w") as archive:
     archive.writestr("pack.mcmeta", json.dumps(pack))
 PY
 "$PYTHON_BIN" "$ROOT_DIR/scripts/sanitize_resource_pack_metadata.py" "$RESOURCE_PACKAGE" --write \
-  | grep -q 'resource_pack_metadata_changes=4' || fail "resource pack sanitizer did not report changes"
+  | grep -q 'resource_pack_metadata_changes=5' || fail "resource pack sanitizer did not report changes"
 "$PYTHON_BIN" - "$RESOURCE_PACKAGE/resourcepacks/bad-pack.zip" <<'PY'
 import json
 import sys
@@ -1422,6 +1433,18 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
 assert metadata["overlays"]["entries"][0]["formats"] == [84, 999], metadata
 assert metadata["overlays"]["entries"][0]["min_format"] == 84, metadata
 assert metadata["overlays"]["entries"][0]["max_format"] == 999, metadata
+PY
+"$PYTHON_BIN" - "$RESOURCE_PACKAGE/resourcepacks/decimal-pack.zip" <<'PY'
+import json
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    metadata = json.loads(archive.read("pack.mcmeta"))
+assert metadata["pack"]["pack_format"] == 68, metadata
+assert metadata["pack"]["supported_formats"] == [65, 99], metadata
+assert "min_format" not in metadata["pack"], metadata
+assert "max_format" not in metadata["pack"], metadata
 PY
 "$PYTHON_BIN" - "$RESOURCE_PACKAGE/resourcepacks/legacy-missing-formats.zip" <<'PY'
 import json
