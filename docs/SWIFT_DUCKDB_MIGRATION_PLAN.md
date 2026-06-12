@@ -1357,11 +1357,11 @@ Implementation status:
 - Implemented `SwiftReleasePipeline` in `PummelchenServerCore` and exposed it through `pummelchen-server release-create` / `release-validate`.
 - Swift release creation now writes the legacy-compatible immutable release layout: `CHANGELOG.md`, `metadata.json`, `server-files`, `client-package`, `manifests/server-files.tsv`, `manifests/client-package.tsv`, `artifacts`, `public/client-files`, `public/client-sync-manifest.tsv`, and `public/current-release.json`.
 - Swift activation publishes `/downloads/releases/<release_id>`, writes `current-release.json` and `current-release.txt`, and records release events in DuckDB.
-- Client ZIP and MRPack artifacts are required and checksummed. The Swift pipeline can build the client ZIP via a narrow `zip` wrapper if the artifact is missing; DMG and DMG checksum metadata are copied/published when present.
+- Client ZIP and MRPack artifacts are required and checksummed. The Swift pipeline can build the client ZIP via a narrow `zip` wrapper if the artifact is missing; DMG artifacts are copied/published when present and checksum sidecars are generated for all published release artifacts.
 - Rollback remains possible through immutable release directories plus `previous_release_id` tracking in DuckDB. The existing production rollback command remains the operational rollback path during migration.
 - Release health is persisted in `release.release_health_results`; an optional `--health-command` runs the current health monitor as a transition hook.
 - Service restart is an optional `--restart-command` transition hook. When not configured, the release event records `restart=skipped` instead of touching production services.
-- A Tested Updates compatibility feed is emitted at `public/data/tested-updates.json`; later Phase 7 hardening can replace this with a full Swift-owned website feed generated from DuckDB reporting tables.
+- A Tested Updates compatibility feed is emitted at `public/data/tested-updates.json`. When the existing status-site feed is present, Swift preserves that feed instead of publishing an empty placeholder; later Phase 7 hardening can replace this with a full Swift-owned website feed generated from DuckDB reporting tables.
 - End-to-end fixture coverage creates a Swift release, validates it, serves it through the local HTTP fixture, syncs a Swift client from it, and verifies release health/restart state in DuckDB.
 
 ### Phase 8: Bidirectional HTTP/3/QUIC Realtime Events
@@ -1386,8 +1386,8 @@ Acceptance:
 Implementation status:
 
 - Implemented the Phase 8 control-event contract in `PummelchenCore` with typed events for release availability, server messages, restart notices, client sync requests, and health updates.
-- Added `/h3/v1/control` as the advertised bidirectional HTTP/3/QUIC control endpoint. It declares the polling fallback endpoint and explicitly marks downloads as disallowed on the control channel.
-- Added authenticated `/api/v1/control/events` and `/api/v1/control/acks` HTTP fallback APIs backed by `control.control_events` and `control.control_acks` in DuckDB.
+- Added `/h3/v1/control` as the advertised HTTP/3-edge control endpoint. nginx owns the public HTTP/3/QUIC edge when TLS/certificate support is available, while the Swift service remains private on localhost and declares the authenticated polling fallback endpoint.
+- Added authenticated `/api/v1/control/events` and `/api/v1/control/acks` HTTP fallback APIs backed by `control.control_events` and `control.control_acks` in DuckDB. Event fetch supports bounded long polling through `wait_seconds` so clients can receive near-realtime notices even while native bidirectional QUIC client support is being staged.
 - Server-side validation bounds event text and JSON payload size and rejects downloadable file references such as ZIP/JAR/DMG paths or download URLs. Large artifacts remain nginx-served static files.
 - Added a Swift client control-channel wrapper that checks the control endpoint, reconnects safely, fetches missed events through the HTTP API fallback, and acknowledges received events.
 - Fixture coverage verifies event creation, missed-message fetch, acknowledgements, download-payload rejection, and client fallback behavior when using the local test HTTP server.
@@ -1428,8 +1428,8 @@ Implementation status:
 
 - Implemented `SwiftWorldResetPipeline` in `PummelchenServerCore` and exposed it through `pummelchen-server world-reset`.
 - Dry-run mode computes the active world, required datapacks, gamerules, pregeneration chunk/segment counts, and intended backup path without mutating the world directory.
-- Non-dry-run execution is intentionally strict: it requires `--yes true` plus explicit stop/start/gamerule/pregeneration/forceload-verification command hooks. This keeps destructive world reset orchestration out of HTTP request handlers and prevents silent live resets.
-- The execution path stops through the configured hook, moves the old active world into `world-reset-backups`, writes `level-seed` and `bonus-chest=true`, creates the new active world directory, installs and validates the required Pummelchen datapacks in both server-level and world-level datapack folders, runs gamerule/pregeneration/forceload verification hooks, and deletes the backup only after success when requested.
+- Non-dry-run execution is intentionally strict: it requires `--yes true` plus explicit stop/start hooks before any destructive action. Minecraft-specific execution now uses native Swift RCON by default, with optional gamerule/pregeneration/forceload-verification hooks still supported for transition or staging.
+- The execution path validates RCON or equivalent hooks before moving world data, stops through the configured hook, moves the old active world into `world-reset-backups`, writes `level-seed` and `bonus-chest=true`, creates the new active world directory, installs and validates the required Pummelchen datapacks in both server-level and world-level datapack folders, applies gamerules, force-loads pregeneration segments, saves/removes each pregeneration batch, verifies that no force-loaded chunks remain, and deletes the backup only after success when requested.
 - Spawn detection now reads `level.dat` through a small Swift NBT parser, with a fixture marker fallback for tests.
 - Reset jobs are recorded in DuckDB `world.reset_jobs` with seed, radius, old world path, backup path, JSON result details, completion status, backup cleanup state, pregeneration counts, and forceload cleanup state.
 - Fixture coverage verifies dry-run immutability, destructive confirmation gating with no job record, staged world replacement, datapack installation, seed persistence, backup deletion after success, and DuckDB status/result recording.

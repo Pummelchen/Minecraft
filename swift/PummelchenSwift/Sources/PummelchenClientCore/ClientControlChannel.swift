@@ -32,7 +32,7 @@ public struct ClientControlChannel: Sendable {
         return try JSONDecoder().decode(ControlChannelInfo.self, from: data)
     }
 
-    public func fetchMissedEvents(afterEventID: String? = nil, limit: Int = 50) async throws -> ControlEventBatch {
+    public func fetchMissedEvents(afterEventID: String? = nil, limit: Int = 50, waitSeconds: Int = 0) async throws -> ControlEventBatch {
         var components = URLComponents(url: configuration.serverURL.appendingPathComponent("api/v1/control/events"), resolvingAgainstBaseURL: false)!
         var query = [
             URLQueryItem(name: "client_id", value: configuration.clientID),
@@ -40,6 +40,9 @@ public struct ClientControlChannel: Sendable {
         ]
         if let afterEventID, !afterEventID.isEmpty {
             query.append(URLQueryItem(name: "after_event_id", value: afterEventID))
+        }
+        if waitSeconds > 0 {
+            query.append(URLQueryItem(name: "wait_seconds", value: String(min(waitSeconds, 30))))
         }
         components.queryItems = query
         var request = URLRequest(url: components.url!)
@@ -70,13 +73,13 @@ public struct ClientControlChannel: Sendable {
     public func reconnectWithFallback(afterEventID: String? = nil) async throws -> ControlEventBatch {
         do {
             let info = try await controlInfo()
-            if info.transportTarget != "bidirectional_http3_quic" || info.downloadsAllowed {
+            if !info.transportTarget.contains("http3_quic") || !info.bidirectional || info.downloadsAllowed {
                 throw ContractValidationError.invalid("control endpoint does not advertise safe QUIC control semantics")
             }
         } catch {
-            return try await fetchMissedEvents(afterEventID: afterEventID)
+            return try await fetchMissedEvents(afterEventID: afterEventID, waitSeconds: 5)
         }
-        return try await fetchMissedEvents(afterEventID: afterEventID)
+        return try await fetchMissedEvents(afterEventID: afterEventID, waitSeconds: 5)
     }
 
     private static func isoNow() -> String {

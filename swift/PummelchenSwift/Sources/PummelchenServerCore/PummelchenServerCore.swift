@@ -69,6 +69,8 @@ public struct PummelchenServerConfig: Sendable {
     public let duckDBURL: URL
     public let clientAPIToken: String?
     public let maxWritePayloadBytes: Int
+    public let transportTarget: String
+    public let transportFallback: String
 
     public init(
         projectRoot: URL,
@@ -76,7 +78,9 @@ public struct PummelchenServerConfig: Sendable {
         port: Int = 8787,
         duckDBURL: URL? = nil,
         clientAPIToken: String? = ProcessInfo.processInfo.environment["PUMMELCHEN_CLIENT_API_TOKEN"],
-        maxWritePayloadBytes: Int = 256 * 1024
+        maxWritePayloadBytes: Int = 256 * 1024,
+        transportTarget: String = ProcessInfo.processInfo.environment["PUMMELCHEN_TRANSPORT_TARGET"] ?? "http3_quic_edge",
+        transportFallback: String = "authenticated_https_long_poll"
     ) {
         self.projectRoot = projectRoot
         self.bindHost = bindHost
@@ -84,6 +88,8 @@ public struct PummelchenServerConfig: Sendable {
         self.duckDBURL = duckDBURL ?? projectRoot.appendingPathComponent("data/pummelchen.duckdb")
         self.clientAPIToken = clientAPIToken
         self.maxWritePayloadBytes = maxWritePayloadBytes
+        self.transportTarget = transportTarget
+        self.transportFallback = transportFallback
     }
 }
 
@@ -209,8 +215,8 @@ public final class PummelchenServerAPI: @unchecked Sendable {
             mode: config.clientAPIToken == nil ? "read_only" : "phase6_writes_enabled",
             projectRoot: config.projectRoot.path,
             currentReleaseID: release?.releaseID,
-            transportTarget: "http3_quic",
-            transportFallback: "http2_https_polling"
+            transportTarget: config.transportTarget,
+            transportFallback: config.transportFallback
         )
         return .json(try encoder.encode(payload))
     }
@@ -229,7 +235,7 @@ public final class PummelchenServerAPI: @unchecked Sendable {
     private func controlInfo() throws -> HTTPResponse {
         let payload = ControlChannelInfo(
             endpoint: "/h3/v1/control",
-            transportTarget: "bidirectional_http3_quic",
+            transportTarget: "http3_quic_edge_control",
             bidirectional: true,
             fallbackEndpoint: "/api/v1/control/events",
             maxPayloadBytes: ControlEventStore.maxControlPayloadBytes,
@@ -250,16 +256,28 @@ public final class PummelchenServerAPI: @unchecked Sendable {
         let clientID = params["client_id"] ?? request.headers["x-pummelchen-client-id"] ?? ""
         try validateClientID(clientID, header: request.headers["x-pummelchen-client-id"])
         let limit = params["limit"].flatMap(Int.init) ?? 50
-        let events = try controlStore.pendingEvents(
+        let waitSeconds = min(max(params["wait_seconds"].flatMap(Int.init) ?? 0, 0), 30)
+        var events = try controlStore.pendingEvents(
             clientID: clientID,
             afterEventID: params["after_event_id"],
             limit: limit
         )
+        if events.isEmpty && waitSeconds > 0 {
+            let deadline = Date().addingTimeInterval(TimeInterval(waitSeconds))
+            while events.isEmpty && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.5)
+                events = try controlStore.pendingEvents(
+                    clientID: clientID,
+                    afterEventID: params["after_event_id"],
+                    limit: limit
+                )
+            }
+        }
         let batch = ControlEventBatch(
             events: events,
             nextAfterEventID: events.last?.eventID ?? params["after_event_id"],
-            transport: "http_polling_fallback",
-            fallback: "udp_quic_unavailable_or_not_established"
+            transport: waitSeconds > 0 ? "http3_edge_long_poll" : "http_polling_fallback",
+            fallback: "authenticated_https_polling"
         )
         return .json(try encoder.encode(batch), headers: ["X-Pummelchen-Downloads-Allowed": "false"])
     }

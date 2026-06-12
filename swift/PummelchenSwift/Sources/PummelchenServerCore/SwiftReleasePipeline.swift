@@ -149,6 +149,11 @@ public struct SwiftReleasePipeline: Sendable {
         let mrpackSHA = try SHA256Hasher.hashFile(at: mrpack)
         let dmg = artifacts.appendingPathComponent(Self.dmgName)
         let dmgSHA = fileManager.fileExists(atPath: dmg.path) ? try SHA256Hasher.hashFile(at: dmg) : nil
+        try writeSHA256Sidecar(for: clientZip, hash: clientZipSHA)
+        try writeSHA256Sidecar(for: mrpack, hash: mrpackSHA)
+        if let dmgSHA {
+            try writeSHA256Sidecar(for: dmg, hash: dmgSHA)
+        }
 
         let createdAt = Self.isoNow()
         try writeMetadata(
@@ -477,14 +482,31 @@ public struct SwiftReleasePipeline: Sendable {
     private func writeTestedUpdatesCompatibilityFeed(to publicDir: URL) throws {
         let dataDir = publicDir.appendingPathComponent("data", isDirectory: true)
         try fileManager.createDirectory(at: dataDir, withIntermediateDirectories: true)
+        let target = dataDir.appendingPathComponent("tested-updates.json")
+        let existingCandidates = [
+            config.projectRoot.appendingPathComponent("site/public/data/tested-updates.json"),
+            config.projectRoot.appendingPathComponent("site/public/tested-updates.json")
+        ]
+        for candidate in existingCandidates where fileManager.fileExists(atPath: candidate.path) {
+            let data = try Data(contentsOf: candidate)
+            _ = try JSONSerialization.jsonObject(with: data)
+            try data.write(to: target, options: .atomic)
+            return
+        }
         let feed = """
         {
           "generated_by": "pummelchen-swift-release-phase7",
           "release_id": "\(config.releaseID)",
+          "generated_at": "\(Self.isoNow())",
           "rows": []
         }
         """
-        try feed.write(to: dataDir.appendingPathComponent("tested-updates.json"), atomically: true, encoding: .utf8)
+        try feed.write(to: target, atomically: true, encoding: .utf8)
+    }
+
+    private func writeSHA256Sidecar(for file: URL, hash: String) throws {
+        let body = "\(hash)  \(file.lastPathComponent)\n"
+        try body.write(to: file.deletingLastPathComponent().appendingPathComponent("\(file.lastPathComponent).sha256"), atomically: true, encoding: .utf8)
     }
 
     private func releaseManifestRows(roots: [(String, URL, [String])]) throws -> [(role: String, root: URL, file: URL)] {

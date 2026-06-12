@@ -21,7 +21,7 @@ enum ServerCommandError: Error, CustomStringConvertible {
               pummelchen-server serve --project-root <repo> [--host 127.0.0.1] [--port 8787]
               pummelchen-server release-create --project-root <repo> --server-dir <dir> --release-root <dir> --public-downloads <dir> --duckdb <file> --release-id <id> [--activate true] [--restart-command <shell>] [--health-command <shell>]
               pummelchen-server release-validate --project-root <repo> --server-dir <dir> --release-root <dir> --public-downloads <dir> --duckdb <file> --release-id <id>
-              pummelchen-server world-reset --project-root <repo> --server-dir <dir> --duckdb <file> --seed <seed> [--dry-run true] [--yes true] [--radius-blocks 1000] [--delete-backup-after-success true] [--stop-command <shell>] [--start-command <shell>] [--gamerule-command <shell>] [--pregenerate-command <shell>] [--verify-forceloads-command <shell>]
+              pummelchen-server world-reset --project-root <repo> --server-dir <dir> --duckdb <file> --seed <seed> [--dry-run true] [--yes true] [--radius-blocks 1000] [--delete-backup-after-success true] [--stop-command <shell>] [--start-command <shell>] [--gamerule-command <shell>] [--pregenerate-command <shell>] [--verify-forceloads-command <shell>] [--rcon-host 127.0.0.1] [--rcon-port 25575] [--rcon-password <secret>] [--pregeneration-batch-size 384]
             """
         case .missingValue(let option):
             return "missing value for \(option)"
@@ -188,7 +188,7 @@ final class LocalHTTPServer {
             "Content-Type: \(response.contentType)",
             "Content-Length: \(response.body.count)",
             "Connection: close",
-            "X-Pummelchen-Transport-Target: http3_quic",
+            "X-Pummelchen-Transport-Target: http3_quic_edge",
             "X-Pummelchen-Mode: swift_api"
         ]
         for key in response.headers.keys.sorted() {
@@ -314,6 +314,8 @@ private func worldResetPipeline(args: Arguments, projectRoot: URL) throws -> Swi
     let duckDB = URL(fileURLWithPath: try args.require("--duckdb")).standardizedFileURL
     let radius = Int(args.options["--radius-blocks"] ?? "1000") ?? 1000
     let shape = PregenerationShape(rawValue: args.options["--shape"] ?? "circle") ?? .circle
+    let rconPort = Int(args.options["--rcon-port"] ?? "25575") ?? 25575
+    let batchSize = Int(args.options["--pregeneration-batch-size"] ?? "384") ?? 384
     let config = SwiftWorldResetConfig(
         projectRoot: projectRoot,
         serverDir: serverDir,
@@ -330,7 +332,11 @@ private func worldResetPipeline(args: Arguments, projectRoot: URL) throws -> Swi
         startCommand: args.options["--start-command"],
         gameruleCommand: args.options["--gamerule-command"],
         pregenerateCommand: args.options["--pregenerate-command"],
-        verifyForceloadsCommand: args.options["--verify-forceloads-command"]
+        verifyForceloadsCommand: args.options["--verify-forceloads-command"],
+        rconHost: args.options["--rcon-host"] ?? "127.0.0.1",
+        rconPort: rconPort,
+        rconPassword: args.options["--rcon-password"],
+        pregenerationBatchSize: batchSize
     )
     return SwiftWorldResetPipeline(config: config)
 }

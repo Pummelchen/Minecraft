@@ -12,6 +12,8 @@ public enum SwiftWorldResetError: Error, CustomStringConvertible {
     case unsafeWorldName(String)
     case commandRequired(String)
     case commandFailed(String)
+    case rconPasswordRequired
+    case forceloadVerificationFailed(String)
 
     public var description: String {
         switch self {
@@ -25,6 +27,10 @@ public enum SwiftWorldResetError: Error, CustomStringConvertible {
             return "non-dry-run world reset requires \(name)"
         case .commandFailed(let message):
             return message
+        case .rconPasswordRequired:
+            return "world reset requires an RCON password in server.properties or --rcon-password when gamerule/pregeneration hooks are not provided"
+        case .forceloadVerificationFailed(let message):
+            return "forceload verification failed: \(message)"
         }
     }
 }
@@ -46,6 +52,10 @@ public struct SwiftWorldResetConfig: Sendable {
     public let gameruleCommand: String?
     public let pregenerateCommand: String?
     public let verifyForceloadsCommand: String?
+    public let rconHost: String
+    public let rconPort: Int
+    public let rconPassword: String?
+    public let pregenerationBatchSize: Int
 
     public init(
         projectRoot: URL,
@@ -63,7 +73,11 @@ public struct SwiftWorldResetConfig: Sendable {
         startCommand: String? = nil,
         gameruleCommand: String? = nil,
         pregenerateCommand: String? = nil,
-        verifyForceloadsCommand: String? = nil
+        verifyForceloadsCommand: String? = nil,
+        rconHost: String = "127.0.0.1",
+        rconPort: Int = 25575,
+        rconPassword: String? = nil,
+        pregenerationBatchSize: Int = 384
     ) {
         self.projectRoot = projectRoot
         self.serverDir = serverDir
@@ -81,6 +95,10 @@ public struct SwiftWorldResetConfig: Sendable {
         self.gameruleCommand = gameruleCommand
         self.pregenerateCommand = pregenerateCommand
         self.verifyForceloadsCommand = verifyForceloadsCommand
+        self.rconHost = rconHost
+        self.rconPort = rconPort
+        self.rconPassword = rconPassword
+        self.pregenerationBatchSize = pregenerationBatchSize
     }
 }
 
@@ -172,9 +190,7 @@ public struct SwiftWorldResetPipeline: Sendable {
             }
             try requireHook(config.stopCommand, name: "--stop-command")
             try requireHook(config.startCommand, name: "--start-command")
-            try requireHook(config.gameruleCommand, name: "--gamerule-command")
-            try requireHook(config.pregenerateCommand, name: "--pregenerate-command")
-            try requireHook(config.verifyForceloadsCommand, name: "--verify-forceloads-command")
+            try validateMinecraftExecutionControl()
         }
         let jobID = UUID().uuidString
         let requestedAt = Self.isoNow()
@@ -214,13 +230,13 @@ public struct SwiftWorldResetPipeline: Sendable {
             try writeServerProperties(worldName: worldName)
             try installRequiredDatapacks(worldDir: worldDir)
             try runHook(config.startCommand, phase: "start")
-            try runHook(config.gameruleCommand, phase: "gamerules")
+            try applySafetyGamerules()
 
             let spawn = readLevelSpawn(worldDir: worldDir) ?? (0, 0, 0)
             let chunks = Self.pregenerationChunks(spawn: spawn, radiusBlocks: config.radiusBlocks, shape: config.shape)
             let segments = Self.chunkSegments(chunks)
-            try runHook(config.pregenerateCommand, phase: "pregenerate")
-            try runHook(config.verifyForceloadsCommand, phase: "verify_forceloads")
+            try pregenerateWorld(segments: segments)
+            let forceloadsCleared = try verifyForceloadsCleared()
 
             var backupDeleted = false
             if config.deleteBackupAfterSuccess, let backupPath {
@@ -244,7 +260,7 @@ public struct SwiftWorldResetPipeline: Sendable {
                 gamerules: Self.safetyGamerules,
                 pregenerationChunks: chunks.count,
                 pregenerationSegments: segments.count,
-                forceloadsCleared: true,
+                forceloadsCleared: forceloadsCleared,
                 activeWorldExists: fileManager.fileExists(atPath: worldDir.path)
             )
             try persist(jobID: jobID, requestedAt: requestedAt, startedAt: startedAt, completedAt: Self.isoNow(), status: "completed", result: result, error: nil)
@@ -301,11 +317,20 @@ public struct SwiftWorldResetPipeline: Sendable {
 
     private func validateConfig() throws {
         try ContractValidation.require(config.radiusBlocks > 0, "world reset radius must be positive")
+        try ContractValidation.require(config.rconPort > 0 && config.rconPort < 65_536, "RCON port must be in TCP port range")
+        try ContractValidation.require(config.pregenerationBatchSize > 0, "pregeneration batch size must be positive")
         try ContractValidation.require(!config.seed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "world reset seed must not be empty")
         try requireDirectory(config.projectRoot)
         try requireDirectory(config.serverDir)
         _ = try activeWorldName()
         _ = try requiredDatapackSources()
+    }
+
+    private func validateMinecraftExecutionControl() throws {
+        if hasHook(config.gameruleCommand), hasHook(config.pregenerateCommand), hasHook(config.verifyForceloadsCommand) {
+            return
+        }
+        _ = try resolvedRCONPassword()
     }
 
     private func activeWorldName() throws -> String {
@@ -469,6 +494,11 @@ public struct SwiftWorldResetPipeline: Sendable {
         }
     }
 
+    private func hasHook(_ value: String?) -> Bool {
+        guard let value else { return false }
+        return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private func runHook(_ command: String?, phase: String) throws {
         guard let command, !command.isEmpty else {
             return
@@ -479,6 +509,114 @@ public struct SwiftWorldResetPipeline: Sendable {
         env["PUMMELCHEN_WORLD_RESET_RADIUS_BLOCKS"] = String(config.radiusBlocks)
         env["PUMMELCHEN_WORLD_RESET_SERVICE"] = config.serviceName
         _ = try runCommand(executable: "/bin/sh", arguments: ["-lc", command], currentDirectory: config.projectRoot, environment: env)
+    }
+
+    private func applySafetyGamerules() throws {
+        if hasHook(config.gameruleCommand) {
+            try runHook(config.gameruleCommand, phase: "gamerules")
+            return
+        }
+        let commands = Self.safetyGamerules
+            .keys
+            .sorted()
+            .map { "gamerule \($0) \(Self.safetyGamerules[$0]!)" }
+        let responses = try rconClient().commands(commands)
+        for response in responses where isCommandFailure(response) {
+            throw SwiftWorldResetError.commandFailed("RCON gamerule failed: \(response)")
+        }
+    }
+
+    private func pregenerateWorld(segments: [(startX: Int, z: Int, endX: Int, count: Int)]) throws {
+        if hasHook(config.pregenerateCommand) {
+            try runHook(config.pregenerateCommand, phase: "pregenerate")
+            return
+        }
+        let client = try rconClient()
+        for batch in pregenerationCommandBatches(for: segments) {
+            let responses = try client.commands(batch)
+            for response in responses where isCommandFailure(response) {
+                throw SwiftWorldResetError.commandFailed("RCON pregeneration failed: \(response)")
+            }
+        }
+        let finalSave = try client.command("save-all flush")
+        if isCommandFailure(finalSave) {
+            throw SwiftWorldResetError.commandFailed("RCON final save failed: \(finalSave)")
+        }
+    }
+
+    private func verifyForceloadsCleared() throws -> Bool {
+        if hasHook(config.verifyForceloadsCommand) {
+            try runHook(config.verifyForceloadsCommand, phase: "verify_forceloads")
+            return true
+        }
+        let response = try rconClient().command("forceload query")
+        let normalized = response.lowercased()
+        if normalized.contains("no force loaded chunks") || normalized.contains("0 force") || normalized.contains("0 chunk") {
+            return true
+        }
+        throw SwiftWorldResetError.forceloadVerificationFailed(response)
+    }
+
+    private func pregenerationCommandBatches(for segments: [(startX: Int, z: Int, endX: Int, count: Int)]) -> [[String]] {
+        var batches: [[String]] = []
+        var commands: [String] = []
+        var loaded: [(startX: Int, z: Int, endX: Int)] = []
+        var loadedChunks = 0
+        for segment in segments {
+            commands.append(forceloadCommand(action: "add", startX: segment.startX, z: segment.z, endX: segment.endX))
+            loaded.append((segment.startX, segment.z, segment.endX))
+            loadedChunks += segment.count
+            if loadedChunks >= config.pregenerationBatchSize {
+                commands.append("save-all flush")
+                commands += loaded.map { forceloadCommand(action: "remove", startX: $0.startX, z: $0.z, endX: $0.endX) }
+                commands.append("save-all flush")
+                batches.append(commands)
+                commands.removeAll()
+                loaded.removeAll()
+                loadedChunks = 0
+            }
+        }
+        if !loaded.isEmpty {
+            commands.append("save-all flush")
+            commands += loaded.map { forceloadCommand(action: "remove", startX: $0.startX, z: $0.z, endX: $0.endX) }
+            commands.append("save-all flush")
+            batches.append(commands)
+        }
+        return batches
+    }
+
+    private func forceloadCommand(action: String, startX: Int, z: Int, endX: Int) -> String {
+        let startBlockX = startX * 16 + 8
+        let blockZ = z * 16 + 8
+        let endBlockX = endX * 16 + 8
+        if startBlockX == endBlockX {
+            return "forceload \(action) \(startBlockX) \(blockZ)"
+        }
+        return "forceload \(action) \(startBlockX) \(blockZ) \(endBlockX) \(blockZ)"
+    }
+
+    private func rconClient() throws -> MinecraftRCONClient {
+        try MinecraftRCONClient(host: config.rconHost, port: config.rconPort, password: resolvedRCONPassword())
+    }
+
+    private func resolvedRCONPassword() throws -> String {
+        if let password = config.rconPassword?.trimmingCharacters(in: .whitespacesAndNewlines), !password.isEmpty {
+            return password
+        }
+        let properties = try readProperties(config.serverDir.appendingPathComponent("server.properties"))
+        if let password = properties["rcon.password"]?.trimmingCharacters(in: .whitespacesAndNewlines), !password.isEmpty {
+            return password
+        }
+        throw SwiftWorldResetError.rconPasswordRequired
+    }
+
+    private func isCommandFailure(_ response: String) -> Bool {
+        let normalized = response.lowercased()
+        return normalized.contains("unknown or incomplete command")
+            || normalized.contains("incorrect argument")
+            || normalized.contains("permission")
+            || normalized.contains("failed")
+            || normalized.contains("error")
     }
 
     private func persist(jobID: String, requestedAt: String, startedAt: String?, completedAt: String?, status: String, result: SwiftWorldResetResult, error: String?) throws {

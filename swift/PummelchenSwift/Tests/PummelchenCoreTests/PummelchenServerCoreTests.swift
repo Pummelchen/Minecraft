@@ -52,7 +52,7 @@ struct PummelchenServerCoreTests {
         #expect(object?["api_version"] as? String == "v1")
         #expect(object?["mode"] as? String == "read_only")
         #expect(object?["current_release_id"] as? String == "release_20260612_V6_modernarch-refresh")
-        #expect(object?["transport_target"] as? String == "http3_quic")
+        #expect(object?["transport_target"] as? String == "http3_quic_edge")
     }
 
     @Test("rejects writes")
@@ -218,12 +218,14 @@ struct PummelchenServerCoreTests {
         try FileManager.default.createDirectory(at: clientPackage.appendingPathComponent("mods"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: clientPackage.appendingPathComponent("shaderpacks"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: clientPackage.appendingPathComponent("tools"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("site/public/data"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: serverDir.appendingPathComponent("mods"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: serverDir.appendingPathComponent("server-datapacks"), withIntermediateDirectories: true)
 
         try "client mod".write(to: clientPackage.appendingPathComponent("mods/example-client.jar"), atomically: true, encoding: .utf8)
         try "AURORA=2\n".write(to: clientPackage.appendingPathComponent("shaderpacks/BSL_v10.1.3.zip.txt"), atomically: true, encoding: .utf8)
         try "#!/bin/sh\nexit 0\n".write(to: clientPackage.appendingPathComponent("tools/pummelchen-auto-update.sh"), atomically: true, encoding: .utf8)
+        try #"{"generated_by":"legacy-status-site","rows":[{"title":"Existing tested update"}]}"#.write(to: root.appendingPathComponent("site/public/data/tested-updates.json"), atomically: true, encoding: .utf8)
         try "server mod".write(to: serverDir.appendingPathComponent("mods/example-server.jar"), atomically: true, encoding: .utf8)
         try "datapack".write(to: serverDir.appendingPathComponent("server-datapacks/pummelchen-welcome.zip"), atomically: true, encoding: .utf8)
 
@@ -255,6 +257,8 @@ struct PummelchenServerCoreTests {
         #expect(FileManager.default.fileExists(atPath: publicDownloads.appendingPathComponent("releases/\(releaseID)/\(SwiftReleasePipeline.dmgName)").path))
         #expect(FileManager.default.fileExists(atPath: publicDownloads.appendingPathComponent("releases/\(releaseID)/\(SwiftReleasePipeline.dmgName).sha256").path))
         #expect(FileManager.default.fileExists(atPath: publicDownloads.appendingPathComponent("releases/\(releaseID)/data/tested-updates.json").path))
+        let testedUpdates = try String(contentsOf: publicDownloads.appendingPathComponent("releases/\(releaseID)/data/tested-updates.json"), encoding: .utf8)
+        #expect(testedUpdates.contains("legacy-status-site"))
         let publicManifest = try String(contentsOf: publicDownloads.appendingPathComponent("releases/\(releaseID)/client-sync-manifest.tsv"), encoding: .utf8)
         let manifest = try ClientSyncManifestParser.parse(publicManifest)
         #expect(manifest.entries.contains { $0.section == "shaderpacks" && $0.name == "BSL_v10.1.3.zip.txt" })
@@ -300,7 +304,7 @@ struct PummelchenServerCoreTests {
 
         let infoResponse = api.response(for: HTTPRequest(method: "GET", path: "/h3/v1/control"))
         let info = try JSONDecoder().decode(ControlChannelInfo.self, from: infoResponse.body)
-        #expect(info.transportTarget == "bidirectional_http3_quic")
+        #expect(info.transportTarget == "http3_quic_edge_control")
         #expect(info.bidirectional)
         #expect(!info.downloadsAllowed)
         #expect(info.supportedEvents.contains("release_available"))
@@ -361,11 +365,12 @@ struct PummelchenServerCoreTests {
         #expect(api.response(for: HTTPRequest(method: "POST", path: "/api/v1/control/acks", headers: headers, body: try encoder.encode(secondAck))).statusCode == 200)
         let afterAck = api.response(for: HTTPRequest(
             method: "GET",
-            path: "/api/v1/control/events?client_id=\(clientID)",
+            path: "/api/v1/control/events?client_id=\(clientID)&wait_seconds=1",
             headers: headers
         ))
         let empty = try JSONDecoder().decode(ControlEventBatch.self, from: afterAck.body)
         #expect(empty.events.isEmpty)
+        #expect(empty.transport == "http3_edge_long_poll")
 
         let downloadPayload = ControlEventCreateRequest(
             eventType: .clientSyncRequested,
@@ -472,6 +477,30 @@ struct PummelchenServerCoreTests {
         #expect(throws: SwiftWorldResetError.self) {
             _ = try pipeline.run()
         }
+        #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("phase9.duckdb").path))
+    }
+
+    @Test("phase 9 safe world reset requires RCON or Minecraft hooks before deleting world")
+    func phase9WorldResetRequiresRCONBeforeDestructiveWork() throws {
+        try requireDuckDB()
+        let fixture = try makeWorldResetFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let pipeline = SwiftWorldResetPipeline(config: SwiftWorldResetConfig(
+            projectRoot: fixture.root,
+            serverDir: fixture.serverDir,
+            databaseURL: fixture.root.appendingPathComponent("phase9.duckdb"),
+            seed: "987654321",
+            radiusBlocks: 1000,
+            dryRun: false,
+            confirmDestructive: true,
+            stopCommand: "true",
+            startCommand: "true"
+        ))
+        #expect(throws: SwiftWorldResetError.self) {
+            _ = try pipeline.run()
+        }
+        #expect(FileManager.default.fileExists(atPath: fixture.serverDir.appendingPathComponent("world/region/r.0.0.mca").path))
         #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("phase9.duckdb").path))
     }
 
