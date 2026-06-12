@@ -59,16 +59,6 @@ payload = json.loads(open(sys.argv[1], encoding="utf-8").read())
 print(len(payload.get("datapacks", [])))
 PY
 )"
-HAS_PURPLE_HOUSE="$($PYTHON_BIN - "$ROOT_DIR/server-datapacks-src/custom_datapacks.json" <<'PY'
-import json
-import sys
-
-payload = json.loads(open(sys.argv[1], encoding="utf-8").read())
-print("1" if any(
-    item.get("canonical_key") == "pummelchen-purple-house" for item in payload.get("datapacks", [])
-) else "0")
-PY
-)"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/sync_custom_datapacks.py" --project-dir "$ROOT_DIR" --check
 log "Project-owned custom mods"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/sync_pummelchen_mods.py" --db "$TMP_DIR/pummelchen-mods.sqlite" --server-dir "$TMP_DIR/project-mods-server" --mods-dir "$ROOT_DIR/Pummelchen_Mods" --check
@@ -76,9 +66,6 @@ log "Project-owned custom mods"
 if [ "$CUSTOM_DATAPACK_COUNT" -eq 0 ]; then
   log "No project-owned custom datapacks configured"
 else
-  if [ "$HAS_PURPLE_HOUSE" = "1" ]; then
-    "$PYTHON_BIN" "$ROOT_DIR/scripts/build_purple_house_datapack.py" --check
-  fi
   CUSTOM_DATAPACKS_SERVER="$TMP_DIR/custom-datapacks-server"
   mkdir -p "$CUSTOM_DATAPACKS_SERVER"
   printf 'level-name=custom-live-world\n' > "$CUSTOM_DATAPACKS_SERVER/server.properties"
@@ -141,77 +128,28 @@ assert {"minecraft:bread", "minecraft:cooked_beef", "minecraft:apple"} <= food_n
 assert pools[1]["entries"][0] == {"type": "minecraft:loot_table", "value": "chems_guns:guns/starter_pistol"}
 assert pools[2]["entries"][0] == {"type": "minecraft:loot_table", "value": "chems_guns:ammo/standard/pistol_magazine"}
 PY
-
-  if [ "$HAS_PURPLE_HOUSE" = "1" ]; then
-    RESET_WORLD_SERVER="$TMP_DIR/reset-world-server"
-    mkdir -p "$RESET_WORLD_SERVER/custom-live-world/region"
-    printf 'level-name=custom-live-world\nlevel-seed=old-seed\n' > "$RESET_WORLD_SERVER/server.properties"
-    printf 'old-region\n' > "$RESET_WORLD_SERVER/custom-live-world/region/r.0.0.mca"
-    RESET_WORLD_OUTPUT="$("$PYTHON_BIN" "$ROOT_DIR/scripts/reset_world_for_purple_house.py" \
-      --project-dir "$ROOT_DIR" \
-      --server-dir "$RESET_WORLD_SERVER" \
-      --seed 123456789 \
-      --no-restart \
-      --yes)"
-    printf '%s\n' "$RESET_WORLD_OUTPUT" | grep -q 'world_seed=123456789' \
-      || fail "world reset did not report requested seed"
-    grep -q '^level-seed=123456789$' "$RESET_WORLD_SERVER/server.properties" \
-      || fail "world reset did not write new level seed"
-    grep -q '^bonus-chest=true$' "$RESET_WORLD_SERVER/server.properties" \
-      || fail "world reset did not enable customized generated bonus chest"
-    [ -d "$RESET_WORLD_SERVER/world-reset-backups" ] \
-      || fail "world reset did not create backup root"
-    [ ! -f "$RESET_WORLD_SERVER/custom-live-world/region/r.0.0.mca" ] \
-      || fail "world reset did not replace old world regions"
-    [ -f "$RESET_WORLD_SERVER/custom-live-world/datapacks/pummelchen-purple-house.zip" ] \
-      || fail "world reset did not install Purple House datapack"
-    [ -f "$RESET_WORLD_SERVER/custom-live-world/datapacks/pummelchen-place-purple-house.zip" ] \
-      || fail "world reset did not install placement datapack"
-    SAFE_RESET_SERVER="$TMP_DIR/safe-reset-server"
-    mkdir -p "$SAFE_RESET_SERVER/world/region"
-    printf 'level-name=world\nlevel-seed=old-seed\nbonus-chest=false\n' > "$SAFE_RESET_SERVER/server.properties"
-    printf 'old-region\n' > "$SAFE_RESET_SERVER/world/region/r.0.0.mca"
-    SAFE_RESET_OUTPUT="$("$PYTHON_BIN" "$ROOT_DIR/scripts/safe_reset_world.py" \
-      --project-dir "$ROOT_DIR" \
-      --server-dir "$SAFE_RESET_SERVER" \
-      --seed 987654321 \
-      --radius-blocks 1000 \
-      --batch-size 32 \
-      --dry-run \
-      --yes)"
-    printf '%s\n' "$SAFE_RESET_OUTPUT" | grep -q 'world_seed=987654321' \
-      || fail "safe world reset did not report requested seed"
-    printf '%s\n' "$SAFE_RESET_OUTPUT" | grep -q 'radius_blocks=1000' \
-      || fail "safe world reset did not plan 1000-block radius"
-    printf '%s\n' "$SAFE_RESET_OUTPUT" | grep -q 'diameter_blocks=2000' \
-      || fail "safe world reset did not report 2000-block diameter for 1000-block radius"
-    printf '%s\n' "$SAFE_RESET_OUTPUT" | grep -q 'pregenerate_chunks=' \
-      || fail "safe world reset did not plan pregeneration chunks"
-    "$PYTHON_BIN" - "$RESET_WORLD_SERVER/custom-live-world/datapacks/pummelchen-place-purple-house.zip" <<'PY'
-import sys
-import zipfile
-
-with zipfile.ZipFile(sys.argv[1]) as archive:
-    body = archive.read("data/pummelchen_ops/function/place_purple_house.mcfunction").decode()
-    init = archive.read("data/pummelchen_ops/function/init_purple_house.mcfunction").decode()
-    tick = archive.read("data/minecraft/tags/function/tick.json").decode()
-    load = archive.read("data/minecraft/tags/function/load.json").decode()
-    namelist = set(archive.namelist())
-    batch0 = archive.read("data/pummelchen_ops/function/place_batch_0.mcfunction").decode() if "data/pummelchen_ops/function/place_batch_0.mcfunction" in namelist else ""
-assert "place template" not in body
-assert "place structure" not in body
-assert "ph_house_state" in body
-assert "ph_house_status" in body
-assert "forceload add" in body
-if batch0:
-    assert "fill" in batch0
-assert "scoreboard objectives add pummelchen_ops" in init
-assert "pummelchen_ops:place_purple_house" in tick
-assert "pummelchen_ops:init_purple_house" in load
-assert "ph_house_status" in body
-PY
-  fi
 fi
+
+SAFE_RESET_SERVER="$TMP_DIR/safe-reset-server"
+mkdir -p "$SAFE_RESET_SERVER/world/region"
+printf 'level-name=world\nlevel-seed=old-seed\nbonus-chest=false\n' > "$SAFE_RESET_SERVER/server.properties"
+printf 'old-region\n' > "$SAFE_RESET_SERVER/world/region/r.0.0.mca"
+SAFE_RESET_OUTPUT="$("$PYTHON_BIN" "$ROOT_DIR/scripts/safe_reset_world.py" \
+  --project-dir "$ROOT_DIR" \
+  --server-dir "$SAFE_RESET_SERVER" \
+  --seed 987654321 \
+  --radius-blocks 1000 \
+  --batch-size 32 \
+  --dry-run \
+  --yes)"
+printf '%s\n' "$SAFE_RESET_OUTPUT" | grep -q 'world_seed=987654321' \
+  || fail "safe world reset did not report requested seed"
+printf '%s\n' "$SAFE_RESET_OUTPUT" | grep -q 'radius_blocks=1000' \
+  || fail "safe world reset did not plan 1000-block radius"
+printf '%s\n' "$SAFE_RESET_OUTPUT" | grep -q 'diameter_blocks=2000' \
+  || fail "safe world reset did not report 2000-block diameter for 1000-block radius"
+printf '%s\n' "$SAFE_RESET_OUTPUT" | grep -q 'pregenerate_chunks=' \
+  || fail "safe world reset did not plan pregeneration chunks"
 
 log "Server config overrides"
 CONFIG_SOURCE="$TMP_DIR/config-overrides"
