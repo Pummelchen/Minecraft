@@ -206,8 +206,8 @@ python3 scripts/release_manager.py prune --keep 2
 # Server control
 systemctl start|stop|restart pummelchen-minecraft.service
 
-# Safe world reset with pregeneration
-python3 scripts/safe_reset_world.py --seed <new-seed> --diameter-blocks 1000 --yes
+# Safe world reset with spawn-radius pregeneration
+python3 scripts/safe_reset_world.py --seed <new-seed> --radius-blocks 1000 --yes
 
 # Acceptance lab
 python3 scripts/mod_acceptance_lab.py run-files --include-active-deps /path/to/candidate.jar

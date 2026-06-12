@@ -175,14 +175,16 @@ PY
       --project-dir "$ROOT_DIR" \
       --server-dir "$SAFE_RESET_SERVER" \
       --seed 987654321 \
-      --diameter-blocks 1000 \
+      --radius-blocks 1000 \
       --batch-size 32 \
       --dry-run \
       --yes)"
     printf '%s\n' "$SAFE_RESET_OUTPUT" | grep -q 'world_seed=987654321' \
       || fail "safe world reset did not report requested seed"
-    printf '%s\n' "$SAFE_RESET_OUTPUT" | grep -q 'diameter_blocks=1000' \
-      || fail "safe world reset did not plan 1000-block diameter"
+    printf '%s\n' "$SAFE_RESET_OUTPUT" | grep -q 'radius_blocks=1000' \
+      || fail "safe world reset did not plan 1000-block radius"
+    printf '%s\n' "$SAFE_RESET_OUTPUT" | grep -q 'diameter_blocks=2000' \
+      || fail "safe world reset did not report 2000-block diameter for 1000-block radius"
     printf '%s\n' "$SAFE_RESET_OUTPUT" | grep -q 'pregenerate_chunks=' \
       || fail "safe world reset did not plan pregeneration chunks"
     "$PYTHON_BIN" - "$RESET_WORLD_SERVER/custom-live-world/datapacks/pummelchen-place-purple-house.zip" <<'PY'

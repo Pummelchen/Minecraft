@@ -1923,17 +1923,17 @@ def render_page(
     <section id="safe-world-reset">
       <h2>Safe World Reset</h2>
       <div class="operator-section">
-        <p class="note">Use this command when replacing the current world with a new seed. It backs up the active world, writes the new seed, keeps the custom bonus chest enabled, installs required datapacks, starts the server, reapplies safety gamerules, detects spawn, and pregenerates a 1000-block diameter around spawn.</p>
+        <p class="note">Use this command when replacing the current world with a new seed. It backs up the active world, writes the new seed, keeps the custom bonus chest enabled, installs required datapacks, starts the server, reapplies safety gamerules, detects spawn, and pregenerates a 1000-block radius around spawn.</p>
         <pre class="terminal-cmd"><code>python3 /var/minecraft_mods/scripts/safe_reset_world.py &#92;
   --project-dir /var/minecraft_mods &#92;
   --server-dir /var/minecraft_26.1.2 &#92;
   --seed NEW_SEED &#92;
-  --diameter-blocks 1000 &#92;
+  --radius-blocks 1000 &#92;
   --yes</code></pre>
         <ol class="operator-steps">
           <li>Replace <code>NEW_SEED</code> with the numeric or text seed to generate.</li>
           <li>Run the command as <code>root</code> on the VPS.</li>
-          <li>Wait for <code>pregenerate_done=1</code>; the default square pregeneration covers 4,096 chunks.</li>
+          <li>Wait for <code>pregenerate_done=1</code>; the default circular 1000-block radius pregeneration covers about 12,000 chunks.</li>
           <li>Use <code>--dry-run</code> first to preview the backup path and pregeneration plan without changing the world.</li>
         </ol>
         <p class="operator-warning">Do not delete <code>/var/minecraft_26.1.2/world</code> manually. Manual deletion can skip datapack installation, bonus chest customization, safety gamerules, backups, and pregeneration.</p>
