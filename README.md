@@ -1,3 +1,6 @@
+<img width="1441" height="1672" alt="image" src="https://github.com/user-attachments/assets/8cdcd155-a5cd-4e20-b330-b0521708c03f" />
+
+
 # Minecraft AI Server/Client Mod Updater
 
 An AI-assisted system for automatically managing Minecraft server and clients with 300+ mods.
