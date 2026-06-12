@@ -55,8 +55,8 @@ dynamic:
       increment: 1
       interval: 15
     - setting: VIEW_DISTANCE
-      max: 8
-      min: 5
+      max: 12
+      min: 8
       increment: 1
       interval: 150
 
