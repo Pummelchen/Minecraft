@@ -55,6 +55,30 @@ struct PummelchenServerCoreTests {
         #expect(object?["transport_target"] as? String == "http3_quic_edge")
     }
 
+    @Test("serves live site stats from Swift API")
+    func servesLiveSiteStats() throws {
+        let fixture = try makeProjectFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let api = makeAPI(fixture: fixture)
+        let response = api.response(for: HTTPRequest(method: "GET", path: "/api/v1/site/live-stats"))
+        let payload = try JSONDecoder().decode(LiveStatsPayload.self, from: response.body)
+
+        #expect(response.statusCode == 200)
+        #expect(response.headers["Cache-Control"] == "no-store, max-age=0")
+        #expect(payload.intervalSeconds == 5)
+        #expect(payload.stats["Last Mod Version"] == "20260612 V6 modernarch-refresh")
+        #expect(payload.history.count == 1)
+        #expect(payload.metrics.cpuPercent >= 0)
+        #expect(payload.metrics.ramUsedPercent >= 0)
+        #expect(payload.metrics.diskUsedPercent >= 0)
+
+        let cachedResponse = api.response(for: HTTPRequest(method: "GET", path: "/api/v1/site/live-stats"))
+        let cachedPayload = try JSONDecoder().decode(LiveStatsPayload.self, from: cachedResponse.body)
+        #expect(cachedPayload.generatedAt == payload.generatedAt)
+        #expect(cachedPayload.history.count == payload.history.count)
+    }
+
     @Test("rejects writes")
     func rejectsWrites() throws {
         let fixture = try makeProjectFixture()

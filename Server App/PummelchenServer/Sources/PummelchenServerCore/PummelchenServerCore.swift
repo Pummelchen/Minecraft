@@ -123,6 +123,7 @@ public final class PummelchenServerAPI: @unchecked Sendable {
     private let decoder: JSONDecoder
     private let store: ServerClientReportStore
     private let controlStore: ControlEventStore
+    private let liveStats: LiveStatsProvider
 
     public init(config: PummelchenServerConfig) {
         self.config = config
@@ -132,6 +133,7 @@ public final class PummelchenServerAPI: @unchecked Sendable {
         self.decoder = JSONDecoder()
         self.store = ServerClientReportStore(databaseURL: config.duckDBURL)
         self.controlStore = ControlEventStore(databaseURL: config.duckDBURL)
+        self.liveStats = LiveStatsProvider(projectRoot: config.projectRoot)
     }
 
     public func response(for request: HTTPRequest) -> HTTPResponse {
@@ -144,6 +146,8 @@ public final class PummelchenServerAPI: @unchecked Sendable {
                 return try currentRelease()
             case ("GET", "/api/v1/clients/health"):
                 return try clientHealth()
+            case ("GET", "/api/v1/site/live-stats"):
+                return try siteLiveStats()
             case ("GET", "/h3/v1/control"):
                 return try controlInfo()
             case ("POST", "/api/v1/control/events"):
@@ -230,6 +234,16 @@ public final class PummelchenServerAPI: @unchecked Sendable {
 
     private func clientHealth() throws -> HTTPResponse {
         try .json(encoder.encode(store.healthSummary()))
+    }
+
+    private func siteLiveStats() throws -> HTTPResponse {
+        try .json(
+            encoder.encode(liveStats.payload()),
+            headers: [
+                "Cache-Control": "no-store, max-age=0",
+                "X-Pummelchen-Stats-Source": "swift-server"
+            ]
+        )
     }
 
     private func controlInfo() throws -> HTTPResponse {
