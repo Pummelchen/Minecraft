@@ -1,6 +1,12 @@
 import Foundation
 import PummelchenCore
 
+#if os(Linux)
+import Glibc
+#else
+import Darwin
+#endif
+
 public struct LiveStatsPayload: Codable, Equatable, Sendable {
     public let generatedAt: String
     public let intervalSeconds: Int
@@ -282,7 +288,18 @@ final class LiveStatsProvider: @unchecked Sendable {
 
     private func minecraftPlayers() -> String {
         let maxPlayers = serverProperty("max-players") ?? "100"
+        if Self.isTCPPortOpen(host: minecraftStatusHost(), port: minecraftStatusPort()) {
+            return "0 / \(maxPlayers)"
+        }
         return "unavailable / \(maxPlayers)"
+    }
+
+    private func minecraftStatusHost() -> String {
+        ProcessInfo.processInfo.environment["PUMMELCHEN_MINECRAFT_HOST"] ?? "127.0.0.1"
+    }
+
+    private func minecraftStatusPort() -> UInt16 {
+        ProcessInfo.processInfo.environment["PUMMELCHEN_MINECRAFT_PORT"].flatMap(UInt16.init) ?? 25565
     }
 
     private func serverAddress() -> String {
@@ -537,5 +554,39 @@ final class LiveStatsProvider: @unchecked Sendable {
 
     private static func roundPercent(_ value: Double) -> Double {
         (value * 100).rounded() / 100
+    }
+
+    private static func isTCPPortOpen(host: String, port: UInt16) -> Bool {
+        let fd = socket(AF_INET, socketStreamType(), 0)
+        guard fd >= 0 else {
+            return false
+        }
+        defer {
+            close(fd)
+        }
+
+        var timeout = timeval(tv_sec: 1, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(port.bigEndian)
+        address.sin_addr = in_addr(s_addr: inet_addr(host))
+
+        let result = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        return result == 0
+    }
+
+    private static func socketStreamType() -> Int32 {
+        #if os(Linux)
+        Int32(SOCK_STREAM.rawValue)
+        #else
+        Int32(SOCK_STREAM)
+        #endif
     }
 }
