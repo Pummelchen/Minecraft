@@ -1278,6 +1278,16 @@ Acceptance:
 - BSL shader, ModernArch stack, 8 GB memory, server entry, suppressed warnings, and duck/goose no-follow defaults are applied idempotently.
 - Re-running sync does not duplicate config keys.
 
+Implementation status:
+
+- Implemented `ClientSyncEngine` in `PummelchenClientCore` and the `pummelchen-client-sync` CLI.
+- Native sync now fetches `current-release.json`, fetches and validates `client-sync-manifest.tsv`, removes stale managed files from the previous manifest, quarantines unmanaged files, downloads missing/changed files to a temp area, verifies SHA256 before atomic install, chmods synced tools, writes the installed-release marker, stores the current manifest, applies client defaults, and records local DuckDB sync history.
+- `--force` now means a forced full verification pass. Files with matching size/SHA256 are not re-downloaded, so a forced already-current sync reports `all synced, no downloads required`.
+- Minecraft-running detection is implemented before mutation. A live macOS smoke run while Minecraft was active refused to sync with an explicit close-Minecraft message.
+- Local DuckDB records `sync_runs`, `sync_events`, `release_history`, `client_state`, `installed_files`, and `client_defaults`.
+- Added a temp HTTP release fixture test that verifies first-run downloads, forced no-download rerun, unmanaged quarantine, stale managed cleanup, defaults health, and local history recording without touching the real Minecraft folder.
+- Existing Bash updater remains available and unchanged as fallback.
+
 ### Phase 6: Server Write APIs and Client Reports
 
 Implement:

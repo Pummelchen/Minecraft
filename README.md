@@ -194,6 +194,9 @@ bash scripts/build_pummelchen_client_app.sh
 # Phase 4 non-interactive client status smoke
 swift run --package-path swift/PummelchenSwift PummelchenClient --once
 
+# Phase 5 native Swift client sync engine
+swift run --package-path swift/PummelchenSwift pummelchen-client-sync sync --force
+
 # Build temporary DuckDB parity database on a host with duckdb installed
 swift run --package-path swift/PummelchenSwift pummelchen-duckdb phase1-build \
   --duckdb /tmp/pummelchen_phase1.duckdb \

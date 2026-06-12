@@ -39,5 +39,22 @@ struct MinecraftClientDefaultsTests {
         let ducks = try String(contentsOf: root.appendingPathComponent("config/untitledduckmod-server.toml"), encoding: .utf8)
         #expect(ducks.contains("duck_tamed_no_follow=true"))
         #expect(ducks.contains("goose_tamed_no_follow=true"))
+
+        let profiles = try String(contentsOf: root.appendingPathComponent("launcher_profiles.json"), encoding: .utf8)
+        #expect(profiles.contains("-Xmx8G"))
+
+        let servers = try Data(contentsOf: root.appendingPathComponent("servers.dat"))
+        #expect(servers.range(of: Data("91.99.176.243:25565".utf8)) != nil)
+
+        let otherDefaults = MinecraftClientDefaults(serverName: "Other Server", serverAddress: "example.org:25565")
+        let otherRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pummelchen-minecraft-servers-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: otherRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: otherRoot) }
+        try MinecraftClientDefaultWriter.apply(defaults: otherDefaults, to: otherRoot)
+        try MinecraftClientDefaultWriter.apply(to: otherRoot)
+        let mergedServers = try Data(contentsOf: otherRoot.appendingPathComponent("servers.dat"))
+        #expect(mergedServers.range(of: Data("example.org:25565".utf8)) != nil)
+        #expect(mergedServers.range(of: Data("91.99.176.243:25565".utf8)) != nil)
     }
 }

@@ -22,6 +22,10 @@ var products: [Product] = [
     .executable(
         name: "pummelchen-server",
         targets: ["PummelchenServer"]
+    ),
+    .executable(
+        name: "pummelchen-client-sync",
+        targets: ["PummelchenClientSync"]
     )
 ]
 
@@ -48,6 +52,10 @@ var targets: [Target] = [
     .executableTarget(
         name: "PummelchenServer",
         dependencies: ["PummelchenServerCore"]
+    ),
+    .executableTarget(
+        name: "PummelchenClientSync",
+        dependencies: ["PummelchenClientCore"]
     ),
     .testTarget(
         name: "PummelchenCoreTests",
