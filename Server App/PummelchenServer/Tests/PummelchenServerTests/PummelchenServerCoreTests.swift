@@ -55,6 +55,28 @@ struct PummelchenServerCoreTests {
         #expect(object?["transport_target"] as? String == "http3_quic_edge")
     }
 
+    @Test("Minecraft autostart config is explicit and environment driven")
+    func minecraftAutostartConfigFromEnvironment() throws {
+        #expect(MinecraftLiveServerSupervisorConfig.fromEnvironment([:]) == nil)
+        #expect(MinecraftLiveServerSupervisorConfig.fromEnvironment(["PUMMELCHEN_MINECRAFT_AUTOSTART": "true"]) == nil)
+
+        let config = try #require(MinecraftLiveServerSupervisorConfig.fromEnvironment([
+            "PUMMELCHEN_MINECRAFT_AUTOSTART": "true",
+            "PUMMELCHEN_MINECRAFT_DIR": "/opt/pummelchen-swift/runtime/minecraft",
+            "PUMMELCHEN_MINECRAFT_START_COMMAND": "./run.sh nogui",
+            "PUMMELCHEN_MINECRAFT_HOST": "127.0.0.1",
+            "PUMMELCHEN_MINECRAFT_PORT": "25566",
+            "PUMMELCHEN_MINECRAFT_LOG": "/opt/pummelchen-swift/runtime/logs/minecraft-live.log"
+        ]))
+
+        #expect(config.enabled)
+        #expect(config.serverDirectory.path == "/opt/pummelchen-swift/runtime/minecraft")
+        #expect(config.startCommand == "./run.sh nogui")
+        #expect(config.host == "127.0.0.1")
+        #expect(config.port == 25566)
+        #expect(config.logFile.path == "/opt/pummelchen-swift/runtime/logs/minecraft-live.log")
+    }
+
     @Test("serves live site stats from Swift API")
     func servesLiveSiteStats() throws {
         let fixture = try makeProjectFixture()

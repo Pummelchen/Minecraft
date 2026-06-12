@@ -251,10 +251,20 @@ func run(arguments: [String]) throws {
     case "serve":
         let host = args.options["--host"] ?? "127.0.0.1"
         let port = Int(args.options["--port"] ?? "8787") ?? 8787
+        let minecraftSupervisor: MinecraftLiveServerSupervisor?
+        if let minecraftConfig = MinecraftLiveServerSupervisorConfig.fromEnvironment() {
+            let supervisor = MinecraftLiveServerSupervisor(config: minecraftConfig)
+            try supervisor.startIfNeeded()
+            minecraftSupervisor = supervisor
+        } else {
+            minecraftSupervisor = nil
+        }
         let configuredAPI = PummelchenServerAPI(
             config: PummelchenServerConfig(projectRoot: projectRoot, bindHost: host, port: port)
         )
-        try LocalHTTPServer(api: configuredAPI, host: host, port: port).run()
+        try withExtendedLifetime(minecraftSupervisor) {
+            try LocalHTTPServer(api: configuredAPI, host: host, port: port).run()
+        }
     case "release-create":
         let pipeline = try releasePipeline(args: args, projectRoot: projectRoot)
         let result = try pipeline.createRelease()
