@@ -14,9 +14,9 @@ The project should migrate toward two compiled Swift applications:
 - `PummelchenServer`: a Debian 13 Swift service running behind nginx, owning the authoritative project DuckDB.
 - `PummelchenClient`: a macOS Swift app plus background helper, owning a local client DuckDB inventory/cache.
 
-nginx remains the public edge for the website, large downloads, HTTPS, static release files, and reverse proxying API/WebSocket traffic to the Swift server app.
+nginx remains the public edge for the website, large downloads, HTTPS, static release files, and HTTP/3/QUIC routing to the Swift server app.
 
-DuckDB must be embedded locally on each side. Do not attempt to expose DuckDB directly over TCP or share one database file across clients. Server and client apps communicate through versioned HTTPS APIs and, later, WebSocket events.
+DuckDB must be embedded locally on each side. Do not attempt to expose DuckDB directly over TCP or share one database file across clients. Server and client apps communicate through versioned HTTP/3 over QUIC. Bidirectional near-realtime control traffic must use QUIC bidirectional streams through an HTTP/3/WebTransport-style control channel, not WebSocket.
 
 The migration should be staged. The current scripts are production safety rails and must not be removed until the Swift implementation proves equivalent through repeated live releases.
 
@@ -63,7 +63,7 @@ Since the original Swift/DuckDB discussion, the production system gained several
 2. Give macOS players a simple GUI for sync status, manual sync, repair, and history.
 3. Keep client state portable through a local DuckDB file.
 4. Keep server release/mod/client state authoritative in a server-side DuckDB file.
-5. Support near-realtime client notices through WebSocket after the basic HTTPS sync protocol is stable.
+5. Support near-realtime client notices through bidirectional HTTP/3 over QUIC after the basic HTTP API sync protocol is stable.
 6. Preserve current production capabilities:
    - mod manifest generation
    - release activation
@@ -83,7 +83,7 @@ Since the original Swift/DuckDB discussion, the production system gained several
    - custom datapack policy generation for safety, tropical worldgen, and rich ores
    - status website
    - tested updates and failed-mods feeds with sortable/filterable web tables
-7. Keep nginx for public traffic, static downloads, caching, logs, TLS, and reverse proxying.
+7. Keep nginx for public traffic, static downloads, caching, logs, TLS, and HTTP/3/QUIC routing.
 
 ## 3. Non-Goals
 
@@ -100,15 +100,15 @@ Since the original Swift/DuckDB discussion, the production system gained several
 ```text
 Internet
   |
-  | HTTPS / WebSocket / static downloads
+  | HTTPS static downloads / HTTP/3 over QUIC control traffic
   v
 nginx :80/:443
   |
   |-- /                         -> generated/static website
   |-- /downloads/...             -> static releases, DMG, client files
   |-- /downloads/client-files/... -> manual repair/helper downloads during migration
-  |-- /api/v1/...                -> reverse proxy to PummelchenServer
-  |-- /ws/v1                     -> reverse proxy to PummelchenServer WebSocket
+  |-- /api/v1/...                -> versioned API over HTTP/3 where supported
+  |-- /h3/v1/control             -> bidirectional QUIC control stream endpoint
   |-- /client-logs/...           -> compatibility route during migration
   |
   v
@@ -133,10 +133,10 @@ PummelchenClient.app
   |-- SwiftUI/AppKit GUI
   |-- LaunchAgent background helper
   |-- local DuckDB inventory/cache
-  |-- HTTPS manifest/status sync
+  |-- HTTP/3 manifest/status sync where supported
   |-- static file downloads from nginx
   |-- built-in CLI repair/sync helper
-  |-- optional WebSocket for near-realtime notices
+  |-- bidirectional HTTP/3/QUIC control channel for near-realtime notices
   |
 Minecraft folder
   |
@@ -169,7 +169,7 @@ nginx remains a hard requirement because it is better than the Swift app at:
 - serving large ZIP/JAR downloads efficiently
 - serving static website assets
 - TLS termination and future Let's Encrypt automation
-- reverse proxying API/WebSocket traffic
+- routing API and bidirectional HTTP/3/QUIC control traffic
 - rate limiting and request size limits
 - access logs
 - cache headers
@@ -181,7 +181,7 @@ Recommended binding:
 
 ```text
 PummelchenServer listens on 127.0.0.1:8787
-nginx proxies public /api/v1 and /ws/v1 to 127.0.0.1:8787
+nginx serves public static files and exposes HTTP/3 on the public edge. The Swift server owns the `/api/v1` API and `/h3/v1/control` bidirectional control channel. If nginx on Debian cannot proxy QUIC streams to the Swift process with the required semantics, terminate static HTTPS/HTTP/3 at nginx and bind the Swift QUIC listener separately on a locked-down public UDP port with the same certificate and firewall/rate-limit policy.
 ```
 
 ## 6. Technology Choices
@@ -192,7 +192,7 @@ nginx proxies public /api/v1 and /ws/v1 to 127.0.0.1:8787
 - Platform: Debian 13
 - Runtime: systemd service
 - Database: DuckDB embedded file
-- HTTP/WebSocket framework: prefer Vapor if dependencies are acceptable; otherwise use SwiftNIO directly.
+- HTTP/3/QUIC framework: prefer a SwiftNIO-compatible QUIC stack if mature enough on Debian/macOS; otherwise use a narrow C-backed QUIC library wrapper. Vapor may still be used for ordinary HTTP API routing only if it does not block the QUIC transport requirement.
 - Static files: served by nginx, not by Swift.
 - Process control: Swift executes narrowly scoped commands for `systemctl`, backup tools, and Minecraft RCON/query where required.
 
@@ -204,7 +204,7 @@ nginx proxies public /api/v1 and /ws/v1 to 127.0.0.1:8787
 - Database: DuckDB embedded file in `~/Library/Application Support/Pummelchen/client.duckdb`
 - Background agent: LaunchAgent helper
 - Distribution: unsigned or ad-hoc signed for private group initially
-- Networking: URLSession for HTTPS, URLSessionWebSocketTask for WebSocket
+- Networking: URLSession for ordinary HTTPS/HTTP requests and a dedicated HTTP/3/QUIC client transport for the bidirectional control channel
 - File sync: native Swift file operations, checksum validation, resumable downloads where practical
 - CLI helper: same sync engine as GUI, with text progress suitable for Terminal support
 
@@ -482,7 +482,15 @@ The Swift client must apply the same defaults that the current Bash updater appl
 
 ## 7. Protocol Design
 
-Use HTTPS JSON first. Add WebSocket only after the sync path is stable.
+Use HTTP/3 over QUIC for server/client communication. Keep static release downloads on nginx-served HTTPS/HTTP/3. Do not move large ZIP/JAR/DMG payloads over the bidirectional control channel.
+
+The implementation must distinguish three traffic classes:
+
+1. Static downloads: nginx-served immutable files under `/downloads/...`.
+2. Versioned API calls: request/response JSON endpoints under `/api/v1/...`, using HTTP/3 where the client and edge support it.
+3. Bidirectional control: small near-realtime messages over `/h3/v1/control` using QUIC bidirectional streams through an HTTP/3/WebTransport-style channel.
+
+HTTP/2 HTTPS polling remains an explicit compatibility fallback for early private builds and network environments that block UDP/QUIC. The fallback is not the target transport.
 
 ### API Versioning
 
@@ -490,7 +498,7 @@ All routes must be versioned:
 
 ```text
 /api/v1/...
-/ws/v1
+/h3/v1/control
 ```
 
 Every response should include:
@@ -503,7 +511,7 @@ Every response should include:
 }
 ```
 
-### Core HTTPS Endpoints
+### Core HTTP API Endpoints
 
 ```text
 GET  /api/v1/status
@@ -530,12 +538,12 @@ Downloads stay on nginx:
 /downloads/client-files/...
 ```
 
-### WebSocket Events
+### Bidirectional HTTP/3/QUIC Events
 
-Use WebSocket for small control/status events only, not for file downloads.
+Use the HTTP/3/QUIC control channel for small control/status events only, not for file downloads.
 
 ```text
-/ws/v1
+/h3/v1/control
 ```
 
 Event examples:
@@ -570,7 +578,7 @@ For first private release, a file token is acceptable if permissions are locked 
 
 ### Request Authentication
 
-Use HTTPS with bearer token:
+Use HTTP/3 over TLS with bearer token for client write/report APIs:
 
 ```http
 Authorization: Bearer <client_secret>
@@ -999,7 +1007,7 @@ Advanced actions:
 
 `PummelchenServer` should eventually own:
 
-1. API and WebSocket server.
+1. HTTP API and bidirectional HTTP/3/QUIC control server.
 2. Authoritative release state in DuckDB.
 3. Current release pointer.
 4. Client status ingestion.
@@ -1157,12 +1165,13 @@ Create `PummelchenServer` service with read-only endpoints:
 - `/api/v1/releases/current`
 - `/api/v1/releases/{release_id}/manifest`
 
-nginx proxies `/api/v1` to localhost.
+`/api/v1` is served over HTTP/3 where supported. nginx remains responsible for static files and may route API traffic if its HTTP/3/QUIC behavior satisfies the bidirectional requirements; otherwise the Swift service owns the QUIC listener for API/control traffic.
 
 Acceptance:
 
 - API returns current release identical to static `current-release.json`.
-- nginx proxy works.
+- HTTP/3 request/response path works from macOS client to Debian server.
+- HTTP/2 HTTPS fallback remains available for read-only API requests during early private builds.
 - systemd service restarts cleanly.
 - No write operations yet.
 
@@ -1260,9 +1269,9 @@ Acceptance:
 - Release health result is persisted and visible.
 - Tested Updates website table data is generated from Swift-owned state or an equivalent compatibility feed.
 
-### Phase 8: WebSocket Realtime Events
+### Phase 8: Bidirectional HTTP/3/QUIC Realtime Events
 
-Add `/ws/v1`.
+Add `/h3/v1/control`.
 
 Events:
 
@@ -1275,8 +1284,9 @@ Events:
 Acceptance:
 
 - Client reconnects safely.
-- Missed messages are fetched via HTTPS fallback.
-- No downloads happen over WebSocket.
+- Missed messages are fetched via HTTP API fallback.
+- No downloads happen over the QUIC control channel.
+- UDP/QUIC blocked-network behavior is handled gracefully through polling fallback.
 
 ### Phase 9: Safe World Reset in Swift
 
@@ -1505,7 +1515,7 @@ The server-side Swift/DuckDB system is production-ready only if it can run the P
    - Publish static release files for nginx to serve.
    - Keep old manifest semantics until all clients are migrated.
    - Expose versioned API endpoints for current release, manifest metadata, client status ingestion, and update history.
-   - Send WebSocket notices only for small control/status events. Downloads remain static HTTPS files via nginx.
+   - Send QUIC control-channel notices only for small control/status events. Downloads remain static HTTPS/HTTP/3 files via nginx.
 
 4. **Custom datapack policy**
    - Build or validate `pummelchen-welcome.zip`, `pummelchen-tropical-worldgen.zip`, and `pummelchen-rich-ores.zip`.
@@ -1532,15 +1542,20 @@ The server-side Swift/DuckDB system is production-ready only if it can run the P
 - Do not allow multiple processes to write the server DuckDB file.
 - Do not perform release activation, world reset, backup deletion, or Minecraft restart directly inside an HTTP request handler.
 - Do not run as unrestricted root if narrow `sudo`/systemd permissions can do the job.
-- Do not use WebSocket as a second write/control plane.
+- Do not use the QUIC control channel as a second write/control plane; authoritative writes still go through authenticated API/job endpoints.
 
 ### Required Server Runtime Shape
 
 ```text
 nginx public edge
   -> static site/download files
-  -> /api/v1 reverse proxy to 127.0.0.1:8787
-  -> /ws/v1 reverse proxy to 127.0.0.1:8787
+  -> HTTP/3 for public static downloads where supported
+  -> /api/v1 route to PummelchenServer where HTTP/3 routing/proxying is viable
+
+PummelchenServer QUIC listener
+  -> /api/v1 request/response API over HTTP/3 where supported
+  -> /h3/v1/control bidirectional QUIC control streams
+  -> HTTP/2 HTTPS fallback for early private builds and blocked UDP networks
 
 PummelchenServer.service
   -> single process owning server DuckDB writes
@@ -1556,7 +1571,7 @@ PummelchenServer.service
 - At least two full releases are created, activated, validated, and rolled back successfully in staging.
 - At least one staging safe world reset completes with seed write, datapack validation, 1000-block pregeneration, no leftover forceloads, and optional backup cleanup.
 - Release health and DB health are visible and green after each staging operation.
-- nginx serves all large files while Swift only serves API/WebSocket.
+- nginx serves all large files while Swift only serves API and QUIC control traffic.
 - A server reboot restores nginx, Swift service, Minecraft service, health timers, and current release state without manual repair.
 - Production cutover has a rollback command that restores the old script-controlled path.
 
@@ -1644,9 +1659,9 @@ The client-side Swift/DuckDB system is production-ready only if a non-technical 
    - Provides Copy Diagnostics and Upload Diagnostics actions.
 
 6. **Near-realtime notices**
-   - Uses WebSocket for update notices, restart warnings, server messages, and sync requests.
-   - Falls back to HTTPS polling if WebSocket fails.
-   - Never downloads files over WebSocket.
+   - Uses bidirectional HTTP/3 over QUIC for update notices, restart warnings, server messages, and sync requests.
+   - Falls back to HTTP API polling if UDP/QUIC fails.
+   - Never downloads files over the QUIC control channel.
 
 ### Client Must Not Do
 
@@ -1714,7 +1729,7 @@ After server and client review, the recommended order is:
 12. Port custom datapack registry/build/validation into Swift or a Swift-owned compatibility wrapper.
 13. Port release health, Tested Updates, and Failed Mods feed generation.
 14. Port release pipeline into Swift job system, including DMG metadata/publication.
-15. Add WebSocket events.
+15. Add bidirectional HTTP/3/QUIC control events.
 16. Port safe world reset into Swift job system, including backup retention and cleanup.
 17. Decommission legacy scripts only after repeated live success.
 
@@ -1759,7 +1774,7 @@ Use this matrix before switching production ownership from the legacy script pat
 | Website data | Swift table feeds are not contract-tested | Tested Updates and Failed Mods views generate sortable/filterable table data with required timestamps/details |
 | Custom datapacks | Swift cannot validate policy datapacks | Swift builds or validates welcome, tropical worldgen, and rich ores datapacks with matching checksums/contracts |
 | Safe world reset | Swift reset has not completed staging | Swift completes staging reset with backup, seed, datapacks, gamerules, 1000-block pregeneration, no forceloads, and cleanup audit |
-| WebSocket notices | HTTPS polling is not enough yet | WebSocket reconnect/fallback works and never carries file downloads |
+| QUIC notices | HTTP polling is not enough yet | HTTP/3/QUIC reconnect/fallback works and never carries file downloads |
 | Rollback | No tested fallback exists | Old release/script path can be restored and Minecraft returns healthy |
 
 Final go-live rule:

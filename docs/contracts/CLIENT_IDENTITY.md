@@ -24,9 +24,9 @@ Allowed during early private test builds:
 - file permissions must be owner read/write only.
 - the token file must never be included in the DMG, release ZIP, Git, logs, or diagnostics.
 
-## Request Authentication
+## Transport And Request Authentication
 
-Client write/report APIs must use HTTPS and include:
+Client/server API and near-realtime control traffic must target HTTP/3 over QUIC. Client write/report APIs must use HTTP/3 over TLS and include:
 
 ```http
 Authorization: Bearer <client_secret>
@@ -34,6 +34,8 @@ X-Pummelchen-Client-ID: <client_id>
 ```
 
 Client read-only release downloads remain public static files served by nginx.
+
+HTTP/2 HTTPS polling is allowed only as an early private-build compatibility fallback for networks that block UDP/QUIC. It must use the same authentication headers for write/report APIs.
 
 ## Rotation And Revocation
 
@@ -47,3 +49,4 @@ Client read-only release downloads remain public static files served by nginx.
 - No direct DuckDB access from clients.
 - No unauthenticated client write APIs.
 - No shared global client token for production.
+- No large file downloads over the bidirectional QUIC control channel.
