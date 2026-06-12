@@ -1820,6 +1820,50 @@ def render_page(
       white-space: pre;
       overflow-x: auto;
     }}
+    .copy-snippet {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: start;
+      gap: 8px;
+      margin: 6px 0;
+    }}
+    .copy-snippet .terminal-cmd,
+    .copy-snippet .terminal-output {{
+      margin: 0;
+    }}
+    .copy-button {{
+      width: 34px;
+      height: 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #101712;
+      color: var(--green);
+      cursor: pointer;
+      flex: 0 0 auto;
+    }}
+    .copy-button:hover,
+    .copy-button:focus-visible {{
+      border-color: var(--green);
+      outline: none;
+    }}
+    .copy-button.copied {{
+      color: #0d1b10;
+      background: var(--green);
+      border-color: var(--green);
+    }}
+    .copy-button.needs-manual-copy {{
+      color: #201706;
+      background: var(--amber);
+      border-color: var(--amber);
+    }}
+    .copy-button svg {{
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+    }}
     .progress-example {{ margin: 10px 0; }}
     footer {{ padding: 24px 0 42px; color: var(--muted); }}
     @media (max-width: 640px) {{
@@ -1830,6 +1874,8 @@ def render_page(
       dl div {{ grid-template-columns: 1fr; }}
       .badge {{ white-space: normal; text-align: center; }}
       pre {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
+      .copy-snippet {{ grid-template-columns: minmax(0, 1fr); }}
+      .copy-button {{ justify-self: end; }}
     }}
   </style>
 </head>
@@ -2140,6 +2186,74 @@ def render_page(
         }});
       }});
     }}
+    function copySnippetText(text) {{
+      if (navigator.clipboard && window.isSecureContext) {{
+        return navigator.clipboard.writeText(text);
+      }}
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.left = '-9999px';
+      textarea.style.top = '0';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const copied = document.execCommand('copy');
+      textarea.remove();
+      if (!copied) {{
+        return Promise.reject(new Error('copy command failed'));
+      }}
+      return Promise.resolve();
+    }}
+    function selectSnippetText(snippet) {{
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(snippet);
+      if (selection) {{
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }}
+    }}
+    function wireSnippetCopyButtons() {{
+      const snippets = document.querySelectorAll('pre.terminal-cmd, pre.terminal-output');
+      snippets.forEach((snippet, index) => {{
+        if (snippet.closest('.copy-snippet')) return;
+        const wrapper = document.createElement('div');
+        wrapper.className = 'copy-snippet';
+        snippet.parentNode.insertBefore(wrapper, snippet);
+        wrapper.appendChild(snippet);
+        const button = document.createElement('button');
+        button.className = 'copy-button';
+        button.type = 'button';
+        button.setAttribute('aria-label', 'Copy to clipboard');
+        button.title = 'Copy to clipboard';
+        button.dataset.copyTarget = `snippet-${{index}}`;
+        button.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+        button.addEventListener('click', async () => {{
+          const code = snippet.querySelector('code');
+          const text = code ? code.textContent : snippet.textContent;
+          try {{
+            await copySnippetText(text || '');
+            button.classList.add('copied');
+            button.title = 'Copied';
+            window.setTimeout(() => {{
+              button.classList.remove('copied');
+              button.title = 'Copy to clipboard';
+            }}, 1400);
+          }} catch {{
+            selectSnippetText(snippet);
+            button.classList.add('needs-manual-copy');
+            button.title = 'Selected; press Command-C';
+            window.setTimeout(() => {{
+              button.classList.remove('needs-manual-copy');
+              button.title = 'Copy to clipboard';
+            }}, 2400);
+          }}
+        }});
+        wrapper.appendChild(button);
+      }});
+    }}
     let updateActivityCache = {{ data: null, loadedAt: 0 }};
     function updateActivityState(entries) {{
       if (!Array.isArray(entries) || entries.length === 0) {{
@@ -2249,6 +2363,7 @@ def render_page(
     refreshLiveStats();
     window.setInterval(refreshLiveStats, 10000);
     window.addEventListener('resize', refreshLiveStats);
+    wireSnippetCopyButtons();
     wireSearch('serverSearch', 'server-mods');
     wireSearch('clientSearch', 'client-mods');
   </script>
