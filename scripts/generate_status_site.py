@@ -386,15 +386,31 @@ FAILED_MODS_PAGE = "failed-mods.html"
 
 
 def fetch_failed_mods(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    mod_columns = {row["name"] for row in conn.execute("PRAGMA table_info(mods)")}
+    fix_notes_expr = "COALESCE(m.fix_notes, '')" if "fix_notes" in mod_columns else "''"
     rows = conn.execute(
-        """
+        f"""
         SELECT m.name, m.canonical_key, m.primary_url, m.server_status,
-               COALESCE(n.notes_1, '') AS notes_1, COALESCE(n.notes_2, '') AS notes_2
+               m.last_tested, m.updated_at, {fix_notes_expr} AS fix_notes,
+               COALESCE(n.notes_1, '') AS notes_1, COALESCE(n.notes_2, '') AS notes_2,
+               tr.tested_at AS latest_tested_at,
+               tr.status AS latest_test_status,
+               tr.error_count AS latest_error_count,
+               tr.test_label AS latest_test_label,
+               tr.log_path AS latest_log_path,
+               tr.notes AS latest_test_notes
         FROM mods m
         LEFT JOIN mod_notes n ON n.mod_id = m.id
+        LEFT JOIN test_runs tr ON tr.id = (
+          SELECT id
+          FROM test_runs
+          WHERE mod_id = m.id
+          ORDER BY COALESCE(tested_at, ''), id DESC
+          LIMIT 1
+        )
         WHERE m.active_status = 'failed'
           AND m.duplicate_of_id IS NULL
-        ORDER BY lower(m.name)
+        ORDER BY COALESCE(tr.tested_at, m.last_tested, m.updated_at, '') DESC, lower(m.name)
         """
     ).fetchall()
     return [dict(row) for row in rows]
@@ -403,16 +419,30 @@ def fetch_failed_mods(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 def render_failed_mods_page(failed_mods: list[dict[str, Any]]) -> str:
     rows_html = []
     for mod in failed_mods:
+        timestamp_raw = mod.get("latest_tested_at") or mod.get("last_tested") or mod.get("updated_at") or ""
+        timestamp = escape(_format_table_timestamp(timestamp_raw))
         name = escape(mod["name"])
         url = escape(mod.get("primary_url") or "")
         reason = escape(mod.get("server_status") or "Unknown")
-        notes = escape(mod.get("notes_1") or "")
-        extra = escape(mod.get("notes_2") or "")
-        detail_parts = [p for p in [reason, notes, extra] if p]
-        detail = escape(" — ".join(detail_parts)) if detail_parts else "Unknown"
+        detail_parts = []
+        if mod.get("latest_test_status"):
+            detail_parts.append(f"Lab status: {mod['latest_test_status']}")
+        if mod.get("latest_error_count") not in (None, ""):
+            detail_parts.append(f"Errors: {mod['latest_error_count']}")
+        if mod.get("latest_test_label"):
+            detail_parts.append(f"Test: {mod['latest_test_label']}")
+        if mod.get("latest_log_path"):
+            detail_parts.append(f"Log: {mod['latest_log_path']}")
+        for value in (mod.get("notes_1"), mod.get("notes_2"), mod.get("fix_notes"), mod.get("latest_test_notes")):
+            if value:
+                detail_parts.append(str(value))
+        detail = escape(" | ".join(detail_parts)) if detail_parts else "No additional details recorded."
         link = f'<a href="{url}" target="_blank" rel="noreferrer">{name}</a>' if url else name
-        rows_html.append(f"<tr><td>{link}</td><td>{detail}</td></tr>")
-    table_rows = "\n        ".join(rows_html) if rows_html else "<tr><td colspan=\"2\">No failed mods</td></tr>"
+        rows_html.append(
+            f'<tr><td class="timestamp-cell">{timestamp}</td><td class="mod-cell">{link}</td>'
+            f'<td class="reason-cell">{reason}</td><td class="details-cell">{detail}</td></tr>'
+        )
+    table_rows = "\n        ".join(rows_html) if rows_html else "<tr><td colspan=\"4\">No failed mods</td></tr>"
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -444,6 +474,7 @@ def render_failed_mods_page(failed_mods: list[dict[str, Any]]) -> str:
       background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
       overflow: hidden;
     }}
+    .table-shell {{ width: 100%; overflow-x: auto; }}
     th {{
       text-align: left; padding: 12px 16px; background: #111711;
       color: var(--muted); font-size: 13px; font-weight: 600;
@@ -456,14 +487,16 @@ def render_failed_mods_page(failed_mods: list[dict[str, Any]]) -> str:
     }}
     tr:last-child td {{ border-bottom: none; }}
     tr:hover td {{ background: #0f150f; }}
-    td:first-child {{ font-weight: 600; white-space: nowrap; }}
-    td:last-child {{ color: var(--muted); }}
+    .timestamp-cell {{ color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }}
+    .mod-cell {{ font-weight: 600; white-space: nowrap; }}
+    .reason-cell {{ color: var(--red); min-width: 180px; }}
+    .details-cell {{ color: var(--muted); min-width: 360px; max-width: 620px; overflow-wrap: anywhere; }}
     .count {{ color: var(--red); font-weight: 700; }}
     footer {{ padding: 24px 0 42px; color: var(--muted); font-size: 13px; }}
     @media (max-width: 640px) {{
       .wrap {{ padding: 16px; }}
       h1 {{ font-size: 26px; }}
-      td:first-child {{ white-space: normal; }}
+      table {{ min-width: 920px; }}
     }}
   </style>
 </head>
@@ -474,12 +507,14 @@ def render_failed_mods_page(failed_mods: list[dict[str, Any]]) -> str:
       <h1>Failed Mods</h1>
       <p class="subtitle"><span class="count">{len(failed_mods)}</span> mods that failed acceptance testing or server boot and were not installed.</p>
     </header>
-    <table>
-      <thead><tr><th>Mod</th><th>Failure Reason</th></tr></thead>
-      <tbody>
-        {table_rows}
-      </tbody>
-    </table>
+    <div class="table-shell">
+      <table>
+        <thead><tr><th>Timestamp</th><th>Mod</th><th>Failure Reason</th><th>Problem Details</th></tr></thead>
+        <tbody>
+          {table_rows}
+        </tbody>
+      </table>
+    </div>
     <footer>Pummelchen Server — mod tracker failure report</footer>
   </div>
 </body>
