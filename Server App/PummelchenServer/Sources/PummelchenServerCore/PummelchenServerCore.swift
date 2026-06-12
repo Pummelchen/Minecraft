@@ -148,6 +148,10 @@ public final class PummelchenServerAPI: @unchecked Sendable {
                 return try clientHealth()
             case ("GET", "/api/v1/site/live-stats"):
                 return try siteLiveStats()
+            case ("GET", "/api/v1/site/tested-updates"):
+                return try siteJSON(named: "tested-updates.json")
+            case ("GET", "/api/v1/site/update-activity"):
+                return try siteJSON(named: "update-activity.json")
             case ("GET", "/h3/v1/control"):
                 return try controlInfo()
             case ("POST", "/api/v1/control/events"):
@@ -244,6 +248,19 @@ public final class PummelchenServerAPI: @unchecked Sendable {
                 "X-Pummelchen-Stats-Source": "swift-server"
             ]
         )
+    }
+
+    private func siteJSON(named filename: String) throws -> HTTPResponse {
+        guard filename.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "." }),
+              filename.hasSuffix(".json") else {
+            throw PummelchenServerError.badRequest("invalid site JSON filename")
+        }
+        let data = try Data(contentsOf: config.projectRoot.appendingPathComponent("site/public/\(filename)"))
+        _ = try JSONSerialization.jsonObject(with: data)
+        return .json(data, headers: [
+            "Cache-Control": "no-store, max-age=0",
+            "X-Pummelchen-Stats-Source": "swift-server"
+        ])
     }
 
     private func controlInfo() throws -> HTTPResponse {

@@ -90,6 +90,7 @@ final class LiveStatsProvider: @unchecked Sendable {
         stats["Server Mods"] = "\(serverModCount(release: release) ?? clientModCount(release: release) ?? 0) Server Mods"
         stats["Client Mods"] = "\(clientModCount(release: release) ?? 0) Client Mods"
         stats["Failed Mods"] = "\(failedModCount()) Failed Mods"
+        stats["Mac Installer DMG URL"] = macInstallerDMGURL(release: release)
 
         let payload = LiveStatsPayload(
             generatedAt: timestamp,
@@ -307,6 +308,20 @@ final class LiveStatsProvider: @unchecked Sendable {
         let html = projectRoot.appendingPathComponent("site/public/failed-mods.html")
         guard let data = try? String(contentsOf: html, encoding: .utf8) else { return 0 }
         return data.components(separatedBy: "<tr><td class=\"timestamp-cell\">").count - 1
+    }
+
+    private func macInstallerDMGURL(release: CurrentRelease?) -> String {
+        let rootPath = "/downloads/Pummelchen-Client-Installer.dmg"
+        if let rootURL = urlForPublicPath(rootPath), FileManager.default.fileExists(atPath: rootURL.path) {
+            return rootPath
+        }
+        if let release {
+            let releasePath = "/downloads/releases/\(release.releaseID)/Pummelchen-Client-Installer.dmg"
+            if let releaseURL = urlForPublicPath(releasePath), FileManager.default.fileExists(atPath: releaseURL.path) {
+                return releasePath
+            }
+        }
+        return rootPath
     }
 
     private func worldSeed() -> String? {

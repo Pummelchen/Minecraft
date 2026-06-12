@@ -72,6 +72,7 @@ struct PummelchenServerCoreTests {
         #expect(payload.stats["Web Address"] == "91.99.176.243:7788")
         #expect(payload.stats["Client Mods"] == "1 Client Mods")
         #expect(payload.stats["Failed Mods"] == "0 Failed Mods")
+        #expect(payload.stats["Mac Installer DMG URL"] == "/downloads/Pummelchen-Client-Installer.dmg")
         #expect(payload.history.count == 1)
         #expect(payload.metrics.cpuPercent >= 0)
         #expect(payload.metrics.ramUsedPercent >= 0)
@@ -81,6 +82,26 @@ struct PummelchenServerCoreTests {
         let cachedPayload = try JSONDecoder().decode(LiveStatsPayload.self, from: cachedResponse.body)
         #expect(cachedPayload.generatedAt == payload.generatedAt)
         #expect(cachedPayload.history.count == payload.history.count)
+    }
+
+    @Test("serves site JSON feeds through Swift API")
+    func servesSiteJSONFeeds() throws {
+        let fixture = try makeProjectFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let api = makeAPI(fixture: fixture)
+        let testedUpdates = api.response(for: HTTPRequest(method: "GET", path: "/api/v1/site/tested-updates"))
+        let updateActivity = api.response(for: HTTPRequest(method: "GET", path: "/api/v1/site/update-activity"))
+
+        #expect(testedUpdates.statusCode == 200)
+        #expect(updateActivity.statusCode == 200)
+        #expect(testedUpdates.headers["Cache-Control"] == "no-store, max-age=0")
+        #expect(updateActivity.headers["Cache-Control"] == "no-store, max-age=0")
+
+        let testedObject = try JSONSerialization.jsonObject(with: testedUpdates.body) as? [String: Any]
+        let activityObject = try JSONSerialization.jsonObject(with: updateActivity.body) as? [String: Any]
+        #expect((testedObject?["updates"] as? [[String: Any]])?.count == 1)
+        #expect((activityObject?["entries"] as? [[String: Any]])?.count == 1)
     }
 
     @Test("rejects writes")
@@ -591,6 +612,45 @@ struct PummelchenServerCoreTests {
 
         try current.write(to: downloads.appendingPathComponent("current-release.json"), atomically: true, encoding: .utf8)
         try manifest.write(to: releaseDir.appendingPathComponent("client-sync-manifest.tsv"), atomically: true, encoding: .utf8)
+        try Data().write(to: downloads.appendingPathComponent("Pummelchen-Client-Installer.dmg"))
+        try """
+        {
+          "generated_at": "2026-06-12T17:04:13+00:00",
+          "total_entries": 1,
+          "cutoff_days": 7,
+          "updates": [
+            {
+              "id": "fixture",
+              "source": "pack_releases",
+              "title": "Fixture Update",
+              "event_type": "release_promotion",
+              "status": "active",
+              "tested_at": "2026-06-12T17:04:13+00:00",
+              "tested_at_display": "2026-06-12 17:04 UTC",
+              "old_file": null,
+              "new_file": "fixture.jar",
+              "source_url": "/downloads/releases/release_20260612_V6_modernarch-refresh/report.html",
+              "test_label": "fixture_test",
+              "notes": "Fixture notes",
+              "mod_id": null
+            }
+          ]
+        }
+        """.write(to: root.appendingPathComponent("site/public/tested-updates.json"), atomically: true, encoding: .utf8)
+        try """
+        {
+          "updated_at": "2026-06-12T17:04:13+00:00",
+          "entry_count": 1,
+          "entries": [
+            {
+              "timestamp": "2026-06-12 17:04:13",
+              "stage": "health",
+              "status": "ok",
+              "message": "Fixture update check passed"
+            }
+          ]
+        }
+        """.write(to: root.appendingPathComponent("site/public/update-activity.json"), atomically: true, encoding: .utf8)
         return (root, current, manifest)
     }
 
