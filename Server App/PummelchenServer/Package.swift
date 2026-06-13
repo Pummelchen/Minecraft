@@ -21,6 +21,10 @@ let package = Package(
             targets: ["PummelchenDuckDB"]
         ),
         .executable(
+            name: "pummelchen-headless-soak",
+            targets: ["PummelchenHeadlessSoak"]
+        ),
+        .executable(
             name: "pummelchen-contracts",
             targets: ["pummelchen-contracts"]
         )
@@ -47,6 +51,12 @@ let package = Package(
         ),
         .executableTarget(
             name: "PummelchenDuckDB",
+            dependencies: [
+                .product(name: "PummelchenCore", package: "PummelchenShared")
+            ]
+        ),
+        .executableTarget(
+            name: "PummelchenHeadlessSoak",
             dependencies: [
                 .product(name: "PummelchenCore", package: "PummelchenShared")
             ]

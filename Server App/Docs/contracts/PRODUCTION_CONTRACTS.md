@@ -135,6 +135,20 @@ Release health must verify:
 
 Every new `Pummelchen-Client-Installer.dmg` must be tested before release activation by installing from that exact DMG, repairing/installing the bundled Java runtime, installing NeoForge, syncing the full client pack, logging into the live Pummelchen Minecraft server, and staying connected for at least 5 minutes.
 
+The Swift runner that produces this proof is:
+
+```text
+pummelchen-headless-soak --dmg <Pummelchen-Client-Installer.dmg> --release-id <release_id> --server-address 91.99.176.243:25565 --headless-command '<blocking headless Minecraft launch command>'
+```
+
+The runner mounts the DMG, copies the macOS app into an isolated work directory, runs the bundled `pummelchen-client-sync` helper, verifies managed Java and NeoForge, executes the supplied headless Minecraft launch command with `PUMMELCHEN_SOAK_*` environment variables, scans the isolated logs/crash reports, and writes the release-gate report beside the DMG.
+
+The macOS DMG builder can invoke this automatically when these environment variables are set:
+
+- `PUMMELCHEN_RELEASE_ID`
+- `PUMMELCHEN_HEADLESS_COMMAND`
+- `PUMMELCHEN_REQUIRE_HEADLESS_SOAK=true` for production builds that must fail if the soak is not configured
+
 The release pipeline hard-requires this proof file next to the DMG:
 
 ```text
