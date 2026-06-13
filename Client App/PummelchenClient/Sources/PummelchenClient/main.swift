@@ -46,7 +46,10 @@ final class ClientStatusModel: ObservableObject, @unchecked Sendable {
             serverURL: url,
             minecraftDirectory: configuration.minecraftDirectory,
             pummelchenHome: configuration.pummelchenHome,
-            databaseURL: configuration.databaseURL
+            databaseURL: configuration.databaseURL,
+            retryPolicy: configuration.retryPolicy,
+            clientID: configuration.clientID,
+            clientAPIToken: configuration.clientAPIToken
         )
         startControlWatcher()
         refresh()
@@ -157,6 +160,7 @@ struct PummelchenStatusView: View {
                         .textSelection(.enabled)
                 }
                 statusSummary(snapshot)
+                connectionIndicators(snapshot)
                 defaultsTable(snapshot.defaultsHealth)
                 footer(snapshot)
             } else {
@@ -170,6 +174,40 @@ struct PummelchenStatusView: View {
             model.refresh()
             model.startControlWatcher()
         }
+    }
+
+    private func connectionIndicators(_ snapshot: ClientStatusSnapshot) -> some View {
+        HStack(spacing: 12) {
+            endpointIndicator(snapshot.nginx)
+            endpointIndicator(snapshot.webTransport)
+            Spacer()
+        }
+    }
+
+    private func endpointIndicator(_ status: EndpointConnectionStatus) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(color(for: status.state))
+                .frame(width: 10, height: 10)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(status.label)
+                        .font(.headline)
+                    Text(label(for: status.state))
+                        .font(.caption)
+                        .foregroundStyle(color(for: status.state))
+                }
+                Text(endpointDetail(status))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
+        .help(status.message)
     }
 
     private func statusSummary(_ snapshot: ClientStatusSnapshot) -> some View {
@@ -258,6 +296,29 @@ struct PummelchenStatusView: View {
         }
     }
 
+    private func label(for state: EndpointConnectionState) -> String {
+        switch state {
+        case .connected: "connected"
+        case .degraded: "degraded"
+        case .cannotConnect: "cannot connect"
+        }
+    }
+
+    private func endpointDetail(_ status: EndpointConnectionStatus) -> String {
+        if let latency = status.latencyMS {
+            return "\(latency) ms - \(status.message)"
+        }
+        return status.message
+    }
+
+    private func color(for state: EndpointConnectionState) -> Color {
+        switch state {
+        case .connected: .green
+        case .degraded: .orange
+        case .cannotConnect: .red
+        }
+    }
+
     private func color(for state: ClientSyncState) -> Color {
         switch state {
         case .synced: .green
@@ -330,6 +391,8 @@ struct PummelchenClientMain {
             print("server_release=\(snapshot.serverReleaseID ?? "offline")")
             print("client_release=\(snapshot.localReleaseID ?? "not_installed")")
             print("defaults_ok=\(snapshot.defaultsOK)")
+            print("nginx=\(snapshot.nginx.state.rawValue) latency_ms=\(snapshot.nginx.latencyMS.map(String.init) ?? "n/a")")
+            print("webtransport=\(snapshot.webTransport.state.rawValue) latency_ms=\(snapshot.webTransport.latencyMS.map(String.init) ?? "n/a")")
             if let error = snapshot.errorMessage {
                 print("error=\(error)")
             }

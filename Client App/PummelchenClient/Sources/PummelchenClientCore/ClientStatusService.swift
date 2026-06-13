@@ -11,9 +11,41 @@ public enum ClientSyncState: String, Codable, Equatable, Sendable {
     case repairNeeded = "repair_needed"
 }
 
+public enum EndpointConnectionState: String, Codable, Equatable, Sendable {
+    case connected
+    case degraded
+    case cannotConnect = "cannot_connect"
+}
+
+public struct EndpointConnectionStatus: Codable, Equatable, Sendable {
+    public let label: String
+    public let state: EndpointConnectionState
+    public let latencyMS: Int?
+    public let message: String
+    public let checkedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case label
+        case state
+        case latencyMS = "latency_ms"
+        case message
+        case checkedAt = "checked_at"
+    }
+
+    public init(label: String, state: EndpointConnectionState, latencyMS: Int?, message: String, checkedAt: String) {
+        self.label = label
+        self.state = state
+        self.latencyMS = latencyMS
+        self.message = message
+        self.checkedAt = checkedAt
+    }
+}
+
 public struct ClientStatusSnapshot: Codable, Equatable, Sendable {
     public let state: ClientSyncState
     public let serverURL: String
+    public let nginx: EndpointConnectionStatus
+    public let webTransport: EndpointConnectionStatus
     public let serverReleaseID: String?
     public let localReleaseID: String?
     public let checkedAt: String
@@ -29,6 +61,8 @@ public struct ClientStatusSnapshot: Codable, Equatable, Sendable {
     public init(
         state: ClientSyncState,
         serverURL: String,
+        nginx: EndpointConnectionStatus,
+        webTransport: EndpointConnectionStatus,
         serverReleaseID: String?,
         localReleaseID: String?,
         checkedAt: String,
@@ -39,6 +73,8 @@ public struct ClientStatusSnapshot: Codable, Equatable, Sendable {
     ) {
         self.state = state
         self.serverURL = serverURL
+        self.nginx = nginx
+        self.webTransport = webTransport
         self.serverReleaseID = serverReleaseID
         self.localReleaseID = localReleaseID
         self.checkedAt = checkedAt
@@ -55,19 +91,25 @@ public struct ClientStatusConfiguration: Sendable {
     public let pummelchenHome: URL
     public let databaseURL: URL
     public let retryPolicy: ClientHTTPRetryPolicy
+    public let clientID: String?
+    public let clientAPIToken: String?
 
     public init(
         serverURL: URL = URL(string: "https://pummelchen.91.99.176.243.nip.io")!,
         minecraftDirectory: URL,
         pummelchenHome: URL,
         databaseURL: URL,
-        retryPolicy: ClientHTTPRetryPolicy = ClientHTTPRetryPolicy()
+        retryPolicy: ClientHTTPRetryPolicy = ClientHTTPRetryPolicy(),
+        clientID: String? = nil,
+        clientAPIToken: String? = ProcessInfo.processInfo.environment["PUMMELCHEN_CLIENT_API_TOKEN"]
     ) {
         self.serverURL = serverURL
         self.minecraftDirectory = minecraftDirectory
         self.pummelchenHome = pummelchenHome
         self.databaseURL = databaseURL
         self.retryPolicy = retryPolicy
+        self.clientID = clientID
+        self.clientAPIToken = clientAPIToken
     }
 
     public static func productionDefault(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> ClientStatusConfiguration {
@@ -100,6 +142,8 @@ public struct ClientStatusService: Sendable {
             return ClientStatusSnapshot(
                 state: snapshot.state == .offline ? .offline : .repairNeeded,
                 serverURL: snapshot.serverURL,
+                nginx: snapshot.nginx,
+                webTransport: snapshot.webTransport,
                 serverReleaseID: snapshot.serverReleaseID,
                 localReleaseID: snapshot.localReleaseID,
                 checkedAt: snapshot.checkedAt,
@@ -116,9 +160,16 @@ public struct ClientStatusService: Sendable {
         let checkedAt = Self.isoNow()
         let localRelease = readInstalledRelease()
         let defaultsHealth = ClientDefaultsInspector.inspect(minecraftDirectory: configuration.minecraftDirectory)
+        let webTransportTask = Task {
+            await webTransportStatus(checkedAt: checkedAt)
+        }
 
         do {
-            let serverRelease = try await fetchCurrentRelease()
+            let releaseProbe = try await measure {
+                try await fetchCurrentRelease()
+            }
+            let serverRelease = releaseProbe.value
+            let nginx = endpointStatus(label: "nginx", latencyMS: releaseProbe.latencyMS, checkedAt: checkedAt)
             var state: ClientSyncState = localRelease == serverRelease.releaseID ? .synced : .updateAvailable
             var errorMessage: String?
             if state == .synced {
@@ -137,6 +188,8 @@ public struct ClientStatusService: Sendable {
             return ClientStatusSnapshot(
                 state: state,
                 serverURL: configuration.serverURL.absoluteString,
+                nginx: nginx,
+                webTransport: await webTransportTask.value,
                 serverReleaseID: serverRelease.releaseID,
                 localReleaseID: localRelease,
                 checkedAt: checkedAt,
@@ -146,9 +199,18 @@ public struct ClientStatusService: Sendable {
                 errorMessage: errorMessage
             )
         } catch {
+            let nginx = EndpointConnectionStatus(
+                label: "nginx",
+                state: .cannotConnect,
+                latencyMS: nil,
+                message: String(describing: error),
+                checkedAt: checkedAt
+            )
             return ClientStatusSnapshot(
                 state: .offline,
                 serverURL: configuration.serverURL.absoluteString,
+                nginx: nginx,
+                webTransport: await webTransportTask.value,
                 serverReleaseID: nil,
                 localReleaseID: localRelease,
                 checkedAt: checkedAt,
@@ -167,6 +229,78 @@ public struct ClientStatusService: Sendable {
         let release = try CurrentReleaseValidator.decode(data)
         try CurrentReleaseValidator.validate(release)
         return release
+    }
+
+    private func webTransportStatus(checkedAt: String) async -> EndpointConnectionStatus {
+        do {
+            let preflightProbe = try await measure {
+                try await fetchWebTransportPreflight()
+            }
+            guard preflightProbe.value.ready else {
+                return EndpointConnectionStatus(
+                    label: "WebTransport",
+                    state: .cannotConnect,
+                    latencyMS: preflightProbe.latencyMS,
+                    message: preflightProbe.value.unsupportedReason ?? "WebTransport preflight is not ready",
+                    checkedAt: checkedAt
+                )
+            }
+            guard let token = configuration.clientAPIToken, !token.isEmpty else {
+                return EndpointConnectionStatus(
+                    label: "WebTransport",
+                    state: .degraded,
+                    latencyMS: preflightProbe.latencyMS,
+                    message: "preflight ready, client API token unavailable",
+                    checkedAt: checkedAt
+                )
+            }
+            let sessionProbe = try await measure {
+                _ = try await ClientWebTransportControlChannel(
+                    preflight: preflightProbe.value,
+                    clientID: Self.validClientID(configuration.clientID),
+                    clientAPIToken: token
+                ).fetchEvents(limit: 1)
+            }
+            return endpointStatus(label: "WebTransport", latencyMS: sessionProbe.latencyMS, checkedAt: checkedAt)
+        } catch {
+            return EndpointConnectionStatus(
+                label: "WebTransport",
+                state: .cannotConnect,
+                latencyMS: nil,
+                message: String(describing: error),
+                checkedAt: checkedAt
+            )
+        }
+    }
+
+    private func fetchWebTransportPreflight() async throws -> WebTransportPreflightPayload {
+        let url = configuration.serverURL.appendingPathComponent("api/v1/transport/webtransport/preflight")
+        let probeHTTP = ClientHTTPClient(retryPolicy: ClientHTTPRetryPolicy(maxAttempts: 1, requestTimeoutSeconds: 5))
+        let data = try await probeHTTP.data(from: url)
+        return try JSONDecoder().decode(WebTransportPreflightPayload.self, from: data)
+    }
+
+    private func endpointStatus(label: String, latencyMS: Int, checkedAt: String) -> EndpointConnectionStatus {
+        let state: EndpointConnectionState
+        let message: String
+        if latencyMS < 1_000 {
+            state = .connected
+            message = "connected"
+        } else if latencyMS < 3_000 {
+            state = .degraded
+            message = "slow response"
+        } else {
+            state = .degraded
+            message = "very slow response"
+        }
+        return EndpointConnectionStatus(label: label, state: state, latencyMS: latencyMS, message: message, checkedAt: checkedAt)
+    }
+
+    private func measure<T: Sendable>(_ operation: () async throws -> T) async throws -> (value: T, latencyMS: Int) {
+        let start = Date()
+        let value = try await operation()
+        let elapsed = Date().timeIntervalSince(start)
+        return (value, max(0, Int((elapsed * 1_000).rounded())))
     }
 
     private func fetchManifest(for release: CurrentRelease) async throws -> ClientSyncManifest {
@@ -230,5 +364,13 @@ public struct ClientStatusService: Sendable {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.string(from: Date())
+    }
+
+    private static func validClientID(_ proposed: String?) -> String {
+        let candidate = proposed?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let allowed = candidate.filter { character in
+            character.isLetter || character.isNumber || character == "-" || character == "_" || character == "."
+        }
+        return allowed.isEmpty ? "pummelchen-client" : String(allowed.prefix(128))
     }
 }
