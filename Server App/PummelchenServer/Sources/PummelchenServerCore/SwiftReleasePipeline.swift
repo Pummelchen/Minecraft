@@ -611,7 +611,7 @@ public struct SwiftReleasePipeline: Sendable {
             "tested_at_display": Self.displayTimestamp(createdAt),
             "old_file": NSNull(),
             "new_file": NSNull(),
-            "source_url": "/downloads/releases/\(config.releaseID)/current-release.json",
+            "source_url": "/release.html?release=\(config.releaseID)",
             "test_label": config.releaseID,
             "notes": config.notes,
             "mod_id": NSNull()

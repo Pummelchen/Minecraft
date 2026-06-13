@@ -2196,6 +2196,17 @@ spiral_tower_village-0.0.3.jar   server reached done and survived idle/chunk exe
     }
     const liveUpdateTables = {};
     let testedUpdatesCache = { data: null, loadedAt: 0 };
+    function releaseDetailsURL(update) {
+      if (!update || update.event_type !== 'release_promotion') return '';
+      const label = String(update.test_label || '');
+      const title = String(update.title || '');
+      const sourceURL = String(update.source_url || '');
+      const match = label.match(/^release_[A-Za-z0-9_.-]+$/)
+        || title.match(/release_[A-Za-z0-9_.-]+/)
+        || sourceURL.match(/\/downloads\/releases\/(release_[A-Za-z0-9_.-]+)\//);
+      const releaseID = Array.isArray(match) ? (match[1] || match[0]) : '';
+      return releaseID ? `/release.html?release=${encodeURIComponent(releaseID)}` : '';
+    }
     function normalizeUpdateRows(payload) {
       const updates = payload && Array.isArray(payload.updates) ? payload.updates : [];
       return updates.map(update => {
@@ -2203,6 +2214,7 @@ spiral_tower_village-0.0.3.jar   server reached done and survived idle/chunk exe
         const filename = update.new_file || update.old_file || update.title || '';
         const versionMatch = filename.match(/(?:^|[-_ ])(v?\\d+(?:\\.\\d+){0,3}(?:[-+][A-Za-z0-9_.-]+)?)/);
         const version = update.version || (versionMatch ? versionMatch[1] : '');
+        const normalizedTitleURL = releaseDetailsURL(update) || (update.source_url && !String(update.source_url).startsWith('local://') ? update.source_url : '');
         const search = [
           updatedAt,
           update.title,
@@ -2217,7 +2229,7 @@ spiral_tower_village-0.0.3.jar   server reached done and survived idle/chunk exe
           updatedAt,
           updatedAtSort: update.tested_at || updatedAt,
           title: update.title || '',
-          titleUrl: update.source_url && !String(update.source_url).startsWith('local://') ? update.source_url : '',
+          titleUrl: normalizedTitleURL,
           type: update.event_type || '',
           source: update.source || '',
           filename,
