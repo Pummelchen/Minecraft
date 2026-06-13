@@ -415,6 +415,8 @@ struct PummelchenServerCoreTests {
         #expect(info.bidirectional)
         #expect(!info.downloadsAllowed)
         #expect(info.supportedEvents.contains("release_available"))
+        #expect(info.supportedEvents.contains("sync_required"))
+        #expect(info.supportedEvents.contains("defaults_changed"))
 
         let eventRequest = ControlEventCreateRequest(
             eventType: .releaseAvailable,
@@ -494,6 +496,55 @@ struct PummelchenServerCoreTests {
             headers: headers,
             body: try encoder.encode(downloadPayload)
         )).statusCode == 400)
+    }
+
+    @Test("phase 8 long poll delivers update events quickly over fallback")
+    func phase8LongPollDeliversUpdateEventsQuickly() async throws {
+        try requireDuckDB()
+        let fixture = try makeProjectFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let api = makeAPI(fixture: fixture, token: "phase8-token")
+        let clientID = "client-phase8-latency"
+        let headers = authHeaders(token: "phase8-token", clientID: clientID)
+
+        let server = APIRouterHTTPServer(api: api)
+        try server.start()
+        defer { server.stop() }
+
+        let client = ClientControlChannel(configuration: ClientControlChannelConfiguration(
+            serverURL: URL(string: "http://127.0.0.1:\(server.port)")!,
+            clientID: clientID,
+            clientAPIToken: "phase8-token"
+        ))
+
+        let started = Date()
+        let waiting = Task {
+            try await client.fetchMissedEvents(limit: 10, waitSeconds: 5)
+        }
+        try await Task.sleep(nanoseconds: 250_000_000)
+        let create = api.response(for: HTTPRequest(
+            method: "POST",
+            path: "/api/v1/control/events",
+            headers: headers,
+            body: try JSONEncoder().encode(ControlEventCreateRequest(
+                eventType: .syncRequired,
+                targetClientID: clientID,
+                releaseID: "release_20260613_V99_latency",
+                priority: "high",
+                title: "Sync required",
+                message: "Client should sync now.",
+                payload: ["reason": "latency_test"]
+            ))
+        ))
+        #expect(create.statusCode == 201)
+
+        let batch = try await waiting.value
+        let elapsed = Date().timeIntervalSince(started)
+        #expect(batch.events.count == 1)
+        #expect(batch.events.first?.eventType == .syncRequired)
+        #expect(batch.transport == "http3_edge_long_poll")
+        #expect(elapsed < 2.0)
     }
 
     @Test("phase 8 client reconnect fetches missed events through polling fallback")

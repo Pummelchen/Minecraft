@@ -37,6 +37,25 @@ Client read-only release downloads remain public static files served by nginx.
 
 HTTP/2 HTTPS polling is allowed only as an early private-build compatibility fallback for networks that block UDP/QUIC. It must use the same authentication headers for write/report APIs.
 
+## Control Events
+
+The Swift server publishes near-realtime control events through `/h3/v1/control` plus authenticated long-poll fallback at `/api/v1/control/events`.
+
+Events that require an immediate client sync:
+
+- `release_available`
+- `sync_required`
+- `defaults_changed`
+- `client_sync_requested`
+
+Informational events that do not trigger downloads by themselves:
+
+- `server_message`
+- `server_restart_notice`
+- `health_update`
+
+When a sync event is received, the client fetches the current release metadata, verifies the manifest, downloads only missing or corrupt files, records the negotiated network protocol when URLSession exposes it, reports the result to the server, and acknowledges the event.
+
 ## Rotation And Revocation
 
 - Server can mark a client token as revoked.

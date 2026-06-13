@@ -1,0 +1,121 @@
+import Foundation
+import PummelchenCore
+
+public struct ClientControlWatcherResult: Equatable, Sendable {
+    public let cycles: Int
+    public let eventsHandled: Int
+    public let syncsRun: Int
+    public let lastEventID: String?
+}
+
+public struct ClientControlWatcher: Sendable {
+    public let syncConfiguration: ClientSyncConfiguration
+    public let waitSeconds: Int
+    public let idleDelayNanoseconds: UInt64
+    public let errorDelayNanoseconds: UInt64
+
+    public init(
+        syncConfiguration: ClientSyncConfiguration,
+        waitSeconds: Int = 25,
+        idleDelayNanoseconds: UInt64 = 700_000_000,
+        errorDelayNanoseconds: UInt64 = 3_000_000_000
+    ) {
+        self.syncConfiguration = syncConfiguration
+        self.waitSeconds = min(max(waitSeconds, 1), 30)
+        self.idleDelayNanoseconds = idleDelayNanoseconds
+        self.errorDelayNanoseconds = errorDelayNanoseconds
+    }
+
+    public func run(maxCycles: Int? = nil, log: (@Sendable (String) -> Void)? = nil) async throws -> ClientControlWatcherResult {
+        guard let token = syncConfiguration.clientAPIToken, !token.isEmpty else {
+            throw ContractValidationError.invalid("client API token is required for the control channel")
+        }
+
+        let clientID = Self.validClientID(syncConfiguration.clientID ?? Host.current().localizedName)
+        let channel = ClientControlChannel(configuration: ClientControlChannelConfiguration(
+            serverURL: syncConfiguration.serverURL,
+            clientID: clientID,
+            clientAPIToken: token
+        ))
+        let store = ClientStatusStore(databaseURL: syncConfiguration.databaseURL)
+
+        var cycles = 0
+        var handled = 0
+        var syncs = 0
+        var afterEventID: String?
+
+        while !Task.isCancelled {
+            if let maxCycles, cycles >= maxCycles {
+                break
+            }
+            cycles += 1
+
+            do {
+                let batch = try await channel.reconnectWithFallback(afterEventID: afterEventID)
+                if let protocolName = await channel.lastNegotiatedProtocol() {
+                    try? store.recordClientState(key: "last_control_network_protocol", value: protocolName)
+                }
+
+                if batch.events.isEmpty {
+                    try await Task.sleep(nanoseconds: idleDelayNanoseconds)
+                    continue
+                }
+
+                for event in batch.events {
+                    handled += 1
+                    afterEventID = event.eventID
+                    log?("control event \(event.eventType.rawValue): \(event.title)")
+                    try? store.recordClientState(key: "last_control_event_id", value: event.eventID)
+                    try? store.recordClientState(key: "last_control_event_type", value: event.eventType.rawValue)
+
+                    if Self.requiresImmediateSync(event) {
+                        syncs += 1
+                        try? store.recordClientState(key: "last_control_sync_trigger", value: event.eventType.rawValue)
+                        do {
+                            let result = try await ClientSyncEngine(configuration: syncConfiguration).sync(force: true)
+                            log?("sync finished for \(event.eventID): \(result.message)")
+                        } catch {
+                            log?("sync failed for \(event.eventID): \(error)")
+                        }
+                    }
+
+                    try await channel.acknowledge(event)
+                }
+            } catch {
+                log?("control channel error: \(error)")
+                try await Task.sleep(nanoseconds: errorDelayNanoseconds)
+            }
+        }
+
+        return ClientControlWatcherResult(
+            cycles: cycles,
+            eventsHandled: handled,
+            syncsRun: syncs,
+            lastEventID: afterEventID
+        )
+    }
+
+    public static func requiresImmediateSync(_ event: ControlEvent) -> Bool {
+        switch event.eventType {
+        case .releaseAvailable, .syncRequired, .defaultsChanged, .clientSyncRequested:
+            return true
+        case .serverMessage, .serverRestartNotice, .healthUpdate:
+            return false
+        }
+    }
+
+    private static func validClientID(_ proposed: String?) -> String {
+        let raw = proposed?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let sanitized = raw.map { character -> Character in
+            if character.isLetter || character.isNumber || character == "." || character == "_" || character == ":" || character == "@" || character == "-" {
+                return character
+            }
+            return "-"
+        }
+        let value = String(sanitized).trimmingCharacters(in: CharacterSet(charactersIn: ".:_@-"))
+        if value.count >= 8 && value.count <= 128 {
+            return value
+        }
+        return "pummelchen-client"
+    }
+}

@@ -251,6 +251,8 @@ public struct ClientWriteAck: Codable, Equatable, Sendable {
 
 public enum ControlEventType: String, Codable, CaseIterable, Sendable {
     case releaseAvailable = "release_available"
+    case syncRequired = "sync_required"
+    case defaultsChanged = "defaults_changed"
     case serverMessage = "server_message"
     case serverRestartNotice = "server_restart_notice"
     case clientSyncRequested = "client_sync_requested"

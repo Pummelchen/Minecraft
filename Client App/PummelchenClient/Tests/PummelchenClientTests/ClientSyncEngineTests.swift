@@ -5,6 +5,28 @@ import Testing
 
 @Suite("Swift client sync engine")
 struct ClientSyncEngineTests {
+    @Test("control watcher syncs only release, sync, defaults, and explicit client sync events")
+    func controlWatcherSyncEventClassification() {
+        let syncEvents: [ControlEventType] = [
+            .releaseAvailable,
+            .syncRequired,
+            .defaultsChanged,
+            .clientSyncRequested
+        ]
+        let passiveEvents: [ControlEventType] = [
+            .serverMessage,
+            .serverRestartNotice,
+            .healthUpdate
+        ]
+
+        for eventType in syncEvents {
+            #expect(ClientControlWatcher.requiresImmediateSync(event(type: eventType)))
+        }
+        for eventType in passiveEvents {
+            #expect(!ClientControlWatcher.requiresImmediateSync(event(type: eventType)))
+        }
+    }
+
     @Test("sync installs files atomically, quarantines unmanaged files, applies defaults, and records history")
     func syncInstallsAndRecordsHistory() async throws {
         #if os(Linux)
@@ -111,6 +133,19 @@ struct ClientSyncEngineTests {
           "notes": "test"
         }
         """
+    }
+
+    private func event(type: ControlEventType) -> ControlEvent {
+        ControlEvent(
+            eventID: UUID().uuidString,
+            eventType: type,
+            createdAt: "2026-06-13T00:00:00+00:00",
+            targetClientID: nil,
+            releaseID: nil,
+            priority: "normal",
+            title: "Test event",
+            message: "Test event"
+        )
     }
 }
 

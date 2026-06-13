@@ -18,17 +18,16 @@ public struct ClientControlChannelConfiguration: Sendable {
 
 public struct ClientControlChannel: Sendable {
     public let configuration: ClientControlChannelConfiguration
+    private let http: ClientHTTPClient
 
     public init(configuration: ClientControlChannelConfiguration) {
         self.configuration = configuration
+        self.http = ClientHTTPClient(retryPolicy: ClientHTTPRetryPolicy(maxAttempts: 3, requestTimeoutSeconds: 40))
     }
 
     public func controlInfo() async throws -> ControlChannelInfo {
         let url = configuration.serverURL.appendingPathComponent("h3/v1/control")
-        let (data, response) = try await URLSession.shared.data(from: url)
-        if let http = response as? HTTPURLResponse {
-            try ContractValidation.require((200..<300).contains(http.statusCode), "control info failed with HTTP \(http.statusCode)")
-        }
+        let data = try await http.data(from: url)
         return try JSONDecoder().decode(ControlChannelInfo.self, from: data)
     }
 
@@ -49,10 +48,7 @@ public struct ClientControlChannel: Sendable {
         request.httpMethod = "GET"
         request.setValue("Bearer \(configuration.clientAPIToken)", forHTTPHeaderField: "Authorization")
         request.setValue(configuration.clientID, forHTTPHeaderField: "X-Pummelchen-Client-ID")
-        let (data, response) = try await URLSession.shared.data(for: request)
-        if let http = response as? HTTPURLResponse {
-            try ContractValidation.require((200..<300).contains(http.statusCode), "control fallback fetch failed with HTTP \(http.statusCode)")
-        }
+        let data = try await http.send(request)
         return try JSONDecoder().decode(ControlEventBatch.self, from: data)
     }
 
@@ -64,10 +60,11 @@ public struct ClientControlChannel: Sendable {
         request.setValue(configuration.clientID, forHTTPHeaderField: "X-Pummelchen-Client-ID")
         request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(ack)
-        let (_, response) = try await URLSession.shared.data(for: request)
-        if let http = response as? HTTPURLResponse {
-            try ContractValidation.require((200..<300).contains(http.statusCode), "control ack failed with HTTP \(http.statusCode)")
-        }
+        _ = try await http.send(request)
+    }
+
+    public func lastNegotiatedProtocol() async -> String? {
+        await http.lastNegotiatedProtocol()
     }
 
     public func reconnectWithFallback(afterEventID: String? = nil) async throws -> ControlEventBatch {

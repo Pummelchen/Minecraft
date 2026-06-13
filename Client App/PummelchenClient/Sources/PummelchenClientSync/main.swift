@@ -11,6 +11,7 @@ enum ClientSyncCLIError: Error, CustomStringConvertible {
             return """
             usage:
               pummelchen-client-sync sync [--force] [--server-url <url>] [--minecraft-dir <path>] [--pummelchen-home <path>] [--db <path>] [--client-id <id>] [--client-api-token <token>] [--allow-while-running] [--no-report] [--skip-java-repair]
+              pummelchen-client-sync watch [--server-url <url>] [--minecraft-dir <path>] [--pummelchen-home <path>] [--db <path>] [--client-id <id>] [--client-api-token <token>] [--allow-while-running] [--no-report] [--skip-java-repair]
             """
         case .missingValue(let option):
             return "missing value for \(option)"
@@ -76,18 +77,27 @@ struct PummelchenClientSyncMain {
     static func main() async {
         do {
             let args = try Args(CommandLine.arguments)
-            guard args.command == "sync" else {
+            guard ["sync", "watch"].contains(args.command) else {
                 throw ClientSyncCLIError.usage
             }
-            let engine = ClientSyncEngine(configuration: try config(from: args))
-            let result = try await engine.sync(force: args.flags.contains("--force"))
-            print("Pummelchen Swift Sync")
-            print("Release: \(result.targetReleaseID)")
-            print("Manifest: \(result.manifestEntries) file(s)")
-            print("Verified: \(result.filesVerified)")
-            print("Downloaded: \(result.filesDownloaded)")
-            print("Quarantined: \(result.filesQuarantined)")
-            print("Status: \(result.message)")
+            let configuration = try config(from: args)
+            if args.command == "watch" {
+                print("Pummelchen Swift Control Watcher")
+                print("Server: \(configuration.serverURL.absoluteString)")
+                _ = try await ClientControlWatcher(syncConfiguration: configuration).run { message in
+                    print(message)
+                }
+            } else {
+                let engine = ClientSyncEngine(configuration: configuration)
+                let result = try await engine.sync(force: args.flags.contains("--force"))
+                print("Pummelchen Swift Sync")
+                print("Release: \(result.targetReleaseID)")
+                print("Manifest: \(result.manifestEntries) file(s)")
+                print("Verified: \(result.filesVerified)")
+                print("Downloaded: \(result.filesDownloaded)")
+                print("Quarantined: \(result.filesQuarantined)")
+                print("Status: \(result.message)")
+            }
         } catch {
             FileHandle.standardError.write(Data("pummelchen-client-sync failed: \(error)\n".utf8))
             exit(1)

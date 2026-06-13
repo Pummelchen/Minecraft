@@ -193,34 +193,48 @@ public struct ControlEventStore: Sendable {
     }
 
     private func execute(_ sql: String) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: try Self.duckDBExecutablePath())
-        process.arguments = [databaseURL.path, "-c", sql]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try process.run()
-        process.waitUntilExit()
-        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        guard process.terminationStatus == 0 else {
-            throw ContractValidationError.invalid("duckdb control write failed: \(output)")
-        }
+        _ = try runDuckDB(arguments: [databaseURL.path, "-c", sql], errorPrefix: "duckdb control write failed")
     }
 
     private func queryCSV(_ sql: String) throws -> String {
+        try runDuckDB(arguments: [databaseURL.path, "-csv", "-c", sql], errorPrefix: "duckdb control query failed")
+    }
+
+    private func runDuckDB(arguments: [String], errorPrefix: String) throws -> String {
+        var lastOutput = ""
+        for attempt in 1...5 {
+            let output = try runDuckDBOnce(arguments: arguments)
+            if output.status == 0 {
+                return output.text
+            }
+            lastOutput = output.text
+            guard attempt < 5, Self.isTransientDuckDBFailure(output.text) else {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.08 * Double(attempt))
+        }
+        throw ContractValidationError.invalid("\(errorPrefix): \(lastOutput)")
+    }
+
+    private func runDuckDBOnce(arguments: [String]) throws -> (status: Int32, text: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: try Self.duckDBExecutablePath())
-        process.arguments = [databaseURL.path, "-csv", "-c", sql]
+        process.arguments = arguments
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
         try process.run()
         process.waitUntilExit()
         let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        guard process.terminationStatus == 0 else {
-            throw ContractValidationError.invalid("duckdb control query failed: \(output)")
-        }
-        return output
+        return (process.terminationStatus, output)
+    }
+
+    private static func isTransientDuckDBFailure(_ output: String) -> Bool {
+        let lower = output.lowercased()
+        return lower.contains("lock")
+            || lower.contains("conflict")
+            || lower.contains("busy")
+            || lower.contains("could not set lock")
     }
 
     private static func duckDBExecutablePath() throws -> String {

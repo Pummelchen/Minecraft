@@ -212,6 +212,11 @@ public struct ClientStatusStore: Sendable {
         try execute(statements.joined(separator: "\n"))
     }
 
+    public func recordClientState(key: String, value: String) throws {
+        try initialize()
+        try execute(upsertState(key, value, now: Self.duckTimestamp(Date())))
+    }
+
     private func upsertState(_ key: String, _ value: String, now: String) -> String {
         """
         INSERT INTO client_state(key, value, updated_at)

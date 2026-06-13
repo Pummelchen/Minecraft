@@ -118,6 +118,7 @@ public struct ClientSyncEngine: Sendable {
             try writeCurrentManifest(manifest)
             let inventory = try installedInventory(manifest: manifest)
             let defaultsHealth = ClientDefaultsInspector.inspect(minecraftDirectory: configuration.minecraftDirectory, defaults: defaults)
+            let networkProtocol = await http.lastNegotiatedProtocol()
 
             let finished = Date()
             let downloaded = syncCounts.downloaded
@@ -144,8 +145,11 @@ public struct ClientSyncEngine: Sendable {
                 defaultsHealth: defaultsHealth,
                 installedFiles: inventory
             )
+            if let networkProtocol {
+                try? store.recordClientState(key: "last_network_protocol", value: networkProtocol)
+            }
             if configuration.reportToServer {
-                await report(result: result, changedFiles: changed, inventory: inventory, defaultsHealth: defaultsHealth)
+                await report(result: result, changedFiles: changed, inventory: inventory, defaultsHealth: defaultsHealth, networkProtocol: networkProtocol)
             }
             return result
         } catch {
@@ -164,8 +168,11 @@ public struct ClientSyncEngine: Sendable {
                 message: String(describing: error)
             )
             try? store.record(syncResult: failed, defaultsHealth: defaultsHealth)
+            if let networkProtocol = await http.lastNegotiatedProtocol() {
+                try? store.recordClientState(key: "last_network_protocol", value: networkProtocol)
+            }
             if configuration.reportToServer {
-                await report(result: failed, changedFiles: 0, inventory: [], defaultsHealth: defaultsHealth)
+                await report(result: failed, changedFiles: 0, inventory: [], defaultsHealth: defaultsHealth, networkProtocol: await http.lastNegotiatedProtocol())
             }
             throw error
         }
@@ -382,7 +389,8 @@ public struct ClientSyncEngine: Sendable {
         result: ClientSyncResult,
         changedFiles: Int,
         inventory: [FileInventoryEntry],
-        defaultsHealth: [ClientDefaultHealthRow]
+        defaultsHealth: [ClientDefaultHealthRow],
+        networkProtocol: String?
     ) async {
         guard let token = configuration.clientAPIToken, !token.isEmpty else {
             return
@@ -408,7 +416,7 @@ public struct ClientSyncEngine: Sendable {
             manifestEntries: result.manifestEntries,
             changedFiles: changedFiles,
             lastError: result.result == "ok" ? nil : result.message,
-            message: result.message,
+            message: networkProtocol.map { "\(result.message) transport=\($0)" } ?? result.message,
             osSummary: ProcessInfo.processInfo.operatingSystemVersionString,
             arch: Self.machineArchitecture()
         )

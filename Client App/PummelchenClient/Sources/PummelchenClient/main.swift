@@ -4,18 +4,24 @@ import PummelchenClientCore
 import SwiftUI
 
 @MainActor
-final class ClientStatusModel: ObservableObject {
+final class ClientStatusModel: ObservableObject, @unchecked Sendable {
     @Published var serverURL: String
     @Published var snapshot: ClientStatusSnapshot?
     @Published var isRefreshing = false
     @Published var isSyncing = false
     @Published var syncMessage: String?
+    @Published var controlMessage: String?
 
     private var configuration: ClientStatusConfiguration
+    private var controlTask: Task<Void, Never>?
 
     init(configuration: ClientStatusConfiguration) {
         self.configuration = configuration
         self.serverURL = configuration.serverURL.absoluteString
+    }
+
+    deinit {
+        controlTask?.cancel()
     }
 
     func refresh() {
@@ -42,6 +48,7 @@ final class ClientStatusModel: ObservableObject {
             pummelchenHome: configuration.pummelchenHome,
             databaseURL: configuration.databaseURL
         )
+        startControlWatcher()
         refresh()
     }
 
@@ -49,12 +56,7 @@ final class ClientStatusModel: ObservableObject {
         guard !isSyncing else { return }
         isSyncing = true
         syncMessage = nil
-        let syncConfiguration = ClientSyncConfiguration(
-            serverURL: configuration.serverURL,
-            minecraftDirectory: configuration.minecraftDirectory,
-            pummelchenHome: configuration.pummelchenHome,
-            databaseURL: configuration.databaseURL
-        )
+        let syncConfiguration = makeSyncConfiguration()
         Task {
             do {
                 let result = try await ClientSyncEngine(configuration: syncConfiguration).sync(force: true)
@@ -71,6 +73,40 @@ final class ClientStatusModel: ObservableObject {
                 }
             }
         }
+    }
+
+    func startControlWatcher() {
+        controlTask?.cancel()
+        let syncConfiguration = makeSyncConfiguration()
+        guard let token = syncConfiguration.clientAPIToken, !token.isEmpty else {
+            controlMessage = "Control channel waiting for client credentials."
+            return
+        }
+        controlMessage = "Control channel connected."
+        let model = self
+        controlTask = Task {
+            do {
+                _ = try await ClientControlWatcher(syncConfiguration: syncConfiguration).run { message in
+                    Task { @MainActor in
+                        model.controlMessage = message
+                        model.refresh()
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    model.controlMessage = "Control channel stopped: \(error)"
+                }
+            }
+        }
+    }
+
+    private func makeSyncConfiguration() -> ClientSyncConfiguration {
+        ClientSyncConfiguration(
+            serverURL: configuration.serverURL,
+            minecraftDirectory: configuration.minecraftDirectory,
+            pummelchenHome: configuration.pummelchenHome,
+            databaseURL: configuration.databaseURL
+        )
     }
 }
 
@@ -114,6 +150,12 @@ struct PummelchenStatusView: View {
                         .foregroundStyle(syncMessage.hasPrefix("Sync failed") ? .red : .secondary)
                         .textSelection(.enabled)
                 }
+                if let controlMessage = model.controlMessage {
+                    Text(controlMessage)
+                        .font(.callout)
+                        .foregroundStyle(controlMessage.hasPrefix("Control channel stopped") ? .red : .secondary)
+                        .textSelection(.enabled)
+                }
                 statusSummary(snapshot)
                 defaultsTable(snapshot.defaultsHealth)
                 footer(snapshot)
@@ -126,6 +168,7 @@ struct PummelchenStatusView: View {
         .frame(minWidth: 820, minHeight: 560)
         .onAppear {
             model.refresh()
+            model.startControlWatcher()
         }
     }
 
