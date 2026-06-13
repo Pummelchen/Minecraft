@@ -352,9 +352,10 @@ struct PummelchenServerCoreTests {
 
         try writeArtifact(name: SwiftReleasePipeline.clientZipName, content: "zip", serverDir: serverDir)
         try writeArtifact(name: SwiftReleasePipeline.mrpackName, content: "mrpack", serverDir: serverDir)
-        try writeArtifact(name: SwiftReleasePipeline.dmgName, content: "dmg", serverDir: serverDir)
+        let dmgSHA = try writeArtifact(name: SwiftReleasePipeline.dmgName, content: "dmg", serverDir: serverDir)
 
         let releaseID = "release_20260613_V77_swift_phase7_test"
+        try writeDMGHeadlessLiveSoakReport(releaseID: releaseID, dmgSHA: dmgSHA, serverDir: serverDir)
         let pipeline = SwiftReleasePipeline(config: SwiftReleasePipelineConfig(
             projectRoot: root,
             serverDir: serverDir,
@@ -377,8 +378,10 @@ struct PummelchenServerCoreTests {
         #expect(current.releaseID == releaseID)
         #expect(FileManager.default.fileExists(atPath: publicDownloads.appendingPathComponent("releases/\(releaseID)/\(SwiftReleasePipeline.dmgName)").path))
         #expect(FileManager.default.fileExists(atPath: publicDownloads.appendingPathComponent("releases/\(releaseID)/\(SwiftReleasePipeline.dmgName).sha256").path))
+        #expect(FileManager.default.fileExists(atPath: publicDownloads.appendingPathComponent("releases/\(releaseID)/\(SwiftReleasePipeline.dmgHeadlessLiveSoakReportName)").path))
         #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: publicDownloads.appendingPathComponent(SwiftReleasePipeline.dmgName).path)) == "releases/\(releaseID)/\(SwiftReleasePipeline.dmgName)")
         #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: publicDownloads.appendingPathComponent(SwiftReleasePipeline.clientZipName).path)) == "releases/\(releaseID)/\(SwiftReleasePipeline.clientZipName)")
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: publicDownloads.appendingPathComponent(SwiftReleasePipeline.dmgHeadlessLiveSoakReportName).path)) == "releases/\(releaseID)/\(SwiftReleasePipeline.dmgHeadlessLiveSoakReportName)")
         #expect(FileManager.default.fileExists(atPath: publicDownloads.appendingPathComponent("releases/\(releaseID)/data/tested-updates.json").path))
         let testedUpdates = try String(contentsOf: publicDownloads.appendingPathComponent("releases/\(releaseID)/data/tested-updates.json"), encoding: .utf8)
         #expect(testedUpdates.contains("pummelchen-swift-release-pipeline"))
@@ -411,11 +414,49 @@ struct PummelchenServerCoreTests {
         #expect(FileManager.default.fileExists(atPath: minecraft.appendingPathComponent("shaderpacks/BSL_v10.1.3.zip.txt").path))
 
         let healthRows = try duckDBScalar(database: root.appendingPathComponent("phase7.duckdb"), sql: "SELECT COUNT(*) FROM release.release_health_results WHERE release_id = '\(releaseID)';")
-        #expect(healthRows == "2")
+        #expect(healthRows == "3")
+        let headlessRows = try duckDBScalar(database: root.appendingPathComponent("phase7.duckdb"), sql: "SELECT COUNT(*) FROM core.headless_client_runs WHERE release_id = '\(releaseID)' AND status = 'passed' AND duration_seconds >= 300;")
+        #expect(headlessRows == "1")
         let restartRows = try duckDBScalar(database: root.appendingPathComponent("phase7.duckdb"), sql: "SELECT COUNT(*) FROM release.release_events WHERE release_id = '\(releaseID)' AND event_type = 'restart' AND status = 'skipped';")
         #expect(restartRows == "1")
         let activeRows = try duckDBScalar(database: root.appendingPathComponent("phase7.duckdb"), sql: "SELECT active FROM release.pack_releases WHERE release_id = '\(releaseID)';")
         #expect(activeRows == "true")
+    }
+
+    @Test("phase 7 rejects DMG releases without a headless live server soak")
+    func phase7RejectsDMGWithoutHeadlessLiveSoak() throws {
+        try requireDuckDB()
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pummelchen-phase7-dmg-gate-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let serverDir = root.appendingPathComponent("server", isDirectory: true)
+        let releaseRoot = root.appendingPathComponent("releases", isDirectory: true)
+        let publicDownloads = root.appendingPathComponent("site/downloads", isDirectory: true)
+        let clientPackage = serverDir.appendingPathComponent("client-package", isDirectory: true)
+        try FileManager.default.createDirectory(at: clientPackage.appendingPathComponent("mods"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: serverDir, withIntermediateDirectories: true)
+        try "client mod".write(to: clientPackage.appendingPathComponent("mods/example-client.jar"), atomically: true, encoding: .utf8)
+        try writeArtifact(name: SwiftReleasePipeline.clientZipName, content: "zip", serverDir: serverDir)
+        try writeArtifact(name: SwiftReleasePipeline.mrpackName, content: "mrpack", serverDir: serverDir)
+        try writeArtifact(name: SwiftReleasePipeline.dmgName, content: "dmg", serverDir: serverDir)
+
+        let pipeline = SwiftReleasePipeline(config: SwiftReleasePipelineConfig(
+            projectRoot: root,
+            serverDir: serverDir,
+            releaseRoot: releaseRoot,
+            publicDownloads: publicDownloads,
+            databaseURL: root.appendingPathComponent("phase7.duckdb"),
+            releaseID: "release_20260613_V78_missing_dmg_soak",
+            buildClientZipIfMissing: false
+        ))
+
+        do {
+            _ = try pipeline.createRelease()
+            Issue.record("DMG release should require \(SwiftReleasePipeline.dmgHeadlessLiveSoakReportName)")
+        } catch SwiftReleasePipelineError.missingRequiredPath(let path) {
+            #expect(path.hasSuffix(SwiftReleasePipeline.dmgHeadlessLiveSoakReportName))
+        }
     }
 
     @Test("mod update scanner detects provider pages and Cloudflare blocks")
@@ -1067,11 +1108,41 @@ struct PummelchenServerCoreTests {
         }
     }
 
-    private func writeArtifact(name: String, content: String, serverDir: URL) throws {
+    @discardableResult
+    private func writeArtifact(name: String, content: String, serverDir: URL) throws -> String {
         let file = serverDir.appendingPathComponent(name)
         try content.write(to: file, atomically: true, encoding: .utf8)
         let hash = try SHA256Hasher.hashFile(at: file)
         try "\(hash)  \(name)\n".write(to: serverDir.appendingPathComponent("\(name).sha256"), atomically: true, encoding: .utf8)
+        return hash
+    }
+
+    private func writeDMGHeadlessLiveSoakReport(releaseID: String, dmgSHA: String, serverDir: URL) throws {
+        try """
+        {
+          "release_id": "\(releaseID)",
+          "dmg_sha256": "\(dmgSHA)",
+          "server_address": "91.99.176.243:25565",
+          "started_at": "2026-06-13T12:00:00Z",
+          "completed_at": "2026-06-13T12:05:05Z",
+          "duration_seconds": 305,
+          "status": "passed",
+          "installed_from_dmg": true,
+          "java_ok": true,
+          "neoforge_ok": true,
+          "sync_ok": true,
+          "login_ok": true,
+          "stayed_connected": true,
+          "crash_report_count": 0,
+          "fatal_log_count": 0,
+          "renderer_summary": "headless",
+          "notes": "test fixture"
+        }
+        """.write(
+            to: serverDir.appendingPathComponent(SwiftReleasePipeline.dmgHeadlessLiveSoakReportName),
+            atomically: true,
+            encoding: .utf8
+        )
     }
 
     private func duckDBScalar(database: URL, sql: String) throws -> String {

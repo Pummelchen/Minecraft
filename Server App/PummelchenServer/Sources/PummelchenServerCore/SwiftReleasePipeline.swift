@@ -91,6 +91,8 @@ public struct SwiftReleasePipeline: Sendable {
     public static let clientZipName = "minecraft_26.1.2_client_macos_apple_silicon.zip"
     public static let mrpackName = "pummelchen-server-26.1.2.mrpack"
     public static let dmgName = "Pummelchen-Client-Installer.dmg"
+    public static let dmgHeadlessLiveSoakReportName = "Pummelchen-Client-Installer.dmg.headless-live-soak.json"
+    public static let requiredDMGLiveSoakSeconds: Double = 300
 
     public let config: SwiftReleasePipelineConfig
     private var fileManager: FileManager { FileManager.default }
@@ -138,7 +140,7 @@ public struct SwiftReleasePipeline: Sendable {
         let artifacts = releaseDir.appendingPathComponent("artifacts", isDirectory: true)
         try fileManager.createDirectory(at: artifacts, withIntermediateDirectories: true)
         try ensureClientZipAvailable(sourcePackage: releaseDir.appendingPathComponent("client-package", isDirectory: true))
-        for name in [Self.clientZipName, "\(Self.clientZipName).sha256", Self.mrpackName, Self.dmgName, "\(Self.dmgName).sha256"] {
+        for name in [Self.clientZipName, "\(Self.clientZipName).sha256", Self.mrpackName, Self.dmgName, "\(Self.dmgName).sha256", Self.dmgHeadlessLiveSoakReportName] {
             try copyIfExists(config.serverDir.appendingPathComponent(name), to: artifacts.appendingPathComponent(name))
         }
         let clientZip = artifacts.appendingPathComponent(Self.clientZipName)
@@ -149,6 +151,7 @@ public struct SwiftReleasePipeline: Sendable {
         let mrpackSHA = try SHA256Hasher.hashFile(at: mrpack)
         let dmg = artifacts.appendingPathComponent(Self.dmgName)
         let dmgSHA = fileManager.fileExists(atPath: dmg.path) ? try SHA256Hasher.hashFile(at: dmg) : nil
+        let dmgSoakReport = try validateDMGHeadlessLiveSoakReportIfNeeded(artifacts: artifacts, dmgSHA: dmgSHA)
         try writeSHA256Sidecar(for: clientZip, hash: clientZipSHA)
         try writeSHA256Sidecar(for: mrpack, hash: mrpackSHA)
         if let dmgSHA {
@@ -173,7 +176,8 @@ public struct SwiftReleasePipeline: Sendable {
             clientManifestSHA: clientManifestSHA,
             clientZipSHA: clientZipSHA,
             mrpackSHA: mrpackSHA,
-            dmgSHA: dmgSHA
+            dmgSHA: dmgSHA,
+            dmgSoakReport: dmgSoakReport
         )
         if config.activate {
             try activateRelease(releaseDir: releaseDir, createdAt: createdAt, clientZipSHA: clientZipSHA, mrpackSHA: mrpackSHA)
@@ -207,6 +211,14 @@ public struct SwiftReleasePipeline: Sendable {
         let currentRelease = try CurrentReleaseValidator.decode(try Data(contentsOf: current))
         try CurrentReleaseValidator.validate(currentRelease)
         try ContractValidation.require(currentRelease.releaseID == config.releaseID, "current release payload points at wrong release")
+        let dmg = releaseDir.appendingPathComponent("artifacts/\(Self.dmgName)")
+        if fileManager.fileExists(atPath: dmg.path) {
+            let dmgSHA = try SHA256Hasher.hashFile(at: dmg)
+            _ = try validateDMGHeadlessLiveSoakReportIfNeeded(
+                artifacts: releaseDir.appendingPathComponent("artifacts", isDirectory: true),
+                dmgSHA: dmgSHA
+            )
+        }
     }
 
     private func activateRelease(releaseDir: URL, createdAt: String, clientZipSHA: String, mrpackSHA: String) throws {
@@ -258,7 +270,7 @@ public struct SwiftReleasePipeline: Sendable {
             }
         }
         try (rows.joined(separator: "\n") + "\n").write(to: publicDir.appendingPathComponent("client-sync-manifest.tsv"), atomically: true, encoding: .utf8)
-        for name in [Self.clientZipName, "\(Self.clientZipName).sha256", Self.mrpackName, Self.dmgName, "\(Self.dmgName).sha256"] {
+        for name in [Self.clientZipName, "\(Self.clientZipName).sha256", Self.mrpackName, Self.dmgName, "\(Self.dmgName).sha256", Self.dmgHeadlessLiveSoakReportName] {
             try copyIfExists(releaseDir.appendingPathComponent("artifacts/\(name)"), to: publicDir.appendingPathComponent(name))
         }
         let clientZipSHA = try SHA256Hasher.hashFile(at: releaseDir.appendingPathComponent("artifacts/\(Self.clientZipName)"))
@@ -293,7 +305,8 @@ public struct SwiftReleasePipeline: Sendable {
         clientManifestSHA: String,
         clientZipSHA: String,
         mrpackSHA: String,
-        dmgSHA: String?
+        dmgSHA: String?,
+        dmgSoakReport: DMGHeadlessLiveSoakReport?
     ) throws {
         try initializeReleaseDB()
         let previous = try activeReleaseID()
@@ -331,6 +344,9 @@ public struct SwiftReleasePipeline: Sendable {
         INSERT INTO release.release_health_results(result_id, release_id, checked_at, status, details)
         VALUES (\(Self.sqlLiteral(UUID().uuidString)), \(Self.sqlLiteral(config.releaseID)), TIMESTAMP '\(Self.duckTimestamp(Date()))', 'not_run', 'Swift Phase 7 compatibility pipeline created release; external release health monitor remains the transition hook.');
         """)
+        if let dmgSoakReport {
+            try persistDMGHeadlessLiveSoakReport(dmgSoakReport)
+        }
     }
 
     private func runRestartIfConfigured() throws {
@@ -375,10 +391,87 @@ public struct SwiftReleasePipeline: Sendable {
         }
     }
 
+    private func validateDMGHeadlessLiveSoakReportIfNeeded(artifacts: URL, dmgSHA: String?) throws -> DMGHeadlessLiveSoakReport? {
+        guard let dmgSHA else {
+            return nil
+        }
+        let reportURL = artifacts.appendingPathComponent(Self.dmgHeadlessLiveSoakReportName)
+        try requireFile(reportURL)
+        let report = try JSONDecoder().decode(DMGHeadlessLiveSoakReport.self, from: Data(contentsOf: reportURL))
+        let normalizedReportSHA = report.dmgSHA256
+            .lowercased()
+            .replacingOccurrences(of: "sha256:", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try ContractValidation.require(report.releaseID == config.releaseID, "DMG headless live soak report release_id must match \(config.releaseID)")
+        try ContractValidation.require(normalizedReportSHA == dmgSHA.lowercased(), "DMG headless live soak report must match current DMG SHA256")
+        try ContractValidation.require(report.status.lowercased() == "passed", "DMG headless live soak report status must be passed")
+        try ContractValidation.require(report.installedFromDMG, "DMG headless live soak must install from the generated DMG")
+        try ContractValidation.require(report.javaOK, "DMG headless live soak must verify Java installation")
+        try ContractValidation.require(report.neoforgeOK, "DMG headless live soak must verify NeoForge installation")
+        try ContractValidation.require(report.syncOK, "DMG headless live soak must verify client sync")
+        try ContractValidation.require(report.loginOK, "DMG headless live soak must log into the live Pummelchen server")
+        try ContractValidation.require(report.stayedConnected, "DMG headless live soak must stay connected to the live server")
+        try ContractValidation.require(report.durationSeconds >= Self.requiredDMGLiveSoakSeconds, "DMG headless live soak must run for at least \(Int(Self.requiredDMGLiveSoakSeconds)) seconds")
+        try ContractValidation.require(report.crashReportCount == 0, "DMG headless live soak must not create crash reports")
+        try ContractValidation.require(report.fatalLogCount == 0, "DMG headless live soak must not contain fatal log entries")
+        try ContractValidation.require(Self.isLivePummelchenServerAddress(report.serverAddress), "DMG headless live soak must target the live Pummelchen server")
+        try ContractValidation.require(ISO8601DateFormatter().date(from: report.startedAt) != nil, "DMG headless live soak started_at must be ISO-8601")
+        try ContractValidation.require(ISO8601DateFormatter().date(from: report.completedAt) != nil, "DMG headless live soak completed_at must be ISO-8601")
+        return report
+    }
+
+    private func persistDMGHeadlessLiveSoakReport(_ report: DMGHeadlessLiveSoakReport) throws {
+        let notes = [
+            "DMG live soak passed for \(Int(report.durationSeconds))s",
+            "server=\(report.serverAddress)",
+            "java_ok=\(report.javaOK)",
+            "neoforge_ok=\(report.neoforgeOK)",
+            "sync_ok=\(report.syncOK)",
+            report.notes
+        ].compactMap { $0 }.joined(separator: "; ")
+        try executeDuckDB("""
+        INSERT INTO core.headless_client_runs(
+          id, release_id, started_at, status, renderer_summary,
+          duration_seconds, crash_report_count, fatal_log_count, notes
+        )
+        VALUES (
+          (SELECT COALESCE(MAX(id), 0) + 1 FROM core.headless_client_runs),
+          \(Self.sqlLiteral(report.releaseID)),
+          TIMESTAMP '\(Self.sqlTimestamp(report.startedAt))',
+          'passed',
+          \(Self.sqlLiteral(report.rendererSummary)),
+          \(report.durationSeconds),
+          \(report.crashReportCount),
+          \(report.fatalLogCount),
+          \(Self.sqlLiteral(notes))
+        );
+        INSERT INTO release.release_health_results(result_id, release_id, checked_at, status, details)
+        VALUES (
+          \(Self.sqlLiteral(UUID().uuidString)),
+          \(Self.sqlLiteral(report.releaseID)),
+          TIMESTAMP '\(Self.sqlTimestamp(report.completedAt))',
+          'ok',
+          \(Self.sqlLiteral("DMG headless live soak passed: installed from DMG, Java OK, NeoForge OK, sync OK, live login OK, connected \(Int(report.durationSeconds)) seconds."))
+        );
+        """)
+    }
+
     private func initializeReleaseDB() throws {
         try fileManager.createDirectory(at: config.databaseURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try executeDuckDB("""
+        CREATE SCHEMA IF NOT EXISTS core;
         CREATE SCHEMA IF NOT EXISTS release;
+        CREATE TABLE IF NOT EXISTS core.headless_client_runs (
+          id BIGINT PRIMARY KEY,
+          release_id VARCHAR,
+          started_at TIMESTAMP,
+          status VARCHAR,
+          renderer_summary VARCHAR,
+          duration_seconds DOUBLE,
+          crash_report_count INTEGER,
+          fatal_log_count INTEGER,
+          notes VARCHAR
+        );
         CREATE TABLE IF NOT EXISTS release.pack_releases (
           release_id VARCHAR PRIMARY KEY,
           created_at TIMESTAMP NOT NULL,
@@ -546,7 +639,8 @@ public struct SwiftReleasePipeline: Sendable {
             "\(Self.clientZipName).sha256",
             Self.mrpackName,
             Self.dmgName,
-            "\(Self.dmgName).sha256"
+            "\(Self.dmgName).sha256",
+            Self.dmgHeadlessLiveSoakReportName
         ]
         for name in names where fileManager.fileExists(atPath: publicRelease.appendingPathComponent(name).path) {
             let target = config.publicDownloads.appendingPathComponent(name)
@@ -754,6 +848,12 @@ public struct SwiftReleasePipeline: Sendable {
             .replacingOccurrences(of: #""client_secret"\s*:\s*"[^"]+""#, with: #""client_secret":"[REDACTED]""#, options: .regularExpression)
     }
 
+    private static func isLivePummelchenServerAddress(_ value: String) -> Bool {
+        let lower = value.lowercased()
+        return lower.hasSuffix(":25565")
+            && (lower.contains("91.99.176.243") || lower.contains("pummelchen"))
+    }
+
     private static func duckTimestamp(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
@@ -761,6 +861,46 @@ public struct SwiftReleasePipeline: Sendable {
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         return formatter.string(from: date)
+    }
+}
+
+private struct DMGHeadlessLiveSoakReport: Decodable {
+    let releaseID: String
+    let dmgSHA256: String
+    let serverAddress: String
+    let startedAt: String
+    let completedAt: String
+    let durationSeconds: Double
+    let status: String
+    let installedFromDMG: Bool
+    let javaOK: Bool
+    let neoforgeOK: Bool
+    let syncOK: Bool
+    let loginOK: Bool
+    let stayedConnected: Bool
+    let crashReportCount: Int
+    let fatalLogCount: Int
+    let rendererSummary: String?
+    let notes: String?
+
+    enum CodingKeys: String, CodingKey {
+        case releaseID = "release_id"
+        case dmgSHA256 = "dmg_sha256"
+        case serverAddress = "server_address"
+        case startedAt = "started_at"
+        case completedAt = "completed_at"
+        case durationSeconds = "duration_seconds"
+        case status
+        case installedFromDMG = "installed_from_dmg"
+        case javaOK = "java_ok"
+        case neoforgeOK = "neoforge_ok"
+        case syncOK = "sync_ok"
+        case loginOK = "login_ok"
+        case stayedConnected = "stayed_connected"
+        case crashReportCount = "crash_report_count"
+        case fatalLogCount = "fatal_log_count"
+        case rendererSummary = "renderer_summary"
+        case notes
     }
 }
 

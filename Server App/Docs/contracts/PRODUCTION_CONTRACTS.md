@@ -131,6 +131,29 @@ Release health must verify:
 - ZIP/MRPack/DMG checksum files match artifacts
 - active DB release row matches published release
 
+## DMG Headless Live Soak Gate
+
+Every new `Pummelchen-Client-Installer.dmg` must be tested before release activation by installing from that exact DMG, repairing/installing the bundled Java runtime, installing NeoForge, syncing the full client pack, logging into the live Pummelchen Minecraft server, and staying connected for at least 5 minutes.
+
+The release pipeline hard-requires this proof file next to the DMG:
+
+```text
+Pummelchen-Client-Installer.dmg.headless-live-soak.json
+```
+
+The report must prove:
+
+- `release_id` matches the release being created
+- `dmg_sha256` matches the generated DMG
+- `server_address` targets the live Pummelchen server on port `25565`
+- `installed_from_dmg`, `java_ok`, `neoforge_ok`, `sync_ok`, `login_ok`, and `stayed_connected` are all `true`
+- `duration_seconds` is at least `300`
+- `crash_report_count` and `fatal_log_count` are `0`
+- `status` is `passed`
+- `started_at` and `completed_at` are ISO-8601 timestamps
+
+If the report is missing, stale, too short, points at the wrong DMG or server, or records a crash/fatal log, the Swift release pipeline must reject the DMG release. Passed reports are recorded in DuckDB `core.headless_client_runs`.
+
 ## Mod Source Update Scans
 
 The Swift server app owns repository update discovery. Source URLs are stored in DuckDB, not inferred only from website JSON.
