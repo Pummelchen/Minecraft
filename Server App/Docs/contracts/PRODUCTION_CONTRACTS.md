@@ -131,6 +131,22 @@ Release health must verify:
 - ZIP/MRPack/DMG checksum files match artifacts
 - active DB release row matches published release
 
+## Mod Source Update Scans
+
+The Swift server app owns repository update discovery. Source URLs are stored in DuckDB, not inferred only from website JSON.
+
+Required behavior:
+
+- store one row per mod/source URL in `core.mod_sources`
+- support more than one URL per mod, such as Modrinth and CurseForge
+- persist each scan in `core.mod_update_scans`
+- persist per-URL outcomes in `core.mod_update_scan_results`
+- throttle webpage/API fetching; production default is at most 5 URLs per 10 seconds
+- prefer official API/hash metadata when available
+- allow page crawling with curl-equivalent HTTP requests for stored URLs
+- classify Cloudflare/challenge pages as blocked or unresolved instead of treating them as valid update data
+- never auto-promote a scraped update candidate without the normal validation and release flow
+
 ## Tested Updates Feed Shape
 
 `/tested-updates.json` returns an object:

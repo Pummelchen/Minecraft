@@ -22,6 +22,7 @@ enum ServerCommandError: Error, CustomStringConvertible {
               pummelchen-server serve --project-root <repo> [--host 127.0.0.1] [--port 8787] [--webtransport-host pummelchen.91.99.176.243.nip.io] [--webtransport-bind-host 0.0.0.0] [--webtransport-port 443] [--webtransport-path /webtransport/v1/control] [--webtransport-cert <cert.pem>] [--webtransport-key <privkey.pem>]
               pummelchen-server release-create --project-root <repo> --server-dir <dir> --release-root <dir> --public-downloads <dir> --duckdb <file> --release-id <id> [--activate true] [--restart-command <shell>] [--health-command <shell>]
               pummelchen-server release-validate --project-root <repo> --server-dir <dir> --release-root <dir> --public-downloads <dir> --duckdb <file> --release-id <id>
+              pummelchen-server mod-update-scan --project-root <repo> --duckdb <file> [--minecraft-version 26.1.2] [--loader neoforge] [--seed-from-tested-updates true] [--limit <n>] [--max-urls-per-window 5] [--window-seconds 10] [--dry-run true]
               pummelchen-server world-reset --project-root <repo> --server-dir <dir> --duckdb <file> --seed <seed> [--dry-run true] [--yes true] [--radius-blocks 1000] [--delete-backup-after-success true] [--stop-command <shell>] [--start-command <shell>] [--gamerule-command <shell>] [--pregenerate-command <shell>] [--verify-forceloads-command <shell>] [--rcon-host 127.0.0.1] [--rcon-port 25575] [--rcon-password <secret>] [--pregeneration-batch-size 384]
             """
         case .missingValue(let option):
@@ -329,6 +330,14 @@ func run(arguments: [String]) throws {
         let pipeline = try releasePipeline(args: args, projectRoot: projectRoot)
         try pipeline.validateRelease()
         print("swift_release_valid=\(try args.require("--release-id"))")
+    case "mod-update-scan":
+        let scanner = try modUpdateScanner(args: args, projectRoot: projectRoot)
+        let summary = try scanner.run()
+        print("mod_update_scan=\(summary.scanID)")
+        print("sources_checked=\(summary.sourcesChecked)")
+        print("candidates_found=\(summary.candidatesFound)")
+        print("unresolved=\(summary.unresolved)")
+        print("seeded_sources=\(summary.seededSources)")
     case "world-reset":
         let pipeline = try worldResetPipeline(args: args, projectRoot: projectRoot)
         let result = try pipeline.run()
@@ -369,6 +378,30 @@ private func releasePipeline(args: Arguments, projectRoot: URL) throws -> SwiftR
         healthCommand: args.options["--health-command"]
     )
     return SwiftReleasePipeline(config: config)
+}
+
+private func modUpdateScanner(args: Arguments, projectRoot: URL) throws -> ModUpdateScanner {
+    let duckDB = URL(fileURLWithPath: try args.require("--duckdb")).standardizedFileURL
+    let limit = args.options["--limit"].flatMap(Int.init)
+    let maxURLs = Int(args.options["--max-urls-per-window"] ?? "5") ?? 5
+    let windowSeconds = Double(args.options["--window-seconds"] ?? "10") ?? 10
+    guard maxURLs > 0 else {
+        throw ServerCommandError.invalidValue("--max-urls-per-window must be greater than zero")
+    }
+    guard windowSeconds >= 0 else {
+        throw ServerCommandError.invalidValue("--window-seconds must be zero or greater")
+    }
+    return ModUpdateScanner(config: ModUpdateScannerConfig(
+        projectRoot: projectRoot,
+        databaseURL: duckDB,
+        minecraftVersion: args.options["--minecraft-version"] ?? "26.1.2",
+        loader: args.options["--loader"] ?? "neoforge",
+        maxURLsPerWindow: maxURLs,
+        windowSeconds: windowSeconds,
+        limit: limit,
+        seedFromTestedUpdates: args.options["--seed-from-tested-updates"] == "true",
+        dryRun: args.options["--dry-run"] == "true"
+    ))
 }
 
 private func worldResetPipeline(args: Arguments, projectRoot: URL) throws -> SwiftWorldResetPipeline {

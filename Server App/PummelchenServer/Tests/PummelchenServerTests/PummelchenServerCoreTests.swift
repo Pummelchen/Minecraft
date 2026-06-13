@@ -418,6 +418,100 @@ struct PummelchenServerCoreTests {
         #expect(activeRows == "true")
     }
 
+    @Test("mod update scanner detects provider pages and Cloudflare blocks")
+    func modUpdateScannerParsesSources() throws {
+        let modrinthHTML = #"""
+        <html><head><title>BetterF3 - Minecraft Mod</title></head>
+        <script>{"version_number":"18.0.3","loaders":["neoforge"]}</script></html>
+        """#
+        let cloudflareHTML = #"<html><head><title>Just a moment...</title></head><script src="https://challenges.cloudflare.com/x"></script></html>"#
+
+        #expect(ModUpdateScanner.provider(for: "https://modrinth.com/mod/betterf3") == "modrinth")
+        #expect(ModUpdateScanner.provider(for: "https://www.curseforge.com/minecraft/mc-mods/betterf3") == "curseforge")
+        #expect(ModUpdateScanner.parseLatestVersion(fromHTML: modrinthHTML, provider: "modrinth") == "18.0.3")
+        #expect(ModUpdateScanner.parseLatestVersion(fromHTML: "<title>BetterF3 - Minecraft Mods - CurseForge</title>", provider: "curseforge") == nil)
+        #expect(ModUpdateScanner.isCloudflareChallenge(cloudflareHTML))
+    }
+
+    @Test("mod update scanner seeds source URLs into DuckDB")
+    func modUpdateScannerSeedsSourceURLs() throws {
+        try requireDuckDB()
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pummelchen-mod-scan-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("site/public"), withIntermediateDirectories: true)
+        try """
+        {
+          "updates": [
+            {
+              "title": "BetterF3",
+              "new_file": "BetterF3-18.0.2-NeoForge-26.1.jar",
+              "version": "18.0.2",
+              "source_url": "https://modrinth.com/mod/betterf3"
+            },
+            {
+              "title": "BetterF3",
+              "new_file": "BetterF3-18.0.2-NeoForge-26.1.jar",
+              "version": "18.0.2",
+              "source_url": "https://www.curseforge.com/minecraft/mc-mods/betterf3"
+            }
+          ]
+        }
+        """.write(to: root.appendingPathComponent("site/public/tested-updates.json"), atomically: true, encoding: .utf8)
+
+        let database = root.appendingPathComponent("scanner.duckdb")
+        let scanner = ModUpdateScanner(config: ModUpdateScannerConfig(
+            projectRoot: root,
+            databaseURL: database,
+            maxURLsPerWindow: 5,
+            windowSeconds: 0,
+            limit: 0,
+            seedFromTestedUpdates: true
+        ))
+        let summary = try scanner.run()
+
+        #expect(summary.seededSources == 2)
+        #expect(summary.sourcesChecked == 0)
+        #expect(try duckDBScalar(database: database, sql: "SELECT COUNT(*) FROM core.mod_sources;") == "2")
+        #expect(try duckDBScalar(database: database, sql: "SELECT COUNT(*) FROM core.mod_sources WHERE provider = 'modrinth';") == "1")
+        #expect(try duckDBScalar(database: database, sql: "SELECT COUNT(*) FROM core.mod_sources WHERE provider = 'curseforge';") == "1")
+    }
+
+    @Test("mod update scanner does not attach batch files to one source URL")
+    func modUpdateScannerKeepsBatchRowsSingleSource() throws {
+        try requireDuckDB()
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pummelchen-mod-scan-batch-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("Server App/nginx/site/public"), withIntermediateDirectories: true)
+        try """
+        {
+          "updates": [
+            {
+              "title": "Advanced Chimneys",
+              "new_file": "adchimneys-26.1.0.0.jar\\nother-unrelated-mod-1.0.0.jar",
+              "version": "26.1.0.0",
+              "source_url": "https://www.curseforge.com/minecraft/mc-mods/advanced-chimneys"
+            }
+          ]
+        }
+        """.write(to: root.appendingPathComponent("Server App/nginx/site/public/tested-updates.json"), atomically: true, encoding: .utf8)
+
+        let database = root.appendingPathComponent("scanner.duckdb")
+        let scanner = ModUpdateScanner(config: ModUpdateScannerConfig(
+            projectRoot: root,
+            databaseURL: database,
+            windowSeconds: 0,
+            limit: 0,
+            seedFromTestedUpdates: true
+        ))
+        let summary = try scanner.run()
+
+        #expect(summary.seededSources == 1)
+        #expect(try duckDBScalar(database: database, sql: "SELECT COUNT(*) FROM core.mod_sources;") == "1")
+        #expect(try duckDBScalar(database: database, sql: "SELECT COALESCE(installed_file, '') FROM core.mod_sources;") == "")
+    }
+
     @Test("phase 8 control events use safe payloads and WebTransport preflight")
     func phase8ControlEventsUseWebTransportAndRejectDownloads() async throws {
         try requireDuckDB()
