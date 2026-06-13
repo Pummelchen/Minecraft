@@ -1,5 +1,6 @@
 import Foundation
 import PummelchenCore
+import QUICCrypto
 
 public enum PummelchenServerError: Error, CustomStringConvertible {
     case badRequest(String)
@@ -74,6 +75,7 @@ public struct PummelchenServerConfig: Sendable {
     public let webTransportPublicHost: String
     public let webTransportPort: Int
     public let webTransportPath: String
+    public let webTransportCertificatePath: String?
     public let webTransportSessionEngineActive: Bool
     public let webTransportRuntimeState: WebTransportRuntimeState?
 
@@ -85,10 +87,11 @@ public struct PummelchenServerConfig: Sendable {
         clientAPIToken: String? = ProcessInfo.processInfo.environment["PUMMELCHEN_CLIENT_API_TOKEN"],
         maxWritePayloadBytes: Int = 256 * 1024,
         transportTarget: String = ProcessInfo.processInfo.environment["PUMMELCHEN_TRANSPORT_TARGET"] ?? "webtransport_h3_dedicated_udp",
-        transportFallback: String = "authenticated_https_long_poll",
+        transportFallback: String = "none",
         webTransportPublicHost: String = ProcessInfo.processInfo.environment["PUMMELCHEN_WEBTRANSPORT_PUBLIC_HOST"] ?? "pummelchen.91.99.176.243.nip.io",
-        webTransportPort: Int = Int(ProcessInfo.processInfo.environment["PUMMELCHEN_WEBTRANSPORT_PORT"] ?? "7443") ?? 7443,
+        webTransportPort: Int = Int(ProcessInfo.processInfo.environment["PUMMELCHEN_WEBTRANSPORT_PORT"] ?? "443") ?? 443,
         webTransportPath: String = ProcessInfo.processInfo.environment["PUMMELCHEN_WEBTRANSPORT_PATH"] ?? "/webtransport/v1/control",
+        webTransportCertificatePath: String? = ProcessInfo.processInfo.environment["PUMMELCHEN_WEBTRANSPORT_CERTIFICATE"],
         webTransportSessionEngineActive: Bool = false,
         webTransportRuntimeState: WebTransportRuntimeState? = nil
     ) {
@@ -103,6 +106,7 @@ public struct PummelchenServerConfig: Sendable {
         self.webTransportPublicHost = webTransportPublicHost
         self.webTransportPort = webTransportPort
         self.webTransportPath = webTransportPath.hasPrefix("/") ? webTransportPath : "/\(webTransportPath)"
+        self.webTransportCertificatePath = webTransportCertificatePath
         self.webTransportSessionEngineActive = webTransportSessionEngineActive
         self.webTransportRuntimeState = webTransportRuntimeState
     }
@@ -285,9 +289,9 @@ public final class PummelchenServerAPI: @unchecked Sendable {
     private func controlInfo() throws -> HTTPResponse {
         let payload = ControlChannelInfo(
             endpoint: "/h3/v1/control",
-            transportTarget: "http3_quic_edge_control",
+            transportTarget: "webtransport_h3_dedicated_udp_control",
             bidirectional: true,
-            fallbackEndpoint: "/api/v1/control/events",
+            fallbackEndpoint: "",
             maxPayloadBytes: ControlEventStore.maxControlPayloadBytes,
             downloadsAllowed: false,
             supportedEvents: ControlEventType.allCases.map(\.rawValue)
@@ -330,12 +334,38 @@ public final class PummelchenServerAPI: @unchecked Sendable {
             requiresQUICDatagrams: true,
             requiresResetStreamAt: true,
             usesNginx: false,
-            nginxRole: "not_in_webtransport_path"
+            nginxRole: "not_in_webtransport_path",
+            serverPublicKeyX963Base64: serverPublicKeyX963Base64()
         )
         return .json(try encoder.encode(payload), headers: [
             "Cache-Control": "no-store, max-age=0",
             "X-Pummelchen-WebTransport-Ready": payload.ready ? "true" : "false"
         ])
+    }
+
+    private func serverPublicKeyX963Base64() -> String? {
+        guard let certificatePath = config.webTransportCertificatePath else {
+            return nil
+        }
+        do {
+            guard let certificate = try PEMLoader.loadCertificates(fromPath: certificatePath).first else {
+                return nil
+            }
+            let parsed = try X509Certificate.parse(from: certificate)
+            let publicKey = try parsed.extractPublicKey()
+            let publicKeyBytes: Data
+            switch publicKey {
+            case .p256(let key):
+                publicKeyBytes = Data(key.x963Representation)
+            case .p384(let key):
+                publicKeyBytes = Data(key.x963Representation)
+            case .ed25519(let key):
+                publicKeyBytes = Data(key.rawRepresentation)
+            }
+            return publicKeyBytes.base64EncodedString()
+        } catch {
+            return nil
+        }
     }
 
     private func createControlEvent(_ request: HTTPRequest) throws -> HTTPResponse {
@@ -369,8 +399,8 @@ public final class PummelchenServerAPI: @unchecked Sendable {
         let batch = ControlEventBatch(
             events: events,
             nextAfterEventID: events.last?.eventID ?? params["after_event_id"],
-            transport: waitSeconds > 0 ? "http3_edge_long_poll" : "http_polling_fallback",
-            fallback: "authenticated_https_polling"
+            transport: waitSeconds > 0 ? "authenticated_https_operator_long_poll" : "authenticated_https_operator_poll",
+            fallback: "none"
         )
         return .json(try encoder.encode(batch), headers: ["X-Pummelchen-Downloads-Allowed": "false"])
     }

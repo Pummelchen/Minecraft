@@ -131,7 +131,7 @@ public struct WebTransportH3Preflight: Equatable, Sendable {
         maxDatagramFrameSize: UInt64?,
         resetStreamAtEnabled: Bool,
         sessionEngineActive: Bool = false,
-        dedicatedUDPPort: Int = 7443,
+        dedicatedUDPPort: Int = 443,
         behindNginx: Bool = false
     ) {
         self.serverHTTP3Settings = serverHTTP3Settings

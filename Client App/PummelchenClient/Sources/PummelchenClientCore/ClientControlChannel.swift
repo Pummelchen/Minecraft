@@ -59,53 +59,31 @@ public struct ClientControlChannel: Sendable {
     }
 
     public func acknowledge(_ event: ControlEvent) async throws {
-        if let preflight = try? await webTransportPreflight(), preflight.ready {
-            do {
-                try await ClientWebTransportControlChannel(
-                    preflight: preflight,
-                    clientID: configuration.clientID,
-                    clientAPIToken: configuration.clientAPIToken
-                ).acknowledge(event)
-                return
-            } catch {
-                // Fall through to authenticated HTTPS so acknowledgements are not lost.
-            }
+        let preflight = try await webTransportPreflight()
+        guard preflight.ready else {
+            throw ContractValidationError.invalid(preflight.unsupportedReason ?? "WebTransport preflight is not ready")
         }
-        let ack = ControlEventAck(clientID: configuration.clientID, eventID: event.eventID, receivedAt: Self.isoNow())
-        var request = URLRequest(url: configuration.serverURL.appendingPathComponent("api/v1/control/acks"))
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(configuration.clientAPIToken)", forHTTPHeaderField: "Authorization")
-        request.setValue(configuration.clientID, forHTTPHeaderField: "X-Pummelchen-Client-ID")
-        request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(ack)
-        _ = try await http.send(request)
+        try await ClientWebTransportControlChannel(
+            preflight: preflight,
+            clientID: configuration.clientID,
+            clientAPIToken: configuration.clientAPIToken
+        ).acknowledge(event)
     }
 
     public func lastNegotiatedProtocol() async -> String? {
         await http.lastNegotiatedProtocol()
     }
 
-    public func reconnectWithFallback(afterEventID: String? = nil) async throws -> ControlEventBatch {
-        if let preflight = try? await webTransportPreflight(), preflight.ready {
-            do {
-                return try await ClientWebTransportControlChannel(
-                    preflight: preflight,
-                    clientID: configuration.clientID,
-                    clientAPIToken: configuration.clientAPIToken
-                ).fetchEvents(afterEventID: afterEventID)
-            } catch {
-                // Keep the client self-healing if UDP/QUIC is temporarily blocked.
-            }
+    public func fetchEventsOverWebTransport(afterEventID: String? = nil) async throws -> ControlEventBatch {
+        let preflight = try await webTransportPreflight()
+        guard preflight.ready else {
+            throw ContractValidationError.invalid(preflight.unsupportedReason ?? "WebTransport preflight is not ready")
         }
-        do {
-            let info = try await controlInfo()
-            if !info.transportTarget.contains("http3_quic") || !info.bidirectional || info.downloadsAllowed {
-                throw ContractValidationError.invalid("control endpoint does not advertise safe QUIC control semantics")
-            }
-        } catch {
-            return try await fetchMissedEvents(afterEventID: afterEventID, waitSeconds: 5)
-        }
-        return try await fetchMissedEvents(afterEventID: afterEventID, waitSeconds: 5)
+        return try await ClientWebTransportControlChannel(
+            preflight: preflight,
+            clientID: configuration.clientID,
+            clientAPIToken: configuration.clientAPIToken
+        ).fetchEvents(afterEventID: afterEventID)
     }
 
     private static func isoNow() -> String {

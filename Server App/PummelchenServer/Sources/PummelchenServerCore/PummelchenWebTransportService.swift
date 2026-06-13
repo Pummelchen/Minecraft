@@ -10,16 +10,18 @@ public struct PummelchenWebTransportServiceConfig: Sendable {
     public let path: String
     public let certificatePath: String
     public let privateKeyPath: String
+    public let projectRoot: URL
     public let databaseURL: URL
     public let clientAPIToken: String?
     public let maxSessions: UInt64
 
     public init(
         host: String = "0.0.0.0",
-        port: UInt16 = 7443,
+        port: UInt16 = 443,
         path: String = "/webtransport/v1/control",
-        certificatePath: String = "/etc/letsencrypt/live/pummelchen.91.99.176.243.nip.io/fullchain.pem",
+        certificatePath: String = "/etc/letsencrypt/live/pummelchen.91.99.176.243.nip.io/cert.pem",
         privateKeyPath: String = "/etc/letsencrypt/live/pummelchen.91.99.176.243.nip.io/privkey.pem",
+        projectRoot: URL,
         databaseURL: URL,
         clientAPIToken: String?,
         maxSessions: UInt64 = 128
@@ -29,6 +31,7 @@ public struct PummelchenWebTransportServiceConfig: Sendable {
         self.path = path.hasPrefix("/") ? path : "/\(path)"
         self.certificatePath = certificatePath
         self.privateKeyPath = privateKeyPath
+        self.projectRoot = projectRoot
         self.databaseURL = databaseURL
         self.clientAPIToken = clientAPIToken
         self.maxSessions = maxSessions
@@ -165,6 +168,14 @@ public final class PummelchenWebTransportService: @unchecked Sendable {
     private func process(_ request: WebTransportControlRequest) throws -> WebTransportControlResponse {
         try authorize(request)
         switch request.action {
+        case "current_release":
+            let release = try currentRelease()
+            return WebTransportControlResponse(
+                ok: true,
+                currentRelease: release,
+                serverTime: Self.isoNow()
+            )
+
         case "fetch_events":
             let events = try controlStore.pendingEvents(
                 clientID: request.clientID,
@@ -175,7 +186,7 @@ public final class PummelchenWebTransportService: @unchecked Sendable {
                 events: events,
                 nextAfterEventID: events.last?.eventID ?? request.afterEventID,
                 transport: "webtransport_h3_dedicated_udp",
-                fallback: "authenticated_https_long_poll"
+                fallback: "none"
             )
             return WebTransportControlResponse(ok: true, batch: batch, serverTime: Self.isoNow())
 
@@ -268,6 +279,13 @@ public final class PummelchenWebTransportService: @unchecked Sendable {
         guard request.clientAPIToken == expected else {
             throw PummelchenServerError.unauthorized("invalid client API token")
         }
+    }
+
+    private func currentRelease() throws -> CurrentRelease {
+        let data = try Data(contentsOf: config.projectRoot.appendingPathComponent("site/public/downloads/current-release.json"))
+        let release = try CurrentReleaseValidator.decode(data)
+        try CurrentReleaseValidator.validate(release)
+        return release
     }
 
     private func requireMatchingClientID(_ requestClientID: String, _ payloadClientID: String) throws {

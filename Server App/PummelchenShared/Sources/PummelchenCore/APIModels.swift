@@ -410,6 +410,7 @@ public struct WebTransportPreflightPayload: Codable, Equatable, Sendable {
     public let requiresResetStreamAt: Bool
     public let usesNginx: Bool
     public let nginxRole: String
+    public let serverPublicKeyX963Base64: String?
 
     enum CodingKeys: String, CodingKey {
         case apiVersion = "api_version"
@@ -427,9 +428,10 @@ public struct WebTransportPreflightPayload: Codable, Equatable, Sendable {
         case requiresResetStreamAt = "requires_reset_stream_at"
         case usesNginx = "uses_nginx"
         case nginxRole = "nginx_role"
+        case serverPublicKeyX963Base64 = "server_public_key_x963_base64"
     }
 
-    public init(apiVersion: String, serverTime: String, draft: String, endpoint: String, sessionURL: String, publicHost: String, publicPort: Int, ready: Bool, unsupportedReason: String?, upgradeToken: String, requiredHTTP3Settings: [String: UInt64], requiresQUICDatagrams: Bool, requiresResetStreamAt: Bool, usesNginx: Bool, nginxRole: String) {
+    public init(apiVersion: String, serverTime: String, draft: String, endpoint: String, sessionURL: String, publicHost: String, publicPort: Int, ready: Bool, unsupportedReason: String?, upgradeToken: String, requiredHTTP3Settings: [String: UInt64], requiresQUICDatagrams: Bool, requiresResetStreamAt: Bool, usesNginx: Bool, nginxRole: String, serverPublicKeyX963Base64: String? = nil) {
         self.apiVersion = apiVersion
         self.serverTime = serverTime
         self.draft = draft
@@ -445,6 +447,7 @@ public struct WebTransportPreflightPayload: Codable, Equatable, Sendable {
         self.requiresResetStreamAt = requiresResetStreamAt
         self.usesNginx = usesNginx
         self.nginxRole = nginxRole
+        self.serverPublicKeyX963Base64 = serverPublicKeyX963Base64
     }
 }
 
@@ -511,6 +514,7 @@ public struct WebTransportControlResponse: Codable, Equatable, Sendable {
     public let error: String?
     public let batch: ControlEventBatch?
     public let ack: ClientWriteAck?
+    public let currentRelease: CurrentRelease?
     public let serverTime: String
 
     enum CodingKeys: String, CodingKey {
@@ -518,14 +522,16 @@ public struct WebTransportControlResponse: Codable, Equatable, Sendable {
         case error
         case batch
         case ack
+        case currentRelease = "current_release"
         case serverTime = "server_time"
     }
 
-    public init(ok: Bool, error: String? = nil, batch: ControlEventBatch? = nil, ack: ClientWriteAck? = nil, serverTime: String) {
+    public init(ok: Bool, error: String? = nil, batch: ControlEventBatch? = nil, ack: ClientWriteAck? = nil, currentRelease: CurrentRelease? = nil, serverTime: String) {
         self.ok = ok
         self.error = error
         self.batch = batch
         self.ack = ack
+        self.currentRelease = currentRelease
         self.serverTime = serverTime
     }
 }

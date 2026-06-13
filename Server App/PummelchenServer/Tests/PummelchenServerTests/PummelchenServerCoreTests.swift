@@ -398,8 +398,8 @@ struct PummelchenServerCoreTests {
         #expect(activeRows == "true")
     }
 
-    @Test("phase 8 control events use safe payloads and HTTP fallback")
-    func phase8ControlEventsUseFallbackAndRejectDownloads() async throws {
+    @Test("phase 8 control events use safe payloads and WebTransport preflight")
+    func phase8ControlEventsUseWebTransportAndRejectDownloads() async throws {
         try requireDuckDB()
         let fixture = try makeProjectFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -411,9 +411,10 @@ struct PummelchenServerCoreTests {
 
         let infoResponse = api.response(for: HTTPRequest(method: "GET", path: "/h3/v1/control"))
         let info = try JSONDecoder().decode(ControlChannelInfo.self, from: infoResponse.body)
-        #expect(info.transportTarget == "http3_quic_edge_control")
+        #expect(info.transportTarget == "webtransport_h3_dedicated_udp_control")
         #expect(info.bidirectional)
         #expect(!info.downloadsAllowed)
+        #expect(info.fallbackEndpoint.isEmpty)
         #expect(info.supportedEvents.contains("release_available"))
         #expect(info.supportedEvents.contains("sync_required"))
         #expect(info.supportedEvents.contains("defaults_changed"))
@@ -424,8 +425,8 @@ struct PummelchenServerCoreTests {
         #expect(preflight.upgradeToken == "webtransport-h3")
         #expect(!preflight.ready)
         #expect(preflight.endpoint == "/webtransport/v1/control")
-        #expect(preflight.sessionURL == "https://pummelchen.91.99.176.243.nip.io:7443/webtransport/v1/control")
-        #expect(preflight.publicPort == 7443)
+        #expect(preflight.sessionURL == "https://pummelchen.91.99.176.243.nip.io:443/webtransport/v1/control")
+        #expect(preflight.publicPort == 443)
         #expect(!preflight.usesNginx)
         #expect(preflight.nginxRole == "not_in_webtransport_path")
         #expect(preflight.unsupportedReason?.contains("session engine is not active") == true)
@@ -439,7 +440,7 @@ struct PummelchenServerCoreTests {
                 duckDBURL: fixture.root.appendingPathComponent("data/test-phase8-webtransport-ready.duckdb"),
                 clientAPIToken: "phase8-token",
                 webTransportPublicHost: "pummelchen.91.99.176.243.nip.io",
-                webTransportPort: 7443,
+                webTransportPort: 443,
                 webTransportSessionEngineActive: true
             )
         )
@@ -473,7 +474,7 @@ struct PummelchenServerCoreTests {
         ))
         let batch = try JSONDecoder().decode(ControlEventBatch.self, from: fetch.body)
         #expect(batch.events.map(\.eventID) == [event.eventID])
-        #expect(batch.transport == "http_polling_fallback")
+        #expect(batch.transport == "authenticated_https_operator_poll")
 
         let secondCreate = api.response(for: HTTPRequest(
             method: "POST",
@@ -509,7 +510,7 @@ struct PummelchenServerCoreTests {
         ))
         let empty = try JSONDecoder().decode(ControlEventBatch.self, from: afterAck.body)
         #expect(empty.events.isEmpty)
-        #expect(empty.transport == "http3_edge_long_poll")
+        #expect(empty.transport == "authenticated_https_operator_long_poll")
 
         let downloadPayload = ControlEventCreateRequest(
             eventType: .clientSyncRequested,
@@ -528,8 +529,8 @@ struct PummelchenServerCoreTests {
         )).statusCode == 400)
     }
 
-    @Test("phase 8 long poll delivers update events quickly over fallback")
-    func phase8LongPollDeliversUpdateEventsQuickly() async throws {
+    @Test("phase 8 compatibility event API can deliver update events quickly")
+    func phase8CompatibilityEventAPIDeliversUpdateEventsQuickly() async throws {
         try requireDuckDB()
         let fixture = try makeProjectFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -573,12 +574,12 @@ struct PummelchenServerCoreTests {
         let elapsed = Date().timeIntervalSince(started)
         #expect(batch.events.count == 1)
         #expect(batch.events.first?.eventType == .syncRequired)
-        #expect(batch.transport == "http3_edge_long_poll")
+        #expect(batch.transport == "authenticated_https_operator_long_poll")
         #expect(elapsed < 2.0)
     }
 
-    @Test("phase 8 client reconnect fetches missed events through polling fallback")
-    func phase8ClientReconnectFetchesMissedEvents() async throws {
+    @Test("phase 8 client refuses control polling when WebTransport is not ready")
+    func phase8ClientRequiresReadyWebTransport() async throws {
         try requireDuckDB()
         let fixture = try makeProjectFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -611,12 +612,12 @@ struct PummelchenServerCoreTests {
             clientID: clientID,
             clientAPIToken: "phase8-token"
         ))
-        let batch = try await client.reconnectWithFallback()
-        #expect(batch.events.count == 1)
-        #expect(batch.events[0].eventType == .serverRestartNotice)
-        try await client.acknowledge(batch.events[0])
-        let afterAck = try await client.fetchMissedEvents()
-        #expect(afterAck.events.isEmpty)
+        do {
+            _ = try await client.fetchEventsOverWebTransport()
+            Issue.record("client control channel should require a ready WebTransport preflight")
+        } catch {
+            #expect(String(describing: error).contains("WebTransport"))
+        }
     }
 
     @Test("phase 9 safe world reset dry run records plan without deleting active world")

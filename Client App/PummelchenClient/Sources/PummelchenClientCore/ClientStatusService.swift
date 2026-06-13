@@ -160,6 +160,9 @@ public struct ClientStatusService: Sendable {
         let checkedAt = Self.isoNow()
         let localRelease = readInstalledRelease()
         let defaultsHealth = ClientDefaultsInspector.inspect(minecraftDirectory: configuration.minecraftDirectory)
+        let nginxTask = Task {
+            await nginxStatus(checkedAt: checkedAt)
+        }
         let webTransportTask = Task {
             await webTransportStatus(checkedAt: checkedAt)
         }
@@ -169,7 +172,6 @@ public struct ClientStatusService: Sendable {
                 try await fetchCurrentRelease()
             }
             let serverRelease = releaseProbe.value
-            let nginx = endpointStatus(label: "nginx", latencyMS: releaseProbe.latencyMS, checkedAt: checkedAt)
             var state: ClientSyncState = localRelease == serverRelease.releaseID ? .synced : .updateAvailable
             var errorMessage: String?
             if state == .synced {
@@ -188,7 +190,7 @@ public struct ClientStatusService: Sendable {
             return ClientStatusSnapshot(
                 state: state,
                 serverURL: configuration.serverURL.absoluteString,
-                nginx: nginx,
+                nginx: await nginxTask.value,
                 webTransport: await webTransportTask.value,
                 serverReleaseID: serverRelease.releaseID,
                 localReleaseID: localRelease,
@@ -199,17 +201,10 @@ public struct ClientStatusService: Sendable {
                 errorMessage: errorMessage
             )
         } catch {
-            let nginx = EndpointConnectionStatus(
-                label: "nginx",
-                state: .cannotConnect,
-                latencyMS: nil,
-                message: String(describing: error),
-                checkedAt: checkedAt
-            )
             return ClientStatusSnapshot(
                 state: .offline,
                 serverURL: configuration.serverURL.absoluteString,
-                nginx: nginx,
+                nginx: await nginxTask.value,
                 webTransport: await webTransportTask.value,
                 serverReleaseID: nil,
                 localReleaseID: localRelease,
@@ -223,9 +218,41 @@ public struct ClientStatusService: Sendable {
     }
 
     private func fetchCurrentRelease() async throws -> CurrentRelease {
-        let url = configuration.serverURL
-            .appendingPathComponent("downloads/current-release.json")
-        let data = try await http.data(from: url)
+        if let token = configuration.clientAPIToken, !token.isEmpty {
+            let preflight = try await fetchWebTransportPreflight()
+            guard preflight.ready else {
+                throw ContractValidationError.invalid(preflight.unsupportedReason ?? "WebTransport preflight is not ready")
+            }
+            return try await ClientWebTransportControlChannel(
+                preflight: preflight,
+                clientID: Self.validClientID(configuration.clientID),
+                clientAPIToken: token
+            ).currentRelease()
+        }
+        return try await fetchCurrentReleaseFromNginx()
+    }
+
+    private func nginxStatus(checkedAt: String) async -> EndpointConnectionStatus {
+        do {
+            let probe = try await measure {
+                _ = try await fetchCurrentReleaseFromNginx()
+            }
+            return endpointStatus(label: "nginx", latencyMS: probe.latencyMS, checkedAt: checkedAt)
+        } catch {
+            return EndpointConnectionStatus(
+                label: "nginx",
+                state: .cannotConnect,
+                latencyMS: nil,
+                message: String(describing: error),
+                checkedAt: checkedAt
+            )
+        }
+    }
+
+    private func fetchCurrentReleaseFromNginx() async throws -> CurrentRelease {
+        let url = configuration.serverURL.appendingPathComponent("downloads/current-release.json")
+        let probeHTTP = ClientHTTPClient(retryPolicy: ClientHTTPRetryPolicy(maxAttempts: 1, requestTimeoutSeconds: 5))
+        let data = try await probeHTTP.data(from: url)
         let release = try CurrentReleaseValidator.decode(data)
         try CurrentReleaseValidator.validate(release)
         return release
@@ -283,10 +310,10 @@ public struct ClientStatusService: Sendable {
     private func endpointStatus(label: String, latencyMS: Int, checkedAt: String) -> EndpointConnectionStatus {
         let state: EndpointConnectionState
         let message: String
-        if latencyMS < 1_000 {
+        if latencyMS < 2_000 {
             state = .connected
             message = "connected"
-        } else if latencyMS < 3_000 {
+        } else if latencyMS < 5_000 {
             state = .degraded
             message = "slow response"
         } else {

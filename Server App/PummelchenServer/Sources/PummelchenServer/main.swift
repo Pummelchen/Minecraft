@@ -19,7 +19,7 @@ enum ServerCommandError: Error, CustomStringConvertible {
             return """
             Usage:
               pummelchen-server smoke --project-root <repo>
-              pummelchen-server serve --project-root <repo> [--host 127.0.0.1] [--port 8787] [--webtransport-host pummelchen.91.99.176.243.nip.io] [--webtransport-bind-host 0.0.0.0] [--webtransport-port 7443] [--webtransport-path /webtransport/v1/control] [--webtransport-cert <fullchain.pem>] [--webtransport-key <privkey.pem>]
+              pummelchen-server serve --project-root <repo> [--host 127.0.0.1] [--port 8787] [--webtransport-host pummelchen.91.99.176.243.nip.io] [--webtransport-bind-host 0.0.0.0] [--webtransport-port 443] [--webtransport-path /webtransport/v1/control] [--webtransport-cert <cert.pem>] [--webtransport-key <privkey.pem>]
               pummelchen-server release-create --project-root <repo> --server-dir <dir> --release-root <dir> --public-downloads <dir> --duckdb <file> --release-id <id> [--activate true] [--restart-command <shell>] [--health-command <shell>]
               pummelchen-server release-validate --project-root <repo> --server-dir <dir> --release-root <dir> --public-downloads <dir> --duckdb <file> --release-id <id>
               pummelchen-server world-reset --project-root <repo> --server-dir <dir> --duckdb <file> --seed <seed> [--dry-run true] [--yes true] [--radius-blocks 1000] [--delete-backup-after-success true] [--stop-command <shell>] [--start-command <shell>] [--gamerule-command <shell>] [--pregenerate-command <shell>] [--verify-forceloads-command <shell>] [--rcon-host 127.0.0.1] [--rcon-port 25575] [--rcon-password <secret>] [--pregeneration-batch-size 384]
@@ -191,7 +191,7 @@ final class LocalHTTPServer {
             "Content-Type: \(response.contentType)",
             "Content-Length: \(response.body.count)",
             "Connection: close",
-            "X-Pummelchen-Transport-Target: http3_quic_edge",
+            "X-Pummelchen-Transport-Target: swift_webtransport_dedicated_udp",
             "X-Pummelchen-Mode: swift_api",
             "X-Content-Type-Options: nosniff",
             "X-Frame-Options: DENY",
@@ -259,7 +259,7 @@ func run(arguments: [String]) throws {
         let port = Int(args.options["--port"] ?? "8787") ?? 8787
         let webTransportHost = args.options["--webtransport-host"] ?? "pummelchen.91.99.176.243.nip.io"
         let webTransportBindHost = args.options["--webtransport-bind-host"] ?? "0.0.0.0"
-        let webTransportPort = Int(args.options["--webtransport-port"] ?? "7443") ?? 7443
+        let webTransportPort = Int(args.options["--webtransport-port"] ?? "443") ?? 443
         let webTransportPath = args.options["--webtransport-path"] ?? "/webtransport/v1/control"
         guard (1...65_535).contains(port) else {
             throw ServerCommandError.invalidValue("--port must be between 1 and 65535")
@@ -269,7 +269,7 @@ func run(arguments: [String]) throws {
         }
         let webTransportCert = args.options["--webtransport-cert"]
             ?? ProcessInfo.processInfo.environment["PUMMELCHEN_WEBTRANSPORT_CERTIFICATE"]
-            ?? "/etc/letsencrypt/live/pummelchen.91.99.176.243.nip.io/fullchain.pem"
+            ?? "/etc/letsencrypt/live/pummelchen.91.99.176.243.nip.io/cert.pem"
         let webTransportKey = args.options["--webtransport-key"]
             ?? ProcessInfo.processInfo.environment["PUMMELCHEN_WEBTRANSPORT_PRIVATE_KEY"]
             ?? "/etc/letsencrypt/live/pummelchen.91.99.176.243.nip.io/privkey.pem"
@@ -282,6 +282,7 @@ func run(arguments: [String]) throws {
                 path: webTransportPath,
                 certificatePath: webTransportCert,
                 privateKeyPath: webTransportKey,
+                projectRoot: projectRoot,
                 databaseURL: duckDBURL,
                 clientAPIToken: ProcessInfo.processInfo.environment["PUMMELCHEN_CLIENT_API_TOKEN"],
                 maxSessions: 128
@@ -306,6 +307,7 @@ func run(arguments: [String]) throws {
                 webTransportPublicHost: webTransportHost,
                 webTransportPort: webTransportPort,
                 webTransportPath: webTransportPath,
+                webTransportCertificatePath: webTransportCert,
                 webTransportRuntimeState: webTransportRuntime
             )
         )

@@ -26,7 +26,7 @@ Allowed during early private test builds:
 
 ## Transport And Request Authentication
 
-Client/server API and near-realtime control traffic must target WebTransport over HTTP/3/QUIC once the live preflight endpoint proves the Swift session engine is ready. Authenticated HTTPS remains an operational fallback for blocked UDP/QUIC networks. Write/report APIs must authenticate with:
+Client/server API and near-realtime control traffic must target WebTransport over HTTP/3/QUIC once the live preflight endpoint proves the Swift session engine is ready. Authenticated client writes and control traffic do not silently fall back to HTTPS. Write/report requests must authenticate with:
 
 ```http
 Authorization: Bearer <client_secret>
@@ -35,11 +35,11 @@ X-Pummelchen-Client-ID: <client_id>
 
 Client read-only release downloads remain public static files served by nginx.
 
-HTTPS polling is allowed only as a compatibility fallback for networks that block UDP/QUIC. It must use the same authentication headers for write/report APIs.
+HTTPS API endpoints may exist for operator tooling and website data, but the production macOS client treats WebTransport failure as a degraded/cannot-connect state instead of masking it through HTTPS polling.
 
 ## Control Events
 
-The Swift server publishes WebTransport readiness through `/api/v1/transport/webtransport/preflight`. The client uses `ClientWebTransportControlChannel` for event delivery, acknowledgements, sync run reports, inventory uploads, diagnostics uploads, defaults reports, and status/heartbeat messages whenever the endpoint is ready.
+The Swift server publishes WebTransport readiness through `/api/v1/transport/webtransport/preflight`. The client uses `ClientWebTransportControlChannel` for current release metadata, event delivery, acknowledgements, sync run reports, inventory uploads, diagnostics uploads, defaults reports, and status/heartbeat messages whenever the endpoint is ready.
 
 Events that require an immediate client sync:
 

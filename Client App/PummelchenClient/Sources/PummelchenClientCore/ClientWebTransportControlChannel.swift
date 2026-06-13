@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
 import HTTP3
 import PummelchenCore
 import QUIC
@@ -29,6 +34,19 @@ public struct ClientWebTransportControlChannel: Sendable {
             return batch
         }
         throw ContractValidationError.invalid(response.error ?? "WebTransport fetch_events returned no batch")
+    }
+
+    public func currentRelease() async throws -> CurrentRelease {
+        let response = try await send(WebTransportControlRequest(
+            action: "current_release",
+            clientID: clientID,
+            clientAPIToken: clientAPIToken
+        ))
+        guard let release = response.currentRelease else {
+            throw ContractValidationError.invalid(response.error ?? "WebTransport current_release returned no release")
+        }
+        try CurrentReleaseValidator.validate(release)
+        return release
     }
 
     public func acknowledge(_ event: ControlEvent) async throws {
@@ -122,13 +140,21 @@ public struct ClientWebTransportControlChannel: Sendable {
         let authority = "\(host):\(port)"
 
         var tls = TLSConfiguration.client(serverName: host, alpnProtocols: ["h3"])
-        do {
-            try tls.useSystemTrustStore()
+        if let publicKey = preflight.serverPublicKeyX963Base64,
+           let publicKeyData = Data(base64Encoded: publicKey),
+           !publicKeyData.isEmpty {
             tls.verifyPeer = true
             tls.allowSelfSigned = false
-        } catch {
-            tls.verifyPeer = true
-            tls.allowSelfSigned = false
+            tls.expectedPeerPublicKey = publicKeyData
+        } else {
+            do {
+                try tls.useSystemTrustStore()
+                tls.verifyPeer = true
+                tls.allowSelfSigned = false
+            } catch {
+                tls.verifyPeer = true
+                tls.allowSelfSigned = false
+            }
         }
         let tlsConfiguration = tls
 
@@ -146,48 +172,84 @@ public struct ClientWebTransportControlChannel: Sendable {
         quic.enableDatagrams = true
         quic.maxDatagramFrameSize = 65_535
 
+        let dialHost = try Self.resolveDialHost(host)
         let endpoint = QUICEndpoint(configuration: quic)
-        let connection = try await endpoint.dial(
-            address: QUIC.SocketAddress(ipAddress: host, port: UInt16(port)),
-            timeout: .seconds(10)
-        )
-        defer {
-            Task {
-                await connection.close(error: nil)
+        var endpointStopped = false
+        do {
+            let connection = try await endpoint.dial(
+                address: QUIC.SocketAddress(ipAddress: dialHost, port: UInt16(port)),
+                timeout: .seconds(10)
+            )
+
+            let client = WebTransportClient(
+                quicConnection: connection,
+                configuration: WebTransportClient.Configuration(
+                    maxSessions: 1,
+                    connectionReadyTimeout: .seconds(10),
+                    connectTimeout: .seconds(10)
+                )
+            )
+
+            do {
+                try await client.initialize()
+            } catch {
+                await client.close()
+                await Self.shutdown(connection: connection, endpoint: endpoint)
+                endpointStopped = true
+                throw error
+            }
+
+            do {
+                let session = try await client.connect(
+                    authority: authority,
+                    path: path,
+                    headers: [
+                        ("authorization", "Bearer \(clientAPIToken)"),
+                        ("x-pummelchen-client-id", clientID)
+                    ]
+                )
+
+                do {
+                    let stream = try await session.openBidirectionalStream()
+                    try await stream.write(JSONEncoder().encode(request))
+                    try await stream.closeWrite()
+                    let responseData = try await readAll(from: stream)
+                    let response = try JSONDecoder().decode(WebTransportControlResponse.self, from: responseData)
+                    if !response.ok {
+                        throw ContractValidationError.invalid(response.error ?? "WebTransport control request failed")
+                    }
+                    try? await session.close()
+                    await client.close()
+                    await Self.shutdown(endpoint: endpoint)
+                    endpointStopped = true
+                    return response
+                } catch {
+                    try? await session.close()
+                    throw error
+                }
+            } catch {
+                await client.close()
+                await Self.shutdown(endpoint: endpoint)
+                endpointStopped = true
+                throw error
+            }
+        } catch {
+            if !endpointStopped {
                 await endpoint.stop()
             }
+            throw error
         }
+    }
 
-        let session = try await WebTransportClient.connect(
-            authority: authority,
-            path: path,
-            over: connection,
-            configuration: WebTransportConfiguration(
-                quic: quic,
-                maxSessions: 1,
-                headers: [
-                    ("authorization", "Bearer \(clientAPIToken)"),
-                    ("x-pummelchen-client-id", clientID)
-                ],
-                connectionReadyTimeout: .seconds(10),
-                connectTimeout: .seconds(10)
-            )
-        )
-        defer {
-            Task {
-                try? await session.close()
-            }
-        }
+    private static func shutdown(endpoint: QUICEndpoint) async {
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        await endpoint.stop()
+    }
 
-        let stream = try await session.openBidirectionalStream()
-        try await stream.write(JSONEncoder().encode(request))
-        try await stream.closeWrite()
-        let responseData = try await readAll(from: stream)
-        let response = try JSONDecoder().decode(WebTransportControlResponse.self, from: responseData)
-        if !response.ok {
-            throw ContractValidationError.invalid(response.error ?? "WebTransport control request failed")
-        }
-        return response
+    private static func shutdown(connection: any QUICConnectionProtocol, endpoint: QUICEndpoint) async {
+        await connection.close(error: nil)
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        await endpoint.stop()
     }
 
     private func readAll(from stream: WebTransportStream) async throws -> Data {
@@ -208,5 +270,36 @@ public struct ClientWebTransportControlChannel: Sendable {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.string(from: Date())
+    }
+
+    private static func resolveDialHost(_ host: String) throws -> String {
+        if host.withCString({ inet_addr($0) }) != in_addr_t.max {
+            return host
+        }
+
+        var hints = addrinfo(
+            ai_flags: 0,
+            ai_family: AF_INET,
+            ai_socktype: SOCK_DGRAM,
+            ai_protocol: IPPROTO_UDP,
+            ai_addrlen: 0,
+            ai_canonname: nil,
+            ai_addr: nil,
+            ai_next: nil
+        )
+        var result: UnsafeMutablePointer<addrinfo>?
+        let status = getaddrinfo(host, nil, &hints, &result)
+        guard status == 0, let first = result else {
+            throw ContractValidationError.invalid("failed to resolve WebTransport host \(host)")
+        }
+        defer { freeaddrinfo(result) }
+
+        var address = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        let sockaddr = first.pointee.ai_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0 }
+        guard inet_ntop(AF_INET, &sockaddr.pointee.sin_addr, &address, socklen_t(INET_ADDRSTRLEN)) != nil else {
+            throw ContractValidationError.invalid("failed to format WebTransport address for \(host)")
+        }
+        let length = address.firstIndex(of: 0) ?? address.count
+        return String(decoding: address[..<length].map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 }

@@ -51,7 +51,7 @@ public struct ClientControlWatcher: Sendable {
             cycles += 1
 
             do {
-                let batch = try await channel.reconnectWithFallback(afterEventID: afterEventID)
+                let batch = try await channel.fetchEventsOverWebTransport(afterEventID: afterEventID)
                 if let protocolName = await channel.lastNegotiatedProtocol() {
                     try? store.recordClientState(key: "last_control_network_protocol", value: protocolName)
                 }

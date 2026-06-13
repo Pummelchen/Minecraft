@@ -19,31 +19,35 @@ The Swift server exposes `/api/v1/transport/webtransport/preflight` so clients a
 
 WebTransport is deliberately kept away from nginx.
 
-- nginx keeps serving the website, normal HTTPS APIs, and release downloads.
+- nginx keeps serving the website, operator/status HTTPS APIs, and release downloads.
 - The Swift server app owns the WebTransport control endpoint on its own UDP port.
-- Default public session URL: `https://pummelchen.91.99.176.243.nip.io:7443/webtransport/v1/control`.
+- Default public session URL: `https://pummelchen.91.99.176.243.nip.io:443/webtransport/v1/control`.
 - The client discovers the session URL through `/api/v1/transport/webtransport/preflight`.
 - The preflight payload must include `uses_nginx = false`.
+- The preflight payload includes `server_public_key_x963_base64`, a public P-256 key pin derived from the live WebTransport certificate.
 
 The Swift server can advertise a different endpoint with:
 
 ```text
-pummelchen-server serve --project-root <repo> --webtransport-host <host> --webtransport-port 7443 --webtransport-path /webtransport/v1/control
+pummelchen-server serve --project-root <repo> --webtransport-host <host> --webtransport-port 443 --webtransport-path /webtransport/v1/control
 ```
 
 ## nginx Role
 
-nginx remains the HTTPS, static download, and optional ordinary HTTP/3 public edge. It is not in the WebTransport path. Current nginx HTTP/3 support does not expose the WebTransport session primitives the Swift app needs: Extended CONNECT dispatch, HTTP Datagram/Capsule forwarding, QUIC datagram access, or WebTransport stream ownership.
+nginx remains the TCP HTTPS, static download, and website/API public edge. It is not in the WebTransport path. Current nginx HTTP/3 support does not expose the WebTransport session primitives the Swift app needs: Extended CONNECT dispatch, HTTP Datagram/Capsule forwarding, QUIC datagram access, or WebTransport stream ownership.
 
-The chosen production path is Swift-owned QUIC/H3/WebTransport on the dedicated UDP port. nginx can keep serving ordinary HTTP traffic without affecting the WebTransport control plane.
+The chosen production path is Swift-owned QUIC/H3/WebTransport on UDP `443`. nginx keeps serving ordinary TCP HTTPS traffic on `443` without owning the UDP WebTransport control plane.
 
 ## Session Engine
 
-The Swift session engine is implemented by `PummelchenWebTransportService` on the server and `ClientWebTransportControlChannel` on macOS. The service uses QUIC/TLS production mode, HTTP/3 Extended CONNECT, WebTransport bidirectional streams, and QUIC datagram support. Requests are JSON control frames on WebTransport streams; large release files still stay on nginx download URLs and are verified by SHA-256 after download.
+The Swift session engine is implemented by `PummelchenWebTransportService` on the server and `ClientWebTransportControlChannel` on macOS. The service uses QUIC/TLS production mode, HTTP/3 Extended CONNECT, WebTransport bidirectional streams, and QUIC datagram support. Requests are JSON control frames on WebTransport streams. Current release metadata also moves over WebTransport so clients learn target versions through the same authenticated channel. Large immutable release files still stay on nginx download URLs and are verified by SHA-256 after download.
+
+For the WebTransport QUIC/TLS endpoint, the Swift server uses the Let's Encrypt leaf certificate (`cert.pem`) instead of the full browser chain. The trusted nginx HTTPS preflight provides the public key pin, and the macOS client verifies the QUIC certificate signature against that pin. This keeps the QUIC handshake compact while preserving a trusted bootstrap path.
 
 Supported stream actions:
 
 - `fetch_events`
+- `current_release`
 - `ack_event`
 - `register_client`
 - `status_report`
@@ -53,15 +57,17 @@ Supported stream actions:
 - `diagnostics_upload`
 - `defaults_events_upload`
 
-The old authenticated HTTPS control APIs remain available as an operational fallback for blocked UDP/QUIC networks and for ordinary HTTP status/report compatibility. The client tries WebTransport first whenever preflight reports `ready = true`; if the QUIC session fails, it falls back per message so acknowledgements and client health data are not lost.
+Authenticated HTTPS control APIs may remain available for operator tooling and website diagnostics. The production macOS client does not use them as a silent fallback. If WebTransport is unavailable, the client records and displays the degraded/cannot-connect state so the transport problem is visible and fixable.
 
 ## Production Gate
 
 The deployment is production-ready when:
 
 - `/api/v1/transport/webtransport/preflight` returns `ready = true`;
+- preflight includes `server_public_key_x963_base64`;
 - the Swift server app logs `pummelchen_webtransport=ready`;
 - the macOS client can open a WebTransport session to the advertised URL;
+- current release metadata is fetched over WebTransport;
 - control events `release_available`, `sync_required`, `defaults_changed`, and `client_sync_requested` are delivered over WebTransport;
 - acknowledgements, heartbeat/status reports, inventory, diagnostics, sync run reports, and defaults reports are accepted over WebTransport;
 - release downloads continue through nginx and pass SHA-256 manifest verification.
