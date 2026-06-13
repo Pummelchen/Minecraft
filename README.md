@@ -14,7 +14,7 @@ This project uses AI environments like OpenCode/Codex/Qoder as a natural-languag
 
 "Add mod Biomes O' Plenty"
 
-The Minecraft runtime starts from a vanilla server and layers the managed mod pack onto it through NeoForge. The same release flow also supports client-side shader packs, resource packs, and client configuration scripts so the server and macOS clients stay aligned within seconds.
+The Minecraft runtime starts with a vanilla server and adds the managed mod pack through NeoForge. The same release flow also handles client-side shader packs, resource packs, and configuration scripts, keeping the server and macOS clients aligned within seconds via WebTransport over HTTP/3 for low-latency, bidirectional streaming.
 
 
 ## Core Benefits For MC Server Admins
