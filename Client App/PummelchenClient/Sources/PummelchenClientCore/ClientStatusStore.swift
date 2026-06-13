@@ -1,3 +1,4 @@
+import CDuckDB
 import Foundation
 import PummelchenCore
 
@@ -357,20 +358,39 @@ public struct ClientStatusStore: Sendable {
     }
 
     private func execute(_ sql: String) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: try Self.duckDBExecutablePath())
-        process.arguments = [databaseURL.path, "-c", sql]
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try process.run()
-        process.waitUntilExit()
-
-        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        guard process.terminationStatus == 0 else {
-            throw ContractValidationError.invalid("duckdb write failed: \(output)")
+        try withConnection { connection in
+            var result = duckdb_result()
+            let state = sql.withCString { queryPointer in
+                duckdb_query(connection, queryPointer, &result)
+            }
+            defer { duckdb_destroy_result(&result) }
+            guard state == DuckDBSuccess else {
+                let message = duckdb_result_error(&result).map { String(cString: $0) } ?? "unknown DuckDB error"
+                throw ContractValidationError.invalid("duckdb write failed: \(message)")
+            }
         }
+    }
+
+    private func withConnection<T>(_ body: (duckdb_connection) throws -> T) throws -> T {
+        var database: duckdb_database?
+        let openState = databaseURL.path.withCString { pathPointer in
+            duckdb_open(pathPointer, &database)
+        }
+        guard openState == DuckDBSuccess, let openedDatabase = database else {
+            throw ContractValidationError.invalid("duckdb open failed: \(databaseURL.path)")
+        }
+        var databaseToClose: duckdb_database? = openedDatabase
+        defer { duckdb_close(&databaseToClose) }
+
+        var connection: duckdb_connection?
+        let connectState = duckdb_connect(openedDatabase, &connection)
+        guard connectState == DuckDBSuccess, let openedConnection = connection else {
+            throw ContractValidationError.invalid("duckdb connect failed: \(databaseURL.path)")
+        }
+        var connectionToClose: duckdb_connection? = openedConnection
+        defer { duckdb_disconnect(&connectionToClose) }
+
+        return try body(openedConnection)
     }
 
     private static func sqlLiteral(_ value: String?) -> String {
@@ -385,45 +405,6 @@ public struct ClientStatusStore: Sendable {
     private static func sqlTimestamp(_ value: String) -> String {
         let parsed = ISO8601DateFormatter().date(from: value) ?? Date()
         return duckTimestamp(parsed)
-    }
-
-    private static func duckDBExecutablePath() throws -> String {
-        var candidates: [String] = []
-        if let resourceDuckDB = Bundle.main.resourceURL?.appendingPathComponent("duckdb").path {
-            candidates.append(resourceDuckDB)
-        }
-        candidates.append(
-            Bundle.main.bundleURL
-                .appendingPathComponent("Contents", isDirectory: true)
-                .appendingPathComponent("Resources", isDirectory: true)
-                .appendingPathComponent("duckdb").path
-        )
-        candidates.append(contentsOf: [
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/Pummelchen/bin/duckdb").path,
-            "/opt/homebrew/bin/duckdb",
-            "/usr/local/bin/duckdb",
-            "/usr/bin/duckdb",
-            "/bin/duckdb"
-        ])
-        for candidate in candidates where FileManager.default.isExecutableFile(atPath: candidate) {
-            return candidate
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["sh", "-lc", "command -v duckdb"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try process.run()
-        process.waitUntilExit()
-        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if process.terminationStatus == 0, !output.isEmpty, FileManager.default.isExecutableFile(atPath: output) {
-            return output
-        }
-        throw ContractValidationError.invalid("duckdb executable not found; install DuckDB or bundle it with the client app")
     }
 
     private static func duckTimestamp(_ date: Date) -> String {
