@@ -62,7 +62,7 @@ struct WebTransportH3Tests {
             maxDatagramFrameSize: nil,
             resetStreamAtEnabled: false,
             sessionEngineActive: false,
-            dedicatedUDPPort: 7443,
+            dedicatedUDPPort: 443,
             behindNginx: false
         )
         #expect(nginxHTTP3Only.unsupportedReason()?.contains("session engine is not active") == true)
@@ -90,7 +90,7 @@ struct WebTransportH3Tests {
             maxDatagramFrameSize: 1_200,
             resetStreamAtEnabled: true,
             sessionEngineActive: true,
-            dedicatedUDPPort: 7443,
+            dedicatedUDPPort: 443,
             behindNginx: false
         )
         #expect(capable.unsupportedReason() == nil)

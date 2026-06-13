@@ -10,7 +10,7 @@ import QUIC
 import QUICCrypto
 
 public struct ClientWebTransportControlChannel: Sendable {
-    private static let maxControlPayloadBytes = 16 * 1024
+    private static let maxControlPayloadBytes = 512 * 1024
 
     public let preflight: WebTransportPreflightPayload
     public let clientID: String

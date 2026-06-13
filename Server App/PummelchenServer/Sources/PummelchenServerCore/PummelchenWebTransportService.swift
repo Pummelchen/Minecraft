@@ -5,6 +5,8 @@ import QUIC
 import QUICCrypto
 
 public struct PummelchenWebTransportServiceConfig: Sendable {
+    public static let defaultMaxControlPayloadBytes = 512 * 1024
+
     public let host: String
     public let port: UInt16
     public let path: String
@@ -14,6 +16,7 @@ public struct PummelchenWebTransportServiceConfig: Sendable {
     public let databaseURL: URL
     public let clientAPIToken: String?
     public let maxSessions: UInt64
+    public let maxControlPayloadBytes: Int
 
     public init(
         host: String = "0.0.0.0",
@@ -24,7 +27,8 @@ public struct PummelchenWebTransportServiceConfig: Sendable {
         projectRoot: URL,
         databaseURL: URL,
         clientAPIToken: String?,
-        maxSessions: UInt64 = 128
+        maxSessions: UInt64 = 128,
+        maxControlPayloadBytes: Int = PummelchenWebTransportServiceConfig.defaultMaxControlPayloadBytes
     ) {
         self.host = host
         self.port = port
@@ -35,6 +39,7 @@ public struct PummelchenWebTransportServiceConfig: Sendable {
         self.databaseURL = databaseURL
         self.clientAPIToken = clientAPIToken
         self.maxSessions = maxSessions
+        self.maxControlPayloadBytes = maxControlPayloadBytes
     }
 }
 
@@ -140,8 +145,9 @@ public final class PummelchenWebTransportService: @unchecked Sendable {
                 }
             }
             group.addTask {
-                for await datagram in await session.incomingDatagrams {
-                    try? await session.sendDatagram(datagram)
+                for await _ in await session.incomingDatagrams {
+                    // Datagrams are negotiated for WebTransport capability, but
+                    // Pummelchen control traffic is authenticated JSON on streams.
                 }
             }
         }
@@ -302,7 +308,7 @@ public final class PummelchenWebTransportService: @unchecked Sendable {
                 return data
             }
             data.append(chunk)
-            if data.count > ControlEventStore.maxControlPayloadBytes {
+            if data.count > config.maxControlPayloadBytes {
                 throw PummelchenServerError.payloadTooLarge(data.count)
             }
         }

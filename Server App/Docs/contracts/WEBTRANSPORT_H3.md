@@ -40,7 +40,9 @@ The chosen production path is Swift-owned QUIC/H3/WebTransport on UDP `443`. ngi
 
 ## Session Engine
 
-The Swift session engine is implemented by `PummelchenWebTransportService` on the server and `ClientWebTransportControlChannel` on macOS. The service uses QUIC/TLS production mode, HTTP/3 Extended CONNECT, WebTransport bidirectional streams, and QUIC datagram support. Requests are JSON control frames on WebTransport streams. Current release metadata also moves over WebTransport so clients learn target versions through the same authenticated channel. Large immutable release files still stay on nginx download URLs and are verified by SHA-256 after download.
+The Swift session engine is implemented by `PummelchenWebTransportService` on the server and `ClientWebTransportControlChannel` on macOS. The service uses QUIC/TLS production mode, HTTP/3 Extended CONNECT, WebTransport bidirectional streams, and QUIC datagram negotiation. Requests are authenticated JSON control frames on WebTransport streams. Datagrams are negotiated for protocol capability and future low-priority telemetry, but production control traffic does not trust or echo datagram payloads. Current release metadata also moves over WebTransport so clients learn target versions through the same authenticated channel. Large immutable release files still stay on nginx download URLs and are verified by SHA-256 after download.
+
+Control stream payloads are bounded to 512 KiB on both server and client. Individual stored control events remain bounded to 16 KiB so a single event cannot flood the event store or UI. Larger data movement belongs in release files served by nginx and verified with SHA-256.
 
 For the WebTransport QUIC/TLS endpoint, the Swift server uses the Let's Encrypt leaf certificate (`cert.pem`) instead of the full browser chain. The trusted nginx HTTPS preflight provides the public key pin, and the macOS client verifies the QUIC certificate signature against that pin. This keeps the QUIC handshake compact while preserving a trusted bootstrap path.
 

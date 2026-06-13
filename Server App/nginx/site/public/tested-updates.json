@@ -1500,7 +1500,7 @@
       "new_file": null,
       "source_url": "https://www.curseforge.com/minecraft/mc-mods/armor-durability-hud-display",
       "test_label": "20260610_new_mods_request_002_armor-durability-hud-display_isolated",
-      "notes": "Selected CurseForge stable file 8225212 (armor_hud-neoforge-1.2.0+mc26.1.2.jar) for NeoForge 26.1.x. Rejected before live install by isolated acceptance lab 20260610_new_mods_request_002_armor-durability-hud-display_isolated: Traceback (most recent call last): |   File \"retired legacy acceptance lab\", line 2062, in <module> |     raise SystemExit(main())",
+      "notes": "Selected CurseForge stable file 8225212 (armor_hud-neoforge-1.2.0+mc26.1.2.jar) for NeoForge 26.1.x. Rejected before live install by isolated acceptance lab 20260610_new_mods_request_002_armor-durability-hud-display_isolated: Traceback (most recent call last): |   File \"archived validation lab\", line 2062, in <module> |     raise SystemExit(main())",
       "mod_id": 503
     }
   ]

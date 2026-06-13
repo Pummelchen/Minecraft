@@ -49,6 +49,23 @@ struct CoreUtilityTests {
         }
     }
 
+    @Test("relative paths use symlink-resolved roots")
+    func relativePathUsesResolvedSymlinkRoot() throws {
+        let base = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pummelchen-symlink-base-\(UUID().uuidString)", isDirectory: true)
+        let realRoot = base.appendingPathComponent("real-root", isDirectory: true)
+        let linkRoot = base.appendingPathComponent("linked-root", isDirectory: true)
+        try FileManager.default.createDirectory(at: realRoot.appendingPathComponent("mods", isDirectory: true), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: linkRoot, withDestinationURL: realRoot)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let file = realRoot.appendingPathComponent("mods/example.jar")
+        try "abc".write(to: file, atomically: true, encoding: .utf8)
+
+        let safePath = try SafePath(root: linkRoot)
+        #expect(try safePath.relativePath(for: file) == "mods/example.jar")
+    }
+
     @Test("validates production client identifiers")
     func validatesClientIdentifiers() throws {
         try ContractValidation.requireClientID("client-phase6-a")
@@ -58,6 +75,64 @@ struct CoreUtilityTests {
         }
         #expect(throws: ContractValidationError.self) {
             try ContractValidation.requireClientID("short")
+        }
+    }
+
+    @Test("current release URLs stay inside release downloads")
+    func validatesCurrentReleaseRelativeURLs() throws {
+        let release = CurrentRelease(
+            releaseID: "release_20260613_V21_client-smart-sync-feed",
+            createdAt: "2026-06-13T00:00:00+00:00",
+            activatedAt: nil,
+            status: "active",
+            minecraftVersion: "26.1.2",
+            loaderVersion: "26.1.2.76",
+            serverKey: "minecraft_26_1_2",
+            manifestURL: "/downloads/releases/release_20260613_V21_client-smart-sync-feed/client-sync-manifest.tsv",
+            clientZipURL: "/downloads/releases/release_20260613_V21_client-smart-sync-feed/minecraft_26.1.2_client_macos_apple_silicon.zip",
+            clientZipSHA256: "47aea4e438d1753575006f6b8b00667402bd4cbd291cc534aa9892ee6f0307a0",
+            mrpackURL: "/downloads/releases/release_20260613_V21_client-smart-sync-feed/pummelchen-server-26.1.2.mrpack",
+            mrpackSHA256: "47aea4e438d1753575006f6b8b00667402bd4cbd291cc534aa9892ee6f0307a0",
+            notes: "test"
+        )
+        try CurrentReleaseValidator.validate(release)
+
+        let external = CurrentRelease(
+            releaseID: release.releaseID,
+            createdAt: release.createdAt,
+            activatedAt: release.activatedAt,
+            status: release.status,
+            minecraftVersion: release.minecraftVersion,
+            loaderVersion: release.loaderVersion,
+            serverKey: release.serverKey,
+            manifestURL: "https://example.com/client-sync-manifest.tsv",
+            clientZipURL: release.clientZipURL,
+            clientZipSHA256: release.clientZipSHA256,
+            mrpackURL: release.mrpackURL,
+            mrpackSHA256: release.mrpackSHA256,
+            notes: release.notes
+        )
+        #expect(throws: ContractValidationError.self) {
+            try CurrentReleaseValidator.validate(external)
+        }
+
+        let traversal = CurrentRelease(
+            releaseID: release.releaseID,
+            createdAt: release.createdAt,
+            activatedAt: release.activatedAt,
+            status: release.status,
+            minecraftVersion: release.minecraftVersion,
+            loaderVersion: release.loaderVersion,
+            serverKey: release.serverKey,
+            manifestURL: release.manifestURL,
+            clientZipURL: "/downloads/releases/\(release.releaseID)/../other.zip",
+            clientZipSHA256: release.clientZipSHA256,
+            mrpackURL: release.mrpackURL,
+            mrpackSHA256: release.mrpackSHA256,
+            notes: release.notes
+        )
+        #expect(throws: ContractValidationError.self) {
+            try CurrentReleaseValidator.validate(traversal)
         }
     }
 

@@ -158,7 +158,7 @@ public struct SwiftWorldResetPipeline: Sendable {
     public func plan() throws -> SwiftWorldResetResult {
         try validateConfig()
         let worldName = try activeWorldName()
-        let worldDir = config.serverDir.appendingPathComponent(worldName, isDirectory: true)
+        let worldDir = try activeWorldDirectory(worldName: worldName)
         let chunks = Self.pregenerationChunks(spawn: (0, 0, 0), radiusBlocks: config.radiusBlocks, shape: config.shape)
         let segments = Self.chunkSegments(chunks)
         let datapacks = try requiredDatapackSources().map(\.lastPathComponent).sorted()
@@ -225,7 +225,7 @@ public struct SwiftWorldResetPipeline: Sendable {
             try runHook(config.stopCommand, phase: "stop")
 
             let worldName = dryPlan.worldName
-            let worldDir = config.serverDir.appendingPathComponent(worldName, isDirectory: true)
+            let worldDir = try activeWorldDirectory(worldName: worldName)
             let backupPath = try backupWorld(worldDir: worldDir)
             try writeServerProperties(worldName: worldName)
             try installRequiredDatapacks(worldDir: worldDir)
@@ -336,10 +336,20 @@ public struct SwiftWorldResetPipeline: Sendable {
     private func activeWorldName() throws -> String {
         let values = try readProperties(config.serverDir.appendingPathComponent("server.properties"))
         let name = values["level-name"] ?? "world"
-        if name.hasPrefix("/") || name.split(separator: "/").contains("..") || name.isEmpty {
+        if name.hasPrefix("/")
+            || name.split(separator: "/").contains("..")
+            || name.contains("\\")
+            || name.contains("\0")
+            || name.isEmpty {
             throw SwiftWorldResetError.unsafeWorldName(name)
         }
         return name
+    }
+
+    private func activeWorldDirectory(worldName: String) throws -> URL {
+        try SafePath(root: config.serverDir).validateChild(
+            config.serverDir.appendingPathComponent(worldName, isDirectory: true)
+        )
     }
 
     private func requiredDatapackSources() throws -> [URL] {

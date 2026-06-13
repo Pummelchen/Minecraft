@@ -495,8 +495,10 @@ public struct ClientSyncEngine: Sendable {
 
     private static func minecraftIsRunning() -> Bool {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["sh", "-lc", "pgrep -f 'net\\.minecraft\\.client|com\\.mojang|Minecraft Launcher|Minecraft\\.app|minecraft\\.launcher' >/dev/null 2>&1"]
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        process.arguments = ["-f", "net\\.minecraft\\.client|com\\.mojang|Minecraft Launcher|Minecraft\\.app|minecraft\\.launcher"]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
         try? process.run()
         process.waitUntilExit()
         return process.terminationStatus == 0

@@ -86,7 +86,61 @@ public enum CurrentReleaseValidator {
             release.manifestURL.hasSuffix("/client-sync-manifest.tsv"),
             "manifest_url must point to client-sync-manifest.tsv"
         )
+        try validateRelativeReleaseURL(
+            release.manifestURL,
+            releaseID: release.releaseID,
+            expectedSuffix: "/client-sync-manifest.tsv",
+            expectedExtension: nil,
+            field: "manifest_url"
+        )
+        try validateRelativeReleaseURL(
+            release.clientZipURL,
+            releaseID: release.releaseID,
+            expectedSuffix: nil,
+            expectedExtension: ".zip",
+            field: "client_zip_url"
+        )
+        try validateRelativeReleaseURL(
+            release.mrpackURL,
+            releaseID: release.releaseID,
+            expectedSuffix: nil,
+            expectedExtension: ".mrpack",
+            field: "mrpack_url"
+        )
         try ContractValidation.requireSHA256(release.clientZipSHA256, field: "client_zip_sha256")
         try ContractValidation.requireSHA256(release.mrpackSHA256, field: "mrpack_sha256")
+    }
+
+    private static func validateRelativeReleaseURL(
+        _ value: String,
+        releaseID: String,
+        expectedSuffix: String?,
+        expectedExtension: String?,
+        field: String
+    ) throws {
+        try ContractValidation.require(!value.isEmpty, "\(field) is required")
+        try ContractValidation.require(URL(string: value)?.scheme == nil, "\(field) must be a relative release URL")
+        try ContractValidation.require(!value.contains(".."), "\(field) must not contain parent traversal")
+        try ContractValidation.require(!value.contains("\\"), "\(field) must use forward slashes")
+        try ContractValidation.require(!value.contains("//"), "\(field) must not contain empty path segments")
+
+        let path = value.hasPrefix("/") ? String(value.dropFirst()) : value
+        let expectedPrefix = "downloads/releases/\(releaseID)/"
+        try ContractValidation.require(
+            path.hasPrefix(expectedPrefix),
+            "\(field) must stay inside \(expectedPrefix)"
+        )
+        if let expectedSuffix {
+            try ContractValidation.require(
+                path.hasSuffix(expectedSuffix),
+                "\(field) must end with \(expectedSuffix)"
+            )
+        }
+        if let expectedExtension {
+            try ContractValidation.require(
+                path.lowercased().hasSuffix(expectedExtension),
+                "\(field) must end with \(expectedExtension)"
+            )
+        }
     }
 }

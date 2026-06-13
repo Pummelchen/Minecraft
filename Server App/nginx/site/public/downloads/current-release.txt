@@ -1,1 +1,1 @@
-release_20260612_V17_bsl-shader-config
+release_20260613_V21_client-smart-sync-feed

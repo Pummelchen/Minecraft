@@ -26,7 +26,7 @@ The client identity/token model is frozen in `docs/contracts/CLIENT_IDENTITY.md`
 
 ## Manual Repair
 
-Manual repair is handled by the Swift client app and its bundled sync helper. The website must not publish legacy script repair commands.
+Manual repair is handled by the Swift client app and its bundled sync helper. The website must not publish shell-based repair commands.
 
 ## Client No-Download Summary
 

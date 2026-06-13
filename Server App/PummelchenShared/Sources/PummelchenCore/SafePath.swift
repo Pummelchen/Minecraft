@@ -21,7 +21,7 @@ public struct SafePath: Sendable {
 
     public func relativePath(for candidate: URL) throws -> String {
         let safe = try validateChild(candidate)
-        let rootPath = root.standardizedFileURL.path
+        let rootPath = root.standardizedFileURL.resolvingSymlinksInPath().path
         if safe.path == rootPath {
             return "."
         }

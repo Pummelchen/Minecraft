@@ -448,6 +448,8 @@ struct PummelchenServerCoreTests {
         let readyPreflight = try JSONDecoder().decode(WebTransportPreflightPayload.self, from: readyPreflightResponse.body)
         #expect(readyPreflight.ready)
         #expect(readyPreflight.unsupportedReason == nil)
+        #expect(PummelchenWebTransportServiceConfig.defaultMaxControlPayloadBytes >= 512 * 1024)
+        #expect(PummelchenWebTransportServiceConfig.defaultMaxControlPayloadBytes > ControlEventStore.maxControlPayloadBytes)
 
         let eventRequest = ControlEventCreateRequest(
             eventType: .releaseAvailable,
@@ -691,6 +693,28 @@ struct PummelchenServerCoreTests {
         }
         #expect(FileManager.default.fileExists(atPath: fixture.serverDir.appendingPathComponent("world/region/r.0.0.mca").path))
         #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("phase9.duckdb").path))
+    }
+
+    @Test("phase 9 safe world reset rejects unsafe world names before planning")
+    func phase9WorldResetRejectsUnsafeWorldNames() throws {
+        try requireDuckDB()
+        let fixture = try makeWorldResetFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        try "level-name=..\\\\outside\n".write(to: fixture.serverDir.appendingPathComponent("server.properties"), atomically: true, encoding: .utf8)
+        let pipeline = SwiftWorldResetPipeline(config: SwiftWorldResetConfig(
+            projectRoot: fixture.root,
+            serverDir: fixture.serverDir,
+            databaseURL: fixture.root.appendingPathComponent("phase9.duckdb"),
+            seed: "987654321",
+            radiusBlocks: 1000,
+            dryRun: true
+        ))
+
+        #expect(throws: SwiftWorldResetError.self) {
+            _ = try pipeline.run()
+        }
+        #expect(FileManager.default.fileExists(atPath: fixture.serverDir.appendingPathComponent("world/region/r.0.0.mca").path))
     }
 
     @Test("phase 9 safe world reset replaces world, installs datapacks, records cleanup")
