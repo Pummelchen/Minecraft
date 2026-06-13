@@ -176,7 +176,7 @@ public enum MinecraftClientDefaultWriter {
 
     private static func ensureServerEntry(defaults: MinecraftClientDefaults, minecraftDirectory: URL) throws {
         let path = minecraftDirectory.appendingPathComponent("servers.dat")
-        if let existing = try? Data(contentsOf: path), existing.containsASCII(defaults.serverAddress) {
+        if let existing = try? Data(contentsOf: path), (try? existing.hasServerAddress(defaults.serverAddress)) == true {
             return
         }
         if FileManager.default.fileExists(atPath: path.path) {
@@ -239,14 +239,34 @@ private extension Data {
         append(0)
     }
 
-    func containsASCII(_ value: String) -> Bool {
-        guard let ascii = value.data(using: .utf8), !ascii.isEmpty else {
-            return false
+    func appendingServerEntry(name: String, address: String) throws -> Data {
+        let (countOffset, serverCount, afterCountOffset) = try serversListHeader()
+        var cursor = afterCountOffset
+        for _ in 0..<serverCount {
+            try skipCompoundPayload(cursor: &cursor)
         }
-        return range(of: ascii) != nil
+        var updated = self
+        var entry = Data()
+        entry.appendServerCompound(name: name, address: address)
+        updated.replaceSubrange(cursor..<cursor, with: entry)
+        updated.writeInt32(serverCount + 1, at: countOffset)
+        return updated
     }
 
-    func appendingServerEntry(name: String, address: String) throws -> Data {
+    func hasServerAddress(_ address: String) throws -> Bool {
+        let normalizedTarget = Self.normalizedServerAddress(address)
+        let (_, serverCount, afterCountOffset) = try serversListHeader()
+        var cursor = afterCountOffset
+        for _ in 0..<serverCount {
+            let entry = try readServerEntry(cursor: &cursor)
+            if let ip = entry["ip"], Self.normalizedServerAddress(ip) == normalizedTarget {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func serversListHeader() throws -> (countOffset: Int, serverCount: Int32, afterCountOffset: Int) {
         let marker = Data([9, 0, 7]) + Data("servers".utf8) + Data([10])
         guard let markerRange = range(of: marker) else {
             throw ContractValidationError.invalid("servers.dat does not contain a servers list")
@@ -259,20 +279,38 @@ private extension Data {
         guard serverCount >= 0 else {
             throw ContractValidationError.invalid("servers.dat has negative servers count")
         }
-        var cursor = countOffset + 4
-        for _ in 0..<serverCount {
-            try skipCompoundPayload(cursor: &cursor)
+        return (countOffset, serverCount, countOffset + 4)
+    }
+
+    private static func normalizedServerAddress(_ address: String) -> String {
+        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return trimmed.contains(":") ? trimmed : "\(trimmed):25565"
+    }
+
+    private func readServerEntry(cursor: inout Int) throws -> [String: String] {
+        var values: [String: String] = [:]
+        while cursor < count {
+            let type = self[cursor]
+            cursor += 1
+            if type == 0 {
+                return values
+            }
+            let name = try readUTF(cursor: &cursor)
+            if type == 8 {
+                values[name] = try readUTF(cursor: &cursor)
+            } else {
+                try skipPayload(type: type, cursor: &cursor)
+            }
         }
-        var updated = self
-        var entry = Data()
-        entry.appendServerCompound(name: name, address: address)
-        updated.replaceSubrange(cursor..<cursor, with: entry)
-        updated.writeInt32(serverCount + 1, at: countOffset)
-        return updated
+        throw ContractValidationError.invalid("unterminated server entry in servers.dat")
     }
 
     private func readInt32(at offset: Int) -> Int32 {
-        Int32(Int(self[offset]) << 24 | Int(self[offset + 1]) << 16 | Int(self[offset + 2]) << 8 | Int(self[offset + 3]))
+        let raw = UInt32(self[offset]) << 24
+            | UInt32(self[offset + 1]) << 16
+            | UInt32(self[offset + 2]) << 8
+            | UInt32(self[offset + 3])
+        return Int32(bitPattern: raw)
     }
 
     private mutating func writeInt32(_ value: Int32, at offset: Int) {
@@ -326,8 +364,14 @@ private extension Data {
         case 4, 6:
             try skip(8, cursor: &cursor)
         case 7:
+            guard cursor + 4 <= count else {
+                throw ContractValidationError.invalid("truncated byte array length in servers.dat")
+            }
             let length = Int(readInt32(at: cursor))
             cursor += 4
+            guard length >= 0 else {
+                throw ContractValidationError.invalid("negative byte array size in servers.dat")
+            }
             try skip(length, cursor: &cursor)
         case 8:
             _ = try readUTF(cursor: &cursor)
@@ -348,12 +392,24 @@ private extension Data {
         case 10:
             try skipCompoundPayload(cursor: &cursor)
         case 11:
+            guard cursor + 4 <= count else {
+                throw ContractValidationError.invalid("truncated int array length in servers.dat")
+            }
             let length = Int(readInt32(at: cursor))
             cursor += 4
+            guard length >= 0 else {
+                throw ContractValidationError.invalid("negative int array size in servers.dat")
+            }
             try skip(length * 4, cursor: &cursor)
         case 12:
+            guard cursor + 4 <= count else {
+                throw ContractValidationError.invalid("truncated long array length in servers.dat")
+            }
             let length = Int(readInt32(at: cursor))
             cursor += 4
+            guard length >= 0 else {
+                throw ContractValidationError.invalid("negative long array size in servers.dat")
+            }
             try skip(length * 8, cursor: &cursor)
         default:
             throw ContractValidationError.invalid("unknown NBT tag in servers.dat: \(type)")

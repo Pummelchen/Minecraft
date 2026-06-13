@@ -49,6 +49,7 @@ struct MinecraftClientDefaultsTests {
 
         let servers = try Data(contentsOf: root.appendingPathComponent("servers.dat"))
         #expect(servers.range(of: Data("91.99.176.243:25565".utf8)) != nil)
+        #expect(servers.occurrences(of: Data("91.99.176.243:25565".utf8)) == 1)
 
         let otherDefaults = MinecraftClientDefaults(serverName: "Other Server", serverAddress: "example.org:25565")
         let otherRoot = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -60,6 +61,30 @@ struct MinecraftClientDefaultsTests {
         let mergedServers = try Data(contentsOf: otherRoot.appendingPathComponent("servers.dat"))
         #expect(mergedServers.range(of: Data("example.org:25565".utf8)) != nil)
         #expect(mergedServers.range(of: Data("91.99.176.243:25565".utf8)) != nil)
+
+        let existingPummelchenRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pummelchen-minecraft-existing-server-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: existingPummelchenRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: existingPummelchenRoot) }
+        try MinecraftClientDefaultWriter.apply(
+            defaults: MinecraftClientDefaults(serverName: "Already Added", serverAddress: "91.99.176.243:25565"),
+            to: existingPummelchenRoot
+        )
+        try MinecraftClientDefaultWriter.apply(to: existingPummelchenRoot)
+        let existingPummelchenServers = try Data(contentsOf: existingPummelchenRoot.appendingPathComponent("servers.dat"))
+        #expect(existingPummelchenServers.occurrences(of: Data("91.99.176.243:25565".utf8)) == 1)
+
+        let defaultPortRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pummelchen-minecraft-default-port-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: defaultPortRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: defaultPortRoot) }
+        try MinecraftClientDefaultWriter.apply(
+            defaults: MinecraftClientDefaults(serverName: "Pummelchen", serverAddress: "91.99.176.243"),
+            to: defaultPortRoot
+        )
+        try MinecraftClientDefaultWriter.apply(to: defaultPortRoot)
+        let defaultPortServers = try Data(contentsOf: defaultPortRoot.appendingPathComponent("servers.dat"))
+        #expect(defaultPortServers.occurrences(of: Data("91.99.176.243".utf8)) == 1)
     }
 
     @Test("uses 6 GB heap on 8 GB Macs and 8 GB heap otherwise")
@@ -70,5 +95,18 @@ struct MinecraftClientDefaultsTests {
         #expect(MinecraftClientDefaults.recommendedJavaArguments(physicalMemoryBytes: eightGB).contains("-Xmx6G"))
         #expect(MinecraftClientDefaults.recommendedHeapGB(physicalMemoryBytes: sixteenGB) == 8)
         #expect(MinecraftClientDefaults.recommendedJavaArguments(physicalMemoryBytes: sixteenGB).contains("-Xmx8G"))
+    }
+}
+
+private extension Data {
+    func occurrences(of needle: Data) -> Int {
+        guard !needle.isEmpty else { return 0 }
+        var count = 0
+        var searchStart = startIndex
+        while searchStart < endIndex, let range = self[searchStart..<endIndex].range(of: needle) {
+            count += 1
+            searchStart = range.upperBound
+        }
+        return count
     }
 }
