@@ -1,4 +1,5 @@
-<img width="1441" height="1672" alt="image" src="https://github.com/user-attachments/assets/8cdcd155-a5cd-4e20-b330-b0521708c03f" />
+<img width="1336" height="1723" alt="image" src="https://github.com/user-attachments/assets/05f64b08-ea67-4c79-a5b2-9d5efd1d69ef" />
+
 
 
 # Minecraft AI Server/Client Mod Updater
