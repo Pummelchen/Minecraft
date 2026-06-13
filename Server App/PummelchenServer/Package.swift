@@ -5,7 +5,7 @@ import PackageDescription
 let package = Package(
     name: "PummelchenServer",
     platforms: [
-        .macOS(.v14)
+        .macOS(.v15)
     ],
     products: [
         .library(
@@ -27,13 +27,18 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../PummelchenShared"),
-        .package(path: "../../Client App/PummelchenClient")
+        .package(path: "../../Client App/PummelchenClient"),
+        .package(path: "../Vendor/Quiver")
     ],
     targets: [
         .target(
             name: "PummelchenServerCore",
             dependencies: [
-                .product(name: "PummelchenCore", package: "PummelchenShared")
+                .product(name: "PummelchenCore", package: "PummelchenShared"),
+                .product(name: "HTTP3", package: "Quiver"),
+                .product(name: "QUIC", package: "Quiver"),
+                .product(name: "QUICCore", package: "Quiver"),
+                .product(name: "QUICCrypto", package: "Quiver")
             ]
         ),
         .executableTarget(

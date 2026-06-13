@@ -75,6 +75,7 @@ public struct PummelchenServerConfig: Sendable {
     public let webTransportPort: Int
     public let webTransportPath: String
     public let webTransportSessionEngineActive: Bool
+    public let webTransportRuntimeState: WebTransportRuntimeState?
 
     public init(
         projectRoot: URL,
@@ -88,7 +89,8 @@ public struct PummelchenServerConfig: Sendable {
         webTransportPublicHost: String = ProcessInfo.processInfo.environment["PUMMELCHEN_WEBTRANSPORT_PUBLIC_HOST"] ?? "pummelchen.91.99.176.243.nip.io",
         webTransportPort: Int = Int(ProcessInfo.processInfo.environment["PUMMELCHEN_WEBTRANSPORT_PORT"] ?? "7443") ?? 7443,
         webTransportPath: String = ProcessInfo.processInfo.environment["PUMMELCHEN_WEBTRANSPORT_PATH"] ?? "/webtransport/v1/control",
-        webTransportSessionEngineActive: Bool = false
+        webTransportSessionEngineActive: Bool = false,
+        webTransportRuntimeState: WebTransportRuntimeState? = nil
     ) {
         self.projectRoot = projectRoot
         self.bindHost = bindHost
@@ -102,6 +104,7 @@ public struct PummelchenServerConfig: Sendable {
         self.webTransportPort = webTransportPort
         self.webTransportPath = webTransportPath.hasPrefix("/") ? webTransportPath : "/\(webTransportPath)"
         self.webTransportSessionEngineActive = webTransportSessionEngineActive
+        self.webTransportRuntimeState = webTransportRuntimeState
     }
 }
 
@@ -293,15 +296,16 @@ public final class PummelchenServerAPI: @unchecked Sendable {
     }
 
     private func webTransportPreflight() throws -> HTTPResponse {
+        let runtimeActive = config.webTransportRuntimeState?.active ?? config.webTransportSessionEngineActive
         let preflight = WebTransportH3Preflight(
-            serverHTTP3Settings: config.webTransportSessionEngineActive ? [
+            serverHTTP3Settings: runtimeActive ? [
                 WebTransportH3Draft15.Setting.wtEnabled: 1,
                 WebTransportH3Draft15.Setting.enableConnectProtocol: 1,
                 WebTransportH3Draft15.Setting.h3Datagram: 1
             ] : [:],
-            maxDatagramFrameSize: config.webTransportSessionEngineActive ? 1_200 : nil,
-            resetStreamAtEnabled: config.webTransportSessionEngineActive,
-            sessionEngineActive: config.webTransportSessionEngineActive,
+            maxDatagramFrameSize: runtimeActive ? 65_535 : nil,
+            resetStreamAtEnabled: runtimeActive,
+            sessionEngineActive: runtimeActive,
             dedicatedUDPPort: config.webTransportPort,
             behindNginx: false
         )
@@ -316,7 +320,7 @@ public final class PummelchenServerAPI: @unchecked Sendable {
             publicHost: config.webTransportPublicHost,
             publicPort: config.webTransportPort,
             ready: preflight.unsupportedReason() == nil,
-            unsupportedReason: preflight.unsupportedReason(),
+            unsupportedReason: config.webTransportRuntimeState?.lastError ?? preflight.unsupportedReason(),
             upgradeToken: WebTransportH3Draft15.upgradeToken,
             requiredHTTP3Settings: [
                 "SETTINGS_ENABLE_CONNECT_PROTOCOL": WebTransportH3Draft15.Setting.enableConnectProtocol,

@@ -17,7 +17,11 @@ var targets: [Target] = [
     .target(
         name: "PummelchenClientCore",
         dependencies: [
-            .product(name: "PummelchenCore", package: "PummelchenShared")
+            .product(name: "PummelchenCore", package: "PummelchenShared"),
+            .product(name: "HTTP3", package: "Quiver"),
+            .product(name: "QUIC", package: "Quiver"),
+            .product(name: "QUICCore", package: "Quiver"),
+            .product(name: "QUICCrypto", package: "Quiver")
         ]
     ),
     .executableTarget(
@@ -51,11 +55,12 @@ targets.append(
 let package = Package(
     name: "PummelchenClient",
     platforms: [
-        .macOS(.v14)
+        .macOS(.v15)
     ],
     products: products,
     dependencies: [
-        .package(path: "../../Server App/PummelchenShared")
+        .package(path: "../../Server App/PummelchenShared"),
+        .package(path: "../../Server App/Vendor/Quiver")
     ],
     targets: targets
 )

@@ -448,6 +448,88 @@ public struct WebTransportPreflightPayload: Codable, Equatable, Sendable {
     }
 }
 
+public struct WebTransportControlRequest: Codable, Equatable, Sendable {
+    public let action: String
+    public let clientID: String
+    public let clientAPIToken: String
+    public let afterEventID: String?
+    public let limit: Int?
+    public let eventID: String?
+    public let receivedAt: String?
+    public let registration: ClientRegistrationRequest?
+    public let statusReport: ClientStatusReport?
+    public let inventory: ClientInventoryUpload?
+    public let diagnostics: ClientDiagnosticsUpload?
+    public let defaultsEvents: ClientDefaultsEventUpload?
+
+    enum CodingKeys: String, CodingKey {
+        case action
+        case clientID = "client_id"
+        case clientAPIToken = "client_api_token"
+        case afterEventID = "after_event_id"
+        case limit
+        case eventID = "event_id"
+        case receivedAt = "received_at"
+        case registration
+        case statusReport = "status_report"
+        case inventory
+        case diagnostics
+        case defaultsEvents = "defaults_events"
+    }
+
+    public init(
+        action: String,
+        clientID: String,
+        clientAPIToken: String,
+        afterEventID: String? = nil,
+        limit: Int? = nil,
+        eventID: String? = nil,
+        receivedAt: String? = nil,
+        registration: ClientRegistrationRequest? = nil,
+        statusReport: ClientStatusReport? = nil,
+        inventory: ClientInventoryUpload? = nil,
+        diagnostics: ClientDiagnosticsUpload? = nil,
+        defaultsEvents: ClientDefaultsEventUpload? = nil
+    ) {
+        self.action = action
+        self.clientID = clientID
+        self.clientAPIToken = clientAPIToken
+        self.afterEventID = afterEventID
+        self.limit = limit
+        self.eventID = eventID
+        self.receivedAt = receivedAt
+        self.registration = registration
+        self.statusReport = statusReport
+        self.inventory = inventory
+        self.diagnostics = diagnostics
+        self.defaultsEvents = defaultsEvents
+    }
+}
+
+public struct WebTransportControlResponse: Codable, Equatable, Sendable {
+    public let ok: Bool
+    public let error: String?
+    public let batch: ControlEventBatch?
+    public let ack: ClientWriteAck?
+    public let serverTime: String
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case error
+        case batch
+        case ack
+        case serverTime = "server_time"
+    }
+
+    public init(ok: Bool, error: String? = nil, batch: ControlEventBatch? = nil, ack: ClientWriteAck? = nil, serverTime: String) {
+        self.ok = ok
+        self.error = error
+        self.batch = batch
+        self.ack = ack
+        self.serverTime = serverTime
+    }
+}
+
 public struct ControlEventAck: Codable, Equatable, Sendable {
     public let clientID: String
     public let eventID: String

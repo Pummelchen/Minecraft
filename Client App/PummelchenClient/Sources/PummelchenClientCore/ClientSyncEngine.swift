@@ -420,10 +420,18 @@ public struct ClientSyncEngine: Sendable {
             osSummary: ProcessInfo.processInfo.operatingSystemVersionString,
             arch: Self.machineArchitecture()
         )
-        guard let body = try? JSONEncoder().encode(payload) else {
-            return
+        let webTransport = await webTransportChannel(token: token, clientID: clientID)
+        if let webTransport {
+            do {
+                _ = try await webTransport.reportStatus(payload, action: "sync_run_report")
+            } catch {
+                if let body = try? JSONEncoder().encode(payload) {
+                    _ = try? await sendClientUpload(path: "api/v1/clients/sync-runs", token: token, clientID: clientID, body: body)
+                }
+            }
+        } else if let body = try? JSONEncoder().encode(payload) {
+            _ = try? await sendClientUpload(path: "api/v1/clients/sync-runs", token: token, clientID: clientID, body: body)
         }
-        _ = try? await sendClientUpload(path: "api/v1/clients/sync-runs", token: token, clientID: clientID, body: body)
 
         let inventoryUpload = ClientInventoryUpload(
             clientID: clientID,
@@ -438,7 +446,15 @@ public struct ClientSyncEngine: Sendable {
                 )
             }
         )
-        if let inventoryBody = try? JSONEncoder().encode(inventoryUpload) {
+        if let webTransport {
+            do {
+                _ = try await webTransport.uploadInventory(inventoryUpload)
+            } catch {
+                if let inventoryBody = try? JSONEncoder().encode(inventoryUpload) {
+                    _ = try? await sendClientUpload(path: "api/v1/clients/inventory", token: token, clientID: clientID, body: inventoryBody)
+                }
+            }
+        } else if let inventoryBody = try? JSONEncoder().encode(inventoryUpload) {
             _ = try? await sendClientUpload(path: "api/v1/clients/inventory", token: token, clientID: clientID, body: inventoryBody)
         }
 
@@ -455,9 +471,33 @@ public struct ClientSyncEngine: Sendable {
                 )
             }
         )
-        if let defaultsBody = try? JSONEncoder().encode(defaultsUpload) {
+        if let webTransport {
+            do {
+                _ = try await webTransport.uploadDefaultsEvents(defaultsUpload)
+            } catch {
+                if let defaultsBody = try? JSONEncoder().encode(defaultsUpload) {
+                    _ = try? await sendClientUpload(path: "api/v1/clients/defaults-events", token: token, clientID: clientID, body: defaultsBody)
+                }
+            }
+        } else if let defaultsBody = try? JSONEncoder().encode(defaultsUpload) {
             _ = try? await sendClientUpload(path: "api/v1/clients/defaults-events", token: token, clientID: clientID, body: defaultsBody)
         }
+    }
+
+    private func webTransportChannel(token: String, clientID: String) async -> ClientWebTransportControlChannel? {
+        let channel = ClientControlChannel(configuration: ClientControlChannelConfiguration(
+            serverURL: configuration.serverURL,
+            clientID: clientID,
+            clientAPIToken: token
+        ))
+        guard let preflight = try? await channel.webTransportPreflight(), preflight.ready else {
+            return nil
+        }
+        return ClientWebTransportControlChannel(
+            preflight: preflight,
+            clientID: clientID,
+            clientAPIToken: token
+        )
     }
 
     private func sendClientUpload(path: String, token: String, clientID: String, body: Data) async throws -> Data {

@@ -59,6 +59,18 @@ public struct ClientControlChannel: Sendable {
     }
 
     public func acknowledge(_ event: ControlEvent) async throws {
+        if let preflight = try? await webTransportPreflight(), preflight.ready {
+            do {
+                try await ClientWebTransportControlChannel(
+                    preflight: preflight,
+                    clientID: configuration.clientID,
+                    clientAPIToken: configuration.clientAPIToken
+                ).acknowledge(event)
+                return
+            } catch {
+                // Fall through to authenticated HTTPS so acknowledgements are not lost.
+            }
+        }
         let ack = ControlEventAck(clientID: configuration.clientID, eventID: event.eventID, receivedAt: Self.isoNow())
         var request = URLRequest(url: configuration.serverURL.appendingPathComponent("api/v1/control/acks"))
         request.httpMethod = "POST"
@@ -75,7 +87,15 @@ public struct ClientControlChannel: Sendable {
 
     public func reconnectWithFallback(afterEventID: String? = nil) async throws -> ControlEventBatch {
         if let preflight = try? await webTransportPreflight(), preflight.ready {
-            throw ContractValidationError.invalid("WebTransport endpoint \(preflight.sessionURL) is ready, but native WebTransport sessions are not implemented in this client build")
+            do {
+                return try await ClientWebTransportControlChannel(
+                    preflight: preflight,
+                    clientID: configuration.clientID,
+                    clientAPIToken: configuration.clientAPIToken
+                ).fetchEvents(afterEventID: afterEventID)
+            } catch {
+                // Keep the client self-healing if UDP/QUIC is temporarily blocked.
+            }
         }
         do {
             let info = try await controlInfo()
