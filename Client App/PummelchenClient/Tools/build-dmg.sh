@@ -91,20 +91,25 @@ hdiutil create \
     shasum -a 256 "$DMG_NAME" | tee "$DMG_NAME.sha256"
 )
 
-if [[ -n "${PUMMELCHEN_RELEASE_ID:-}" && -n "${PUMMELCHEN_HEADLESS_COMMAND:-}" ]]; then
+if [[ -n "${PUMMELCHEN_RELEASE_ID:-}" ]]; then
     SERVER_PACKAGE_DIR="${PUMMELCHEN_SERVER_PACKAGE_DIR:-$ROOT_DIR/../../Server App/PummelchenServer}"
+    SOAK_ARGS=(
+        --dmg "$DMG_PATH"
+        --release-id "$PUMMELCHEN_RELEASE_ID"
+        --server-address "${PUMMELCHEN_SERVER_ADDRESS:-91.99.176.243:25565}"
+        --server-url "${PUMMELCHEN_SERVER_URL:-https://pummelchen.91.99.176.243.nip.io}"
+        --duration-seconds "${PUMMELCHEN_HEADLESS_SOAK_SECONDS:-300}"
+    )
+    if [[ -n "${PUMMELCHEN_HEADLESS_COMMAND:-}" ]]; then
+        SOAK_ARGS+=(--headless-command "$PUMMELCHEN_HEADLESS_COMMAND")
+    fi
     swift run \
         --package-path "$SERVER_PACKAGE_DIR" \
         -c release \
         pummelchen-headless-soak \
-        --dmg "$DMG_PATH" \
-        --release-id "$PUMMELCHEN_RELEASE_ID" \
-        --server-address "${PUMMELCHEN_SERVER_ADDRESS:-91.99.176.243:25565}" \
-        --server-url "${PUMMELCHEN_SERVER_URL:-https://pummelchen.91.99.176.243.nip.io}" \
-        --duration-seconds "${PUMMELCHEN_HEADLESS_SOAK_SECONDS:-300}" \
-        --headless-command "$PUMMELCHEN_HEADLESS_COMMAND"
+        "${SOAK_ARGS[@]}"
 elif [[ "${PUMMELCHEN_REQUIRE_HEADLESS_SOAK:-false}" == "true" ]]; then
-    echo "PUMMELCHEN_REQUIRE_HEADLESS_SOAK=true but PUMMELCHEN_RELEASE_ID or PUMMELCHEN_HEADLESS_COMMAND is missing" >&2
+    echo "PUMMELCHEN_REQUIRE_HEADLESS_SOAK=true but PUMMELCHEN_RELEASE_ID is missing" >&2
     exit 1
 fi
 

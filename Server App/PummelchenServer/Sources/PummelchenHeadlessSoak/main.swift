@@ -17,9 +17,9 @@ enum HeadlessSoakError: Error, CustomStringConvertible {
         case .usage:
             return """
             usage:
-              pummelchen-headless-soak --dmg <path> --release-id <id> --server-address <host:25565> --headless-command <shell> [--server-url <url>] [--duration-seconds 300] [--work-dir <dir>] [--report <path>] [--client-api-token <token>] [--keep-work-dir true]
+              pummelchen-headless-soak --dmg <path> --release-id <id> --server-address <host:25565> [--headless-command <shell>] [--server-url <url>] [--duration-seconds 300] [--work-dir <dir>] [--report <path>] [--client-api-token <token>] [--keep-work-dir true]
 
-            The headless command must start a real Minecraft client from the synced isolated Minecraft directory and stay alive for the soak duration.
+            By default this uses HeadlessMC plus HMC-Specifics to start a real Minecraft client from the synced isolated Minecraft directory and stay alive for the soak duration.
             Environment provided to the command:
               PUMMELCHEN_SOAK_MINECRAFT_DIR
               PUMMELCHEN_SOAK_HOME
@@ -79,7 +79,14 @@ struct HeadlessSoakConfig {
     let durationSeconds: Double
     let workDir: URL
     let report: URL
-    let headlessCommand: String
+    let headlessCommand: String?
+    let headlessMCHome: URL
+    let headlessMCVersion: String
+    let minecraftVersion: String
+    let loader: String
+    let loaderVersion: String
+    let heapGB: Int
+    let inGameTimeoutSeconds: Double
     let clientAPIToken: String?
     let keepWorkDir: Bool
 
@@ -108,7 +115,17 @@ struct HeadlessSoakConfig {
         self.durationSeconds = durationSeconds
         self.workDir = workDir
         self.report = report
-        self.headlessCommand = try arguments.require("--headless-command")
+        self.headlessCommand = arguments.options["--headless-command"]
+        self.headlessMCHome = arguments.options["--headlessmc-home"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support/Pummelchen/headlessmc", isDirectory: true)
+        self.headlessMCVersion = arguments.options["--headlessmc-version"] ?? "2.9.0"
+        self.minecraftVersion = arguments.options["--minecraft-version"] ?? "26.1.2"
+        self.loader = arguments.options["--loader"] ?? "neoforge"
+        self.loaderVersion = arguments.options["--loader-version"] ?? "26.1.2.76"
+        self.heapGB = Int(arguments.options["--heap-gb"] ?? "8") ?? 8
+        self.inGameTimeoutSeconds = Double(arguments.options["--ingame-timeout-seconds"] ?? "300") ?? 300
         self.clientAPIToken = arguments.options["--client-api-token"] ?? ProcessInfo.processInfo.environment["PUMMELCHEN_CLIENT_API_TOKEN"]
         self.keepWorkDir = arguments.options["--keep-work-dir"] == "true"
     }
@@ -340,12 +357,19 @@ struct HeadlessSoakRunner {
     }
 
     private func hasNeoForgeInstall(minecraftDir: URL) -> Bool {
-        let version = minecraftDir.appendingPathComponent("versions/neoforge-26.1.2.76/neoforge-26.1.2.76.json")
-        let libraries = minecraftDir.appendingPathComponent("libraries/net/neoforged/neoforge/26.1.2.76", isDirectory: true)
+        let version = minecraftDir.appendingPathComponent("versions/neoforge-\(config.loaderVersion)/neoforge-\(config.loaderVersion).json")
+        let libraries = minecraftDir.appendingPathComponent("libraries/net/neoforged/neoforge/\(config.loaderVersion)", isDirectory: true)
         return fileManager.fileExists(atPath: version.path) && fileManager.fileExists(atPath: libraries.path)
     }
 
     private func runHeadless(minecraftDir: URL, pummelchenHome: URL, java: URL) throws -> ProcessResult {
+        if let command = config.headlessCommand, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return try runCustomHeadless(command: command, minecraftDir: minecraftDir, pummelchenHome: pummelchenHome, java: java)
+        }
+        return try runBuiltInHeadlessMC(minecraftDir: minecraftDir, pummelchenHome: pummelchenHome, java: java)
+    }
+
+    private func runCustomHeadless(command: String, minecraftDir: URL, pummelchenHome: URL, java: URL) throws -> ProcessResult {
         var env = ProcessInfo.processInfo.environment
         env["PUMMELCHEN_SOAK_MINECRAFT_DIR"] = minecraftDir.path
         env["PUMMELCHEN_SOAK_HOME"] = pummelchenHome.path
@@ -354,7 +378,239 @@ struct HeadlessSoakRunner {
         env["PUMMELCHEN_SOAK_DURATION_SECONDS"] = String(Int(config.durationSeconds))
         env["PUMMELCHEN_SOAK_RELEASE_ID"] = config.releaseID
         let timeout = config.durationSeconds + 180
-        return try runProcess(executable: "/bin/sh", arguments: ["-lc", config.headlessCommand], timeoutSeconds: timeout, environment: env)
+        return try runProcess(executable: "/bin/sh", arguments: ["-lc", command], timeoutSeconds: timeout, environment: env)
+    }
+
+    private func runBuiltInHeadlessMC(minecraftDir: URL, pummelchenHome: URL, java: URL) throws -> ProcessResult {
+        try fileManager.createDirectory(at: config.headlessMCHome, withIntermediateDirectories: true)
+        let hmcJar = try ensureHeadlessMCJar()
+        try ensureHMCSpecifics(minecraftDir: minecraftDir)
+        try seedClientOptions(minecraftDir: minecraftDir)
+
+        let hmcLog = config.workDir.appendingPathComponent("headless-minecraft.log")
+        let xvfb = try startXvfbIfNeeded()
+        defer { stopProcess(xvfb.process) }
+
+        let process = Process()
+        process.executableURL = java
+        process.arguments = [
+            "-Dhmc.gamedir=\(minecraftDir.path)",
+            "-Dhmc.jline.enabled=false",
+            "-jar",
+            hmcJar.path
+        ]
+        process.currentDirectoryURL = config.headlessMCHome
+        var env = ProcessInfo.processInfo.environment
+        env["DISPLAY"] = xvfb.display
+        process.environment = env
+        let stdin = Pipe()
+        process.standardInput = stdin
+        _ = fileManager.createFile(atPath: hmcLog.path, contents: nil)
+        let outputHandle = try FileHandle(forWritingTo: hmcLog)
+        defer { try? outputHandle.close() }
+        process.standardOutput = outputHandle
+        process.standardError = outputHandle
+        try process.run()
+        Thread.sleep(forTimeInterval: 4)
+
+        let server = parsedServerAddress()
+        let launch = """
+        launch \(config.loader):\(config.minecraftVersion) -specifics --jvm "-Xmx\(config.heapGB)G -Dio.netty.transport.noNative=true -Djava.net.preferIPv4Stack=true" --game-args "--quickPlayMultiplayer \(server.host):\(server.port)"
+        """
+        try send(command: launch, to: stdin)
+        try waitForInGame(process: process, stdin: stdin, hmcLog: hmcLog, minecraftDir: minecraftDir, timeoutSeconds: config.inGameTimeoutSeconds)
+        let connectedStart = Date()
+        let deadline = connectedStart.addingTimeInterval(config.durationSeconds)
+        while Date() < deadline {
+            if !process.isRunning {
+                throw HeadlessSoakError.commandFailed("HeadlessMC exited during live soak")
+            }
+            let crashes = countCrashReports(minecraftDir: minecraftDir)
+            let fatals = countFatalLogLines(extraOutput: readText(hmcLog), minecraftDir: minecraftDir)
+            if crashes > 0 { throw HeadlessSoakError.crashReports(crashes) }
+            if fatals > 0 { throw HeadlessSoakError.fatalLogLines(fatals) }
+            Thread.sleep(forTimeInterval: 1)
+        }
+        try? send(command: "disconnect", to: stdin)
+        Thread.sleep(forTimeInterval: 2)
+        try? send(command: "quit", to: stdin)
+        stopProcess(process)
+        let output = readText(hmcLog)
+        return ProcessResult(
+            exitCode: 0,
+            output: output,
+            durationSeconds: Date().timeIntervalSince(connectedStart),
+            timedOut: false
+        )
+    }
+
+    private func ensureHeadlessMCJar() throws -> URL {
+        let jar = config.headlessMCHome.appendingPathComponent("headlessmc-launcher-\(config.headlessMCVersion).jar")
+        if fileManager.fileExists(atPath: jar.path) {
+            return jar
+        }
+        let urls = [
+            "https://github.com/3arthqu4ke/HeadlessMc/releases/download/\(config.headlessMCVersion)/headlessmc-launcher-\(config.headlessMCVersion).jar",
+            "https://github.com/headlesshq/headlessmc/releases/download/\(config.headlessMCVersion)/headlessmc-launcher-\(config.headlessMCVersion).jar",
+            "https://github.com/headlesshq/headlessmc/releases/download/\(config.headlessMCVersion)/headlessmc-launcher.jar"
+        ]
+        try downloadFirstAvailable(urls: urls, to: jar)
+        return jar
+    }
+
+    private func ensureHMCSpecifics(minecraftDir: URL) throws {
+        let mods = minecraftDir.appendingPathComponent("mods", isDirectory: true)
+        try fileManager.createDirectory(at: mods, withIntermediateDirectories: true)
+        let latestName = "hmc-specifics-\(config.minecraftVersion)-\(config.loader)-latest.jar"
+        let latest = mods.appendingPathComponent(latestName)
+        if !fileManager.fileExists(atPath: latest.path) {
+            let url = "https://github.com/headlesshq/hmc-specifics/releases/download/\(config.minecraftVersion)-latest/\(latestName)"
+            try downloadFirstAvailable(urls: [url], to: latest)
+        }
+        let legacyName = "hmc-specifics-\(config.minecraftVersion)-2.4.0-\(config.loader)-release.jar"
+        let legacy = config.headlessMCHome
+            .appendingPathComponent("HeadlessMC/specifics/hmc-specifics", isDirectory: true)
+            .appendingPathComponent(legacyName)
+        try fileManager.createDirectory(at: legacy.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if !fileManager.fileExists(atPath: legacy.path) {
+            try fileManager.copyItem(at: latest, to: legacy)
+        }
+    }
+
+    private func seedClientOptions(minecraftDir: URL) throws {
+        let options = minecraftDir.appendingPathComponent("options.txt")
+        var values: [String: String] = [:]
+        if let existing = try? String(contentsOf: options, encoding: .utf8) {
+            for line in existing.split(separator: "\n") {
+                let parts = line.split(separator: ":", maxSplits: 1).map(String.init)
+                if parts.count == 2 {
+                    values[parts[0]] = parts[1]
+                }
+            }
+        }
+        [
+            "pauseOnLostFocus": "false",
+            "onboardAccessibility": "false",
+            "fullscreen": "false",
+            "renderDistance": "6",
+            "simulationDistance": "5",
+            "maxFps": "60"
+        ].forEach { values[$0.key] = $0.value }
+        try values
+            .keys
+            .sorted()
+            .map { "\($0):\(values[$0] ?? "")" }
+            .joined(separator: "\n")
+            .appending("\n")
+            .write(to: options, atomically: true, encoding: .utf8)
+    }
+
+    private func downloadFirstAvailable(urls: [String], to destination: URL) throws {
+        try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let tmp = destination.deletingLastPathComponent().appendingPathComponent(".\(destination.lastPathComponent).tmp-\(UUID().uuidString)")
+        var errors: [String] = []
+        for url in urls {
+            do {
+                let result = try runProcess(executable: "/usr/bin/curl", arguments: ["-fL", "--retry", "3", "--connect-timeout", "20", "-o", tmp.path, url], timeoutSeconds: 180, environment: [:])
+                guard result.exitCode == 0 else {
+                    errors.append("\(url): \(result.output)")
+                    continue
+                }
+                let prefix = (try? Data(contentsOf: tmp).prefix(64)) ?? Data()
+                if String(decoding: prefix, as: UTF8.self).lowercased().contains("<html") {
+                    errors.append("\(url): returned HTML instead of jar")
+                    try? fileManager.removeItem(at: tmp)
+                    continue
+                }
+                if fileManager.fileExists(atPath: destination.path) {
+                    try fileManager.removeItem(at: destination)
+                }
+                try fileManager.moveItem(at: tmp, to: destination)
+                try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+                return
+            } catch {
+                errors.append("\(url): \(error)")
+                try? fileManager.removeItem(at: tmp)
+            }
+        }
+        throw HeadlessSoakError.commandFailed("download failed: \(errors.joined(separator: " | "))")
+    }
+
+    private func startXvfbIfNeeded() throws -> (process: Process?, display: String) {
+        if let display = ProcessInfo.processInfo.environment["DISPLAY"], !display.isEmpty {
+            return (nil, display)
+        }
+        let which = try runProcess(executable: "/usr/bin/which", arguments: ["Xvfb"], timeoutSeconds: 10, environment: [:])
+        guard which.exitCode == 0 else {
+            throw HeadlessSoakError.commandFailed("Xvfb is required when DISPLAY is not set")
+        }
+        let display = try firstFreeDisplay()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: which.output.trimmingCharacters(in: .whitespacesAndNewlines))
+        process.arguments = [display, "-screen", "0", "1920x1080x24", "-ac", "+extension", "GLX", "+render", "-noreset"]
+        let log = config.workDir.appendingPathComponent("xvfb.log")
+        _ = fileManager.createFile(atPath: log.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: log)
+        process.standardOutput = handle
+        process.standardError = handle
+        try process.run()
+        Thread.sleep(forTimeInterval: 2)
+        try? handle.close()
+        return (process, display)
+    }
+
+    private func firstFreeDisplay() throws -> String {
+        for number in 99..<130 {
+            if !fileManager.fileExists(atPath: "/tmp/.X11-unix/X\(number)") {
+                return ":\(number)"
+            }
+        }
+        throw HeadlessSoakError.commandFailed("no free Xvfb display in :99-:129")
+    }
+
+    private func waitForInGame(process: Process, stdin: Pipe, hmcLog: URL, minecraftDir: URL, timeoutSeconds: Double) throws {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            if !process.isRunning {
+                throw HeadlessSoakError.commandFailed("HeadlessMC exited before the client reached in-game state")
+            }
+            try? send(command: "gui", to: stdin)
+            Thread.sleep(forTimeInterval: 5)
+            let text = readText(hmcLog)
+            if text.localizedCaseInsensitiveContains("currently not displaying a Gui") || observedLogin(in: text, minecraftDir: minecraftDir) {
+                return
+            }
+            let crashes = countCrashReports(minecraftDir: minecraftDir)
+            let fatals = countFatalLogLines(extraOutput: text, minecraftDir: minecraftDir)
+            if crashes > 0 { throw HeadlessSoakError.crashReports(crashes) }
+            if fatals > 0 { throw HeadlessSoakError.fatalLogLines(fatals) }
+            if text.contains("TitleScreen") || text.contains("LoadingErrorScreen") {
+                try? send(command: "connect \(parsedServerAddress().host) \(parsedServerAddress().port)", to: stdin)
+            }
+        }
+        throw HeadlessSoakError.loginNotObserved
+    }
+
+    private func parsedServerAddress() -> (host: String, port: Int) {
+        let parts = config.serverAddress.split(separator: ":", maxSplits: 1).map(String.init)
+        return (parts.first ?? "91.99.176.243", parts.dropFirst().first.flatMap(Int.init) ?? 25565)
+    }
+
+    private func send(command: String, to stdin: Pipe) throws {
+        try stdin.fileHandleForWriting.write(contentsOf: Data((command + "\n").utf8))
+    }
+
+    private func stopProcess(_ process: Process?) {
+        guard let process, process.isRunning else { return }
+        process.terminate()
+        Thread.sleep(forTimeInterval: 2)
+        if process.isRunning {
+            process.interrupt()
+        }
+    }
+
+    private func readText(_ url: URL) -> String {
+        (try? String(contentsOf: url, encoding: .utf8)) ?? ""
     }
 
     private func observedLogin(in output: String, minecraftDir: URL) -> Bool {
@@ -387,7 +643,6 @@ struct HeadlessSoakRunner {
             "ClassNotFoundException",
             "Failed to connect",
             "Connection refused",
-            "Disconnected from server",
             "mismatch"
         ]
         return text
