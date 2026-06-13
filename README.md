@@ -1,3 +1,7 @@
+<img width="1055" height="1491" alt="When a new mod version is detected workflow" src="Server%20App/Docs/assets/readme-mod-update-workflow.png" />
+
+Web Monitor of the Live Minecraft Server
+
 <img width="1336" height="1723" alt="image" src="https://github.com/user-attachments/assets/05f64b08-ea67-4c79-a5b2-9d5efd1d69ef" />
 
 
