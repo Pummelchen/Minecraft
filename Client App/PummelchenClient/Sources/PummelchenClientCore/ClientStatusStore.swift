@@ -1,4 +1,3 @@
-import CDuckDB
 import Foundation
 import PummelchenCore
 
@@ -358,39 +357,11 @@ public struct ClientStatusStore: Sendable {
     }
 
     private func execute(_ sql: String) throws {
-        try withConnection { connection in
-            var result = duckdb_result()
-            let state = sql.withCString { queryPointer in
-                duckdb_query(connection, queryPointer, &result)
-            }
-            defer { duckdb_destroy_result(&result) }
-            guard state == DuckDBSuccess else {
-                let message = duckdb_result_error(&result).map { String(cString: $0) } ?? "unknown DuckDB error"
-                throw ContractValidationError.invalid("duckdb write failed: \(message)")
-            }
+        do {
+            try DuckDBDatabase(databaseURL: databaseURL).execute(sql)
+        } catch {
+            throw ContractValidationError.invalid("duckdb write failed: \(error)")
         }
-    }
-
-    private func withConnection<T>(_ body: (duckdb_connection) throws -> T) throws -> T {
-        var database: duckdb_database?
-        let openState = databaseURL.path.withCString { pathPointer in
-            duckdb_open(pathPointer, &database)
-        }
-        guard openState == DuckDBSuccess, let openedDatabase = database else {
-            throw ContractValidationError.invalid("duckdb open failed: \(databaseURL.path)")
-        }
-        var databaseToClose: duckdb_database? = openedDatabase
-        defer { duckdb_close(&databaseToClose) }
-
-        var connection: duckdb_connection?
-        let connectState = duckdb_connect(openedDatabase, &connection)
-        guard connectState == DuckDBSuccess, let openedConnection = connection else {
-            throw ContractValidationError.invalid("duckdb connect failed: \(databaseURL.path)")
-        }
-        var connectionToClose: duckdb_connection? = openedConnection
-        defer { duckdb_disconnect(&connectionToClose) }
-
-        return try body(openedConnection)
     }
 
     private static func sqlLiteral(_ value: String?) -> String {

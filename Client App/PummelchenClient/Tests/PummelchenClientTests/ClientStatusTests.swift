@@ -201,26 +201,17 @@ struct ClientStatusTests {
 }
 
 private func duckDBAvailable() -> Bool {
-    ["/opt/homebrew/bin/duckdb", "/usr/bin/duckdb", "/usr/local/bin/duckdb"].contains {
-        FileManager.default.isExecutableFile(atPath: $0)
+    let url = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("pummelchen-duckdb-available-\(UUID().uuidString).duckdb")
+    defer { try? FileManager.default.removeItem(at: url) }
+    do {
+        try DuckDBDatabase(databaseURL: url).execute("SELECT 1;")
+        return true
+    } catch {
+        return false
     }
 }
 
 private func duckDBScalar(database: URL, sql: String) throws -> String {
-    let executable = ["/opt/homebrew/bin/duckdb", "/usr/bin/duckdb", "/usr/local/bin/duckdb"].first {
-        FileManager.default.isExecutableFile(atPath: $0)
-    } ?? "duckdb"
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: executable)
-    process.arguments = [database.path, "-csv", "-noheader", "-c", sql]
-    let pipe = Pipe()
-    process.standardOutput = pipe
-    process.standardError = pipe
-    try process.run()
-    process.waitUntilExit()
-    let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-    if process.terminationStatus != 0 {
-        throw ContractValidationError.invalid(output)
-    }
-    return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    try DuckDBDatabase(databaseURL: database).queryScalar(sql)
 }

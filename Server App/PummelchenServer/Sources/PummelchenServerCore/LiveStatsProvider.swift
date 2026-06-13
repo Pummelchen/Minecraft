@@ -591,3 +591,52 @@ final class LiveStatsProvider: @unchecked Sendable {
         #endif
     }
 }
+
+public final class LiveStatsPublisher: @unchecked Sendable {
+    private let provider: LiveStatsProvider
+    private let outputURL: URL
+    private let intervalSeconds: TimeInterval
+    private let encoder: JSONEncoder
+    private let queue = DispatchQueue(label: "pummelchen.live-stats-publisher")
+    private var isRunning = false
+
+    public init(projectRoot: URL, intervalSeconds: TimeInterval = 5) {
+        self.provider = LiveStatsProvider(projectRoot: projectRoot)
+        self.outputURL = projectRoot.appendingPathComponent("site/public/live-stats.json")
+        self.intervalSeconds = max(1, intervalSeconds)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        self.encoder = encoder
+    }
+
+    public func start() {
+        queue.async { [self] in
+            guard !isRunning else {
+                return
+            }
+            isRunning = true
+            publishLoop()
+        }
+    }
+
+    private func publishLoop() {
+        while isRunning {
+            do {
+                try publishOnce()
+            } catch {
+                FileHandle.standardError.write(Data("live_stats_publish_error=\(error)\n".utf8))
+            }
+            Thread.sleep(forTimeInterval: intervalSeconds)
+        }
+    }
+
+    public func publishOnce() throws {
+        let payload = try provider.payload()
+        let data = try encoder.encode(payload)
+        try FileManager.default.createDirectory(
+            at: outputURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: outputURL, options: .atomic)
+    }
+}

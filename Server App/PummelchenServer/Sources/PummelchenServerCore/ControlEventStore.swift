@@ -193,56 +193,11 @@ public struct ControlEventStore: Sendable {
     }
 
     private func execute(_ sql: String) throws {
-        _ = try runDuckDB(arguments: [databaseURL.path, "-c", sql], errorPrefix: "duckdb control write failed")
+        try DuckDBDatabase(databaseURL: databaseURL).execute(sql)
     }
 
     private func queryCSV(_ sql: String) throws -> String {
-        try runDuckDB(arguments: [databaseURL.path, "-csv", "-c", sql], errorPrefix: "duckdb control query failed")
-    }
-
-    private func runDuckDB(arguments: [String], errorPrefix: String) throws -> String {
-        var lastOutput = ""
-        for attempt in 1...5 {
-            let output = try runDuckDBOnce(arguments: arguments)
-            if output.status == 0 {
-                return output.text
-            }
-            lastOutput = output.text
-            guard attempt < 5, Self.isTransientDuckDBFailure(output.text) else {
-                break
-            }
-            Thread.sleep(forTimeInterval: 0.08 * Double(attempt))
-        }
-        throw ContractValidationError.invalid("\(errorPrefix): \(lastOutput)")
-    }
-
-    private func runDuckDBOnce(arguments: [String]) throws -> (status: Int32, text: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: try Self.duckDBExecutablePath())
-        process.arguments = arguments
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try process.run()
-        process.waitUntilExit()
-        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        return (process.terminationStatus, output)
-    }
-
-    private static func isTransientDuckDBFailure(_ output: String) -> Bool {
-        let lower = output.lowercased()
-        return lower.contains("lock")
-            || lower.contains("conflict")
-            || lower.contains("busy")
-            || lower.contains("could not set lock")
-    }
-
-    private static func duckDBExecutablePath() throws -> String {
-        let candidates = ["/opt/homebrew/bin/duckdb", "/usr/local/bin/duckdb", "/usr/bin/duckdb", "/bin/duckdb"]
-        for candidate in candidates where FileManager.default.isExecutableFile(atPath: candidate) {
-            return candidate
-        }
-        throw ContractValidationError.invalid("duckdb executable not found; install DuckDB or bundle it with the server")
+        try DuckDBDatabase(databaseURL: databaseURL).queryCSV(sql)
     }
 
     private static func sqlLiteral(_ value: String?) -> String {

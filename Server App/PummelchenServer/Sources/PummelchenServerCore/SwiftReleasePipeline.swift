@@ -682,11 +682,11 @@ public struct SwiftReleasePipeline: Sendable {
     }
 
     private func executeDuckDB(_ sql: String) throws {
-        _ = try runCommand(executable: try Self.duckDBExecutablePath(), arguments: [config.databaseURL.path, "-c", sql])
+        try DuckDBDatabase(databaseURL: config.databaseURL).execute(sql)
     }
 
     private func queryDuckDB(_ sql: String) throws -> String {
-        try runCommand(executable: try Self.duckDBExecutablePath(), arguments: [config.databaseURL.path, "-csv", "-c", sql])
+        try DuckDBDatabase(databaseURL: config.databaseURL).queryCSV(sql)
     }
 
     @discardableResult
@@ -705,13 +705,6 @@ public struct SwiftReleasePipeline: Sendable {
             throw SwiftReleasePipelineError.commandFailed(Self.redactSecrets(([executable] + arguments).joined(separator: " ") + "\n" + output))
         }
         return output
-    }
-
-    private static func duckDBExecutablePath() throws -> String {
-        for candidate in ["/opt/homebrew/bin/duckdb", "/usr/local/bin/duckdb", "/usr/bin/duckdb", "/bin/duckdb"] where FileManager.default.isExecutableFile(atPath: candidate) {
-            return candidate
-        }
-        throw ContractValidationError.invalid("duckdb executable not found")
     }
 
     private static func gitCommit(projectRoot: URL) -> String {

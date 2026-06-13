@@ -651,7 +651,7 @@ public struct SwiftWorldResetPipeline: Sendable {
           \(Self.sqlLiteral(error))
         );
         """
-        _ = try runCommand(executable: try Self.duckDBExecutablePath(), arguments: [config.databaseURL.path, "-c", sql], currentDirectory: config.projectRoot)
+        try DuckDBDatabase(databaseURL: config.databaseURL).execute(sql)
     }
 
     private func initializeDB() throws {
@@ -672,7 +672,7 @@ public struct SwiftWorldResetPipeline: Sendable {
           error VARCHAR
         );
         """
-        _ = try runCommand(executable: try Self.duckDBExecutablePath(), arguments: [config.databaseURL.path, "-c", sql], currentDirectory: config.projectRoot)
+        try DuckDBDatabase(databaseURL: config.databaseURL).execute(sql)
     }
 
     private func requireDirectory(_ url: URL) throws {
@@ -749,12 +749,6 @@ public struct SwiftWorldResetPipeline: Sendable {
             .replacingOccurrences(of: #""client_secret"\s*:\s*"[^"]+""#, with: #""client_secret":"[REDACTED]""#, options: .regularExpression)
     }
 
-    private static func duckDBExecutablePath() throws -> String {
-        for candidate in ["/opt/homebrew/bin/duckdb", "/usr/local/bin/duckdb", "/usr/bin/duckdb", "/bin/duckdb"] where FileManager.default.isExecutableFile(atPath: candidate) {
-            return candidate
-        }
-        throw ContractValidationError.invalid("duckdb executable not found")
-    }
 }
 
 private enum NBTValue {

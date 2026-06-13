@@ -1,4 +1,5 @@
 import Foundation
+import PummelchenCore
 
 enum DuckDBCommandError: Error, CustomStringConvertible {
     case usage
@@ -114,11 +115,11 @@ struct DuckDB {
     let databasePath: String
 
     func execute(_ sql: String) throws {
-        _ = try CommandRunner.require("/usr/bin/env", ["duckdb", databasePath, "-c", sql])
+        try DuckDBDatabase(databaseURL: URL(fileURLWithPath: databasePath)).execute(sql)
     }
 
     func queryCSV(_ sql: String) throws -> String {
-        try CommandRunner.require("/usr/bin/env", ["duckdb", databasePath, "-csv", "-noheader", "-c", sql])
+        try DuckDBDatabase(databaseURL: URL(fileURLWithPath: databasePath)).queryCSV(sql, includeHeader: false)
     }
 }
 

@@ -277,16 +277,10 @@ public struct ClientWebTransportControlChannel: Sendable {
             return host
         }
 
-        var hints = addrinfo(
-            ai_flags: 0,
-            ai_family: AF_INET,
-            ai_socktype: SOCK_DGRAM,
-            ai_protocol: IPPROTO_UDP,
-            ai_addrlen: 0,
-            ai_canonname: nil,
-            ai_addr: nil,
-            ai_next: nil
-        )
+        var hints = addrinfo()
+        hints.ai_family = AF_INET
+        hints.ai_socktype = Self.datagramSocketType()
+        hints.ai_protocol = Self.udpProtocol()
         var result: UnsafeMutablePointer<addrinfo>?
         let status = getaddrinfo(host, nil, &hints, &result)
         guard status == 0, let first = result else {
@@ -301,5 +295,21 @@ public struct ClientWebTransportControlChannel: Sendable {
         }
         let length = address.firstIndex(of: 0) ?? address.count
         return String(decoding: address[..<length].map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
+    private static func datagramSocketType() -> Int32 {
+        #if canImport(Glibc)
+        Int32(SOCK_DGRAM.rawValue)
+        #else
+        Int32(SOCK_DGRAM)
+        #endif
+    }
+
+    private static func udpProtocol() -> Int32 {
+        #if canImport(Glibc)
+        Int32(IPPROTO_UDP)
+        #else
+        Int32(IPPROTO_UDP)
+        #endif
     }
 }

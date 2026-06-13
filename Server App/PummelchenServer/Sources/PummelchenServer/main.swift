@@ -311,7 +311,10 @@ func run(arguments: [String]) throws {
                 webTransportRuntimeState: webTransportRuntime
             )
         )
-        try withExtendedLifetime((minecraftSupervisor, webTransportService)) {
+        let liveStatsPublisher = LiveStatsPublisher(projectRoot: projectRoot, intervalSeconds: 5)
+        try liveStatsPublisher.publishOnce()
+        liveStatsPublisher.start()
+        try withExtendedLifetime((minecraftSupervisor, webTransportService, liveStatsPublisher)) {
             try LocalHTTPServer(api: configuredAPI, host: host, port: port).run()
         }
     case "release-create":

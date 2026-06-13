@@ -842,55 +842,11 @@ public struct ServerClientReportStore: Sendable {
     }
 
     private func execute(_ sql: String) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: try Self.duckDBExecutablePath())
-        process.arguments = [databaseURL.path, "-c", sql]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try process.run()
-        process.waitUntilExit()
-        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        guard process.terminationStatus == 0 else {
-            throw ContractValidationError.invalid("duckdb server write failed: \(output)")
-        }
+        try DuckDBDatabase(databaseURL: databaseURL).execute(sql)
     }
 
     private func queryCSV(_ sql: String) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: try Self.duckDBExecutablePath())
-        process.arguments = [databaseURL.path, "-csv", "-c", sql]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try process.run()
-        process.waitUntilExit()
-        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        guard process.terminationStatus == 0 else {
-            throw ContractValidationError.invalid("duckdb server query failed: \(output)")
-        }
-        return output
-    }
-
-    private static func duckDBExecutablePath() throws -> String {
-        let candidates = ["/opt/homebrew/bin/duckdb", "/usr/local/bin/duckdb", "/usr/bin/duckdb", "/bin/duckdb"]
-        for candidate in candidates where FileManager.default.isExecutableFile(atPath: candidate) {
-            return candidate
-        }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["sh", "-lc", "command -v duckdb"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try process.run()
-        process.waitUntilExit()
-        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if process.terminationStatus == 0, !output.isEmpty, FileManager.default.isExecutableFile(atPath: output) {
-            return output
-        }
-        throw ContractValidationError.invalid("duckdb executable not found; install DuckDB or bundle it with the server")
+        try DuckDBDatabase(databaseURL: databaseURL).queryCSV(sql)
     }
 
     private static func sqlLiteral(_ value: String?) -> String {

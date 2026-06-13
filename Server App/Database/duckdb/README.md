@@ -47,6 +47,6 @@ swift run --package-path "Server App/PummelchenServer" pummelchen-duckdb verify-
   --input-dir /tmp/pummelchen_parquet
 ```
 
-## Current Boundary
+## Runtime Access
 
-The Swift server app and database tools read and write DuckDB directly. The helper executable invokes the DuckDB CLI through `PATH` for administrative checks and Parquet exports.
+The Swift server app, client app, and database helper tools read and write DuckDB through the embedded DuckDB C API wrapper in `PummelchenCore`. Runtime code should not shell out to the DuckDB CLI for normal database reads, writes, migrations, health checks, client reports, release state, world reset records, or Parquet exports.

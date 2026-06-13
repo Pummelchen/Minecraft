@@ -32,13 +32,6 @@ struct ClientSyncEngineTests {
         #if os(Linux)
         return
         #else
-        guard FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/duckdb")
-            || FileManager.default.isExecutableFile(atPath: "/usr/bin/duckdb")
-            || FileManager.default.isExecutableFile(atPath: "/usr/local/bin/duckdb")
-        else {
-            return
-        }
-
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("pummelchen-swift-sync-\(UUID().uuidString)", isDirectory: true)
         let site = root.appendingPathComponent("site", isDirectory: true)

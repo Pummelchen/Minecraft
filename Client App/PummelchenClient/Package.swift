@@ -2,8 +2,6 @@
 
 import PackageDescription
 
-let duckDBLibraryDirectory = Context.environment["PUMMELCHEN_DUCKDB_LIB_DIR"] ?? "/opt/homebrew/lib"
-
 var products: [Product] = [
     .library(
         name: "PummelchenClientCore",
@@ -19,21 +17,12 @@ var targets: [Target] = [
     .target(
         name: "PummelchenClientCore",
         dependencies: [
-            "CDuckDB",
             .product(name: "PummelchenCore", package: "PummelchenShared"),
             .product(name: "HTTP3", package: "Quiver"),
             .product(name: "QUIC", package: "Quiver"),
             .product(name: "QUICCore", package: "Quiver"),
             .product(name: "QUICCrypto", package: "Quiver")
-        ],
-        linkerSettings: [
-            .unsafeFlags(["-L", duckDBLibraryDirectory]),
-            .linkedLibrary("duckdb")
         ]
-    ),
-    .target(
-        name: "CDuckDB",
-        publicHeadersPath: "include"
     ),
     .executableTarget(
         name: "PummelchenClientSync",

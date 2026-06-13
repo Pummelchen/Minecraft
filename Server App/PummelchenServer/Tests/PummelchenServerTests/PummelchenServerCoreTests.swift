@@ -110,6 +110,26 @@ struct PummelchenServerCoreTests {
         #expect(cachedPayload.history.count == payload.history.count)
     }
 
+    @Test("publishes live site stats JSON for nginx")
+    func publishesLiveSiteStatsForNginx() throws {
+        let fixture = try makeProjectFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let output = fixture.root.appendingPathComponent("site/public/live-stats.json")
+        try? FileManager.default.removeItem(at: output)
+
+        let publisher = LiveStatsPublisher(projectRoot: fixture.root, intervalSeconds: 5)
+        try publisher.publishOnce()
+
+        let data = try Data(contentsOf: output)
+        let payload = try JSONDecoder().decode(LiveStatsPayload.self, from: data)
+
+        #expect(payload.intervalSeconds == 5)
+        #expect(payload.stats["Last Mod Version"] == "20260612 V6 modernarch-refresh")
+        #expect(payload.stats["Client Mods"] == "1 Client Mods · 2 Shaders · 1 Resource Packs · 1 Config Files")
+        #expect(payload.history.count == 1)
+    }
+
     @Test("serves site JSON feeds through Swift API")
     func servesSiteJSONFeeds() throws {
         let fixture = try makeProjectFixture()
@@ -943,11 +963,14 @@ struct PummelchenServerCoreTests {
     }
 
     private func requireDuckDB() throws {
-        let candidates = ["/opt/homebrew/bin/duckdb", "/usr/bin/duckdb", "/usr/local/bin/duckdb", "/bin/duckdb"]
-        if candidates.contains(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
-            return
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pummelchen-duckdb-required-\(UUID().uuidString).duckdb")
+        defer { try? FileManager.default.removeItem(at: url) }
+        do {
+            try DuckDBDatabase(databaseURL: url).execute("SELECT 1;")
+        } catch {
+            throw CancellationError()
         }
-        throw CancellationError()
     }
 
     private func writeArtifact(name: String, content: String, serverDir: URL) throws {
@@ -958,19 +981,7 @@ struct PummelchenServerCoreTests {
     }
 
     private func duckDBScalar(database: URL, sql: String) throws -> String {
-        let candidates = ["/opt/homebrew/bin/duckdb", "/usr/bin/duckdb", "/usr/local/bin/duckdb", "/bin/duckdb"]
-        let executable = try #require(candidates.first { FileManager.default.isExecutableFile(atPath: $0) })
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = [database.path, "-csv", "-c", sql]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try process.run()
-        process.waitUntilExit()
-        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        #expect(process.terminationStatus == 0)
-        return output.split(separator: "\n").last.map(String.init) ?? ""
+        try DuckDBDatabase(databaseURL: database).queryScalar(sql)
     }
 }
 

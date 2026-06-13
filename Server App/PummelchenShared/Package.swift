@@ -2,10 +2,17 @@
 
 import PackageDescription
 
+#if os(macOS)
+let defaultDuckDBLibraryDirectory = "/opt/homebrew/lib"
+#else
+let defaultDuckDBLibraryDirectory = "/usr/local/lib"
+#endif
+let duckDBLibraryDirectory = Context.environment["PUMMELCHEN_DUCKDB_LIB_DIR"] ?? defaultDuckDBLibraryDirectory
+
 let package = Package(
     name: "PummelchenShared",
     platforms: [
-        .macOS(.v14)
+        .macOS("26.0")
     ],
     products: [
         .library(
@@ -15,7 +22,16 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "PummelchenCore"
+            name: "PummelchenCore",
+            dependencies: ["CDuckDB"],
+            linkerSettings: [
+                .unsafeFlags(["-L", duckDBLibraryDirectory]),
+                .linkedLibrary("duckdb")
+            ]
+        ),
+        .target(
+            name: "CDuckDB",
+            publicHeadersPath: "include"
         ),
         .testTarget(
             name: "PummelchenCoreTests",
