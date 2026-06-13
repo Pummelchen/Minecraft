@@ -154,6 +154,8 @@ public final class PummelchenServerAPI: @unchecked Sendable {
                 return try siteJSON(named: "update-activity.json")
             case ("GET", "/api/v1/site/neoforge-version"):
                 return try siteJSON(named: "neoforge-version.json")
+            case ("GET", "/api/v1/transport/webtransport/preflight"):
+                return try webTransportPreflight()
             case ("GET", "/h3/v1/control"):
                 return try controlInfo()
             case ("POST", "/api/v1/control/events"):
@@ -276,6 +278,35 @@ public final class PummelchenServerAPI: @unchecked Sendable {
             supportedEvents: ControlEventType.allCases.map(\.rawValue)
         )
         return .json(try encoder.encode(payload), headers: ["X-Pummelchen-Downloads-Allowed": "false"])
+    }
+
+    private func webTransportPreflight() throws -> HTTPResponse {
+        let preflight = WebTransportH3Preflight(
+            serverHTTP3Settings: [:],
+            maxDatagramFrameSize: nil,
+            resetStreamAtEnabled: false
+        )
+        let payload = WebTransportPreflightPayload(
+            apiVersion: "v1",
+            serverTime: Self.isoNow(),
+            draft: "draft-ietf-webtrans-http3-15",
+            endpoint: "/webtransport/v1/control",
+            ready: preflight.unsupportedReason() == nil,
+            unsupportedReason: preflight.unsupportedReason(),
+            upgradeToken: WebTransportH3Draft15.upgradeToken,
+            requiredHTTP3Settings: [
+                "SETTINGS_ENABLE_CONNECT_PROTOCOL": WebTransportH3Draft15.Setting.enableConnectProtocol,
+                "SETTINGS_H3_DATAGRAM": WebTransportH3Draft15.Setting.h3Datagram,
+                "SETTINGS_WT_ENABLED": WebTransportH3Draft15.Setting.wtEnabled
+            ],
+            requiresQUICDatagrams: true,
+            requiresResetStreamAt: true,
+            nginxRole: "http3_static_api_edge_only"
+        )
+        return .json(try encoder.encode(payload), headers: [
+            "Cache-Control": "no-store, max-age=0",
+            "X-Pummelchen-WebTransport-Ready": payload.ready ? "true" : "false"
+        ])
     }
 
     private func createControlEvent(_ request: HTTPRequest) throws -> HTTPResponse {

@@ -418,6 +418,16 @@ struct PummelchenServerCoreTests {
         #expect(info.supportedEvents.contains("sync_required"))
         #expect(info.supportedEvents.contains("defaults_changed"))
 
+        let preflightResponse = api.response(for: HTTPRequest(method: "GET", path: "/api/v1/transport/webtransport/preflight"))
+        let preflight = try JSONDecoder().decode(WebTransportPreflightPayload.self, from: preflightResponse.body)
+        #expect(preflight.draft == "draft-ietf-webtrans-http3-15")
+        #expect(preflight.upgradeToken == "webtransport-h3")
+        #expect(!preflight.ready)
+        #expect(preflight.unsupportedReason?.contains("SETTINGS_WT_ENABLED") == true)
+        #expect(preflight.requiredHTTP3Settings["SETTINGS_WT_ENABLED"] == WebTransportH3Draft15.Setting.wtEnabled)
+        #expect(preflight.requiresQUICDatagrams)
+        #expect(preflight.requiresResetStreamAt)
+
         let eventRequest = ControlEventCreateRequest(
             eventType: .releaseAvailable,
             targetClientID: clientID,

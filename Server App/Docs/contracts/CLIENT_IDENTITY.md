@@ -26,7 +26,7 @@ Allowed during early private test builds:
 
 ## Transport And Request Authentication
 
-Client/server API and near-realtime control traffic must target HTTP/3 over QUIC. Client write/report APIs must use HTTP/3 over TLS and include:
+Client/server API and near-realtime control traffic must target WebTransport over HTTP/3/QUIC once the live preflight endpoint proves the edge is WebTransport capable. Until that gate passes, client write/report APIs must use HTTP/3 over TLS and include:
 
 ```http
 Authorization: Bearer <client_secret>
@@ -39,7 +39,7 @@ HTTP/2 HTTPS polling is allowed only as an early private-build compatibility fal
 
 ## Control Events
 
-The Swift server publishes near-realtime control events through `/h3/v1/control` plus authenticated long-poll fallback at `/api/v1/control/events`.
+The Swift server publishes WebTransport readiness through `/api/v1/transport/webtransport/preflight`. The existing `/h3/v1/control` metadata endpoint plus authenticated long-poll endpoint at `/api/v1/control/events` remain active only until the WebTransport preflight, client session implementation, event delivery, acknowledgement path, and fallback tests are all green.
 
 Events that require an immediate client sync:
 

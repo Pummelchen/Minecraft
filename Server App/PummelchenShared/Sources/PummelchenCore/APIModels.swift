@@ -394,6 +394,48 @@ public struct ControlChannelInfo: Codable, Equatable, Sendable {
     }
 }
 
+public struct WebTransportPreflightPayload: Codable, Equatable, Sendable {
+    public let apiVersion: String
+    public let serverTime: String
+    public let draft: String
+    public let endpoint: String
+    public let ready: Bool
+    public let unsupportedReason: String?
+    public let upgradeToken: String
+    public let requiredHTTP3Settings: [String: UInt64]
+    public let requiresQUICDatagrams: Bool
+    public let requiresResetStreamAt: Bool
+    public let nginxRole: String
+
+    enum CodingKeys: String, CodingKey {
+        case apiVersion = "api_version"
+        case serverTime = "server_time"
+        case draft
+        case endpoint
+        case ready
+        case unsupportedReason = "unsupported_reason"
+        case upgradeToken = "upgrade_token"
+        case requiredHTTP3Settings = "required_http3_settings"
+        case requiresQUICDatagrams = "requires_quic_datagrams"
+        case requiresResetStreamAt = "requires_reset_stream_at"
+        case nginxRole = "nginx_role"
+    }
+
+    public init(apiVersion: String, serverTime: String, draft: String, endpoint: String, ready: Bool, unsupportedReason: String?, upgradeToken: String, requiredHTTP3Settings: [String: UInt64], requiresQUICDatagrams: Bool, requiresResetStreamAt: Bool, nginxRole: String) {
+        self.apiVersion = apiVersion
+        self.serverTime = serverTime
+        self.draft = draft
+        self.endpoint = endpoint
+        self.ready = ready
+        self.unsupportedReason = unsupportedReason
+        self.upgradeToken = upgradeToken
+        self.requiredHTTP3Settings = requiredHTTP3Settings
+        self.requiresQUICDatagrams = requiresQUICDatagrams
+        self.requiresResetStreamAt = requiresResetStreamAt
+        self.nginxRole = nginxRole
+    }
+}
+
 public struct ControlEventAck: Codable, Equatable, Sendable {
     public let clientID: String
     public let eventID: String
