@@ -527,9 +527,10 @@ public struct SwiftWorldResetPipeline: Sendable {
             return
         }
         let commands = Self.safetyGamerules
-            .keys
+            .compactMap { gamerule, value in
+                return "gamerule \(gamerule) \(value)"
+            }
             .sorted()
-            .map { "gamerule \($0) \(Self.safetyGamerules[$0]!)" }
         let responses = try rconClient().commands(commands)
         for response in responses where isCommandFailure(response) {
             throw SwiftWorldResetError.commandFailed("RCON gamerule failed: \(response)")

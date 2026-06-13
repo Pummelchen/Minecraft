@@ -317,7 +317,16 @@ public struct ModUpdateScanner: Sendable {
             return ModUpdateCheckResult(source: source, status: Self.classify(installedVersion: source.installedVersion, latestVersion: latest), latestVersion: latest, latestURL: source.sourceURL, details: latest == nil ? "modrinth slug not found and HTML parse failed" : "parsed from Modrinth HTML")
         }
         let endpoint = "https://api.modrinth.com/v2/project/\(slug)/version?loaders=%5B%22\(config.loader)%22%5D&game_versions=%5B%22\(config.minecraftVersion)%22%5D"
-        let data = try fetchData(URL(string: endpoint)!)
+        guard let endpointURL = URL(string: endpoint) else {
+            return ModUpdateCheckResult(
+                source: source,
+                status: "unresolved",
+                latestVersion: nil,
+                latestURL: source.sourceURL,
+                details: "invalid Modrinth endpoint URL"
+            )
+        }
+        let data = try fetchData(endpointURL)
         guard let versions = try JSONSerialization.jsonObject(with: data) as? [[String: Any]],
               let latest = versions.first else {
             return ModUpdateCheckResult(source: source, status: "unresolved", latestVersion: nil, latestURL: endpoint, details: "Modrinth API returned no compatible versions")
