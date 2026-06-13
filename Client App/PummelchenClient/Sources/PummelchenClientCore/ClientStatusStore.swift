@@ -2,6 +2,11 @@ import Foundation
 import PummelchenCore
 
 public struct ClientStatusStore: Sendable {
+    public static let schemaVersion = 2
+    private static let maxSyncRuns = 500
+    private static let maxEndpointChecks = 2_000
+    private static let maxManifestAudits = 500
+
     public let databaseURL: URL
 
     public init(databaseURL: URL) {
@@ -11,6 +16,11 @@ public struct ClientStatusStore: Sendable {
     public func initialize() throws {
         try FileManager.default.createDirectory(at: databaseURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try execute("""
+        CREATE TABLE IF NOT EXISTS client_schema_migrations (
+          version INTEGER PRIMARY KEY,
+          name VARCHAR NOT NULL,
+          applied_at TIMESTAMP NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS client_state (
           key VARCHAR PRIMARY KEY,
           value VARCHAR NOT NULL,
@@ -62,6 +72,37 @@ public struct ClientStatusStore: Sendable {
           status VARCHAR NOT NULL,
           source VARCHAR NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS endpoint_status (
+          endpoint VARCHAR NOT NULL,
+          checked_at TIMESTAMP NOT NULL,
+          state VARCHAR NOT NULL,
+          latency_ms INTEGER,
+          message VARCHAR NOT NULL,
+          PRIMARY KEY(endpoint, checked_at)
+        );
+        CREATE TABLE IF NOT EXISTS manifest_audits (
+          audit_id VARCHAR PRIMARY KEY,
+          release_id VARCHAR NOT NULL,
+          checked_at TIMESTAMP NOT NULL,
+          manifest_entries INTEGER NOT NULL,
+          files_verified INTEGER NOT NULL,
+          files_missing_or_corrupt INTEGER NOT NULL,
+          status VARCHAR NOT NULL,
+          source VARCHAR NOT NULL
+        );
+        INSERT INTO client_schema_migrations(version, name, applied_at)
+        VALUES (1, 'initial_client_state', now())
+        ON CONFLICT(version) DO NOTHING;
+        INSERT INTO client_schema_migrations(version, name, applied_at)
+        VALUES (2, 'endpoint_and_manifest_audits', now())
+        ON CONFLICT(version) DO NOTHING;
+        CREATE INDEX IF NOT EXISTS idx_sync_runs_finished_at ON sync_runs(finished_at);
+        CREATE INDEX IF NOT EXISTS idx_sync_runs_target_result ON sync_runs(target_release_id, result);
+        CREATE INDEX IF NOT EXISTS idx_installed_files_release_status ON installed_files(release_id, status);
+        CREATE INDEX IF NOT EXISTS idx_release_history_status_time ON release_history(status, installed_at);
+        CREATE INDEX IF NOT EXISTS idx_client_defaults_status ON client_defaults(status);
+        CREATE INDEX IF NOT EXISTS idx_endpoint_status_endpoint_time ON endpoint_status(endpoint, checked_at);
+        CREATE INDEX IF NOT EXISTS idx_manifest_audits_release_time ON manifest_audits(release_id, checked_at);
         """)
     }
 
@@ -74,6 +115,8 @@ public struct ClientStatusStore: Sendable {
         statements.append(upsertState("sync_state", snapshot.state.rawValue, now: now))
         statements.append(upsertState("last_check", snapshot.checkedAt, now: now))
         statements.append(upsertState("minecraft_directory", snapshot.minecraftDirectory, now: now))
+        statements.append(endpointStatement(snapshot.nginx))
+        statements.append(endpointStatement(snapshot.webTransport))
         if let serverRelease = snapshot.serverReleaseID {
             statements.append(upsertState("server_release_id", serverRelease, now: now))
             statements.append("""
@@ -122,7 +165,8 @@ public struct ClientStatusStore: Sendable {
               source = excluded.source;
             """)
         }
-        try execute(statements.joined(separator: "\n"))
+        statements += retentionStatements()
+        try executeTransactional(statements)
     }
 
     public func record(syncResult: ClientSyncResult, defaultsHealth: [ClientDefaultHealthRow], installedFiles: [FileInventoryEntry] = []) throws {
@@ -132,6 +176,10 @@ public struct ClientStatusStore: Sendable {
         statements.append(upsertState("sync_state", syncResult.result, now: now))
         statements.append(upsertState("last_sync", syncResult.finishedAt, now: now))
         statements.append(upsertState("local_release_id", syncResult.targetReleaseID, now: now))
+        statements.append(upsertState("last_manifest_entries", String(syncResult.manifestEntries), now: now))
+        statements.append(upsertState("last_files_verified", String(syncResult.filesVerified), now: now))
+        statements.append(upsertState("last_files_downloaded", String(syncResult.filesDownloaded), now: now))
+        statements.append(upsertState("last_files_quarantined", String(syncResult.filesQuarantined), now: now))
         statements.append("""
         INSERT INTO release_history(release_id, first_seen_at, installed_at, status, manifest_sha256)
         VALUES ('\(Self.sql(syncResult.targetReleaseID))', TIMESTAMP '\(now)', TIMESTAMP '\(now)', 'installed', NULL)
@@ -167,6 +215,30 @@ public struct ClientStatusStore: Sendable {
           '\(Self.sql(syncResult.message))',
           NULL
         );
+        """)
+        let missingOrCorrupt = syncResult.result == "ok" ? max(0, syncResult.manifestEntries - syncResult.filesVerified) : syncResult.manifestEntries
+        statements.append("""
+        INSERT INTO manifest_audits(
+          audit_id, release_id, checked_at, manifest_entries, files_verified,
+          files_missing_or_corrupt, status, source
+        )
+        VALUES (
+          '\(Self.sql(syncResult.runID))',
+          '\(Self.sql(syncResult.targetReleaseID))',
+          TIMESTAMP '\(Self.sqlTimestamp(syncResult.finishedAt))',
+          \(syncResult.manifestEntries),
+          \(syncResult.filesVerified),
+          \(missingOrCorrupt),
+          '\(Self.sql(syncResult.result))',
+          'sync'
+        )
+        ON CONFLICT(audit_id) DO UPDATE SET
+          checked_at = excluded.checked_at,
+          manifest_entries = excluded.manifest_entries,
+          files_verified = excluded.files_verified,
+          files_missing_or_corrupt = excluded.files_missing_or_corrupt,
+          status = excluded.status,
+          source = excluded.source;
         """)
         for file in installedFiles {
             statements.append("""
@@ -209,7 +281,8 @@ public struct ClientStatusStore: Sendable {
               source = excluded.source;
             """)
         }
-        try execute(statements.joined(separator: "\n"))
+        statements += retentionStatements()
+        try executeTransactional(statements)
     }
 
     public func recordClientState(key: String, value: String) throws {
@@ -223,6 +296,64 @@ public struct ClientStatusStore: Sendable {
         VALUES ('\(Self.sql(key))', '\(Self.sql(value))', TIMESTAMP '\(now)')
         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
         """
+    }
+
+    private func endpointStatement(_ status: EndpointConnectionStatus) -> String {
+        """
+        INSERT INTO endpoint_status(endpoint, checked_at, state, latency_ms, message)
+        VALUES (
+          '\(Self.sql(status.label))',
+          TIMESTAMP '\(Self.sqlTimestamp(status.checkedAt))',
+          '\(Self.sql(status.state.rawValue))',
+          \(status.latencyMS.map(String.init) ?? "NULL"),
+          '\(Self.sql(String(status.message.prefix(1_000))))'
+        )
+        ON CONFLICT(endpoint, checked_at) DO UPDATE SET
+          state = excluded.state,
+          latency_ms = excluded.latency_ms,
+          message = excluded.message;
+        """
+    }
+
+    private func retentionStatements() -> [String] {
+        [
+            """
+            DELETE FROM endpoint_status
+            WHERE (endpoint, checked_at) NOT IN (
+              SELECT endpoint, checked_at
+              FROM endpoint_status
+              ORDER BY checked_at DESC
+              LIMIT \(Self.maxEndpointChecks)
+            );
+            """,
+            """
+            DELETE FROM manifest_audits
+            WHERE audit_id NOT IN (
+              SELECT audit_id
+              FROM manifest_audits
+              ORDER BY checked_at DESC
+              LIMIT \(Self.maxManifestAudits)
+            );
+            """,
+            """
+            DELETE FROM sync_runs
+            WHERE run_id NOT IN (
+              SELECT run_id
+              FROM sync_runs
+              ORDER BY started_at DESC
+              LIMIT \(Self.maxSyncRuns)
+            );
+            """,
+            """
+            DELETE FROM sync_events
+            WHERE run_id NOT IN (SELECT run_id FROM sync_runs)
+               OR timestamp < now() - INTERVAL 90 DAY;
+            """
+        ]
+    }
+
+    private func executeTransactional(_ statements: [String]) throws {
+        try execute("BEGIN TRANSACTION;\n\(statements.joined(separator: "\n"))\nCOMMIT;")
     }
 
     private func execute(_ sql: String) throws {
@@ -257,12 +388,24 @@ public struct ClientStatusStore: Sendable {
     }
 
     private static func duckDBExecutablePath() throws -> String {
-        let candidates = [
+        var candidates: [String] = []
+        if let resourceDuckDB = Bundle.main.resourceURL?.appendingPathComponent("duckdb").path {
+            candidates.append(resourceDuckDB)
+        }
+        candidates.append(
+            Bundle.main.bundleURL
+                .appendingPathComponent("Contents", isDirectory: true)
+                .appendingPathComponent("Resources", isDirectory: true)
+                .appendingPathComponent("duckdb").path
+        )
+        candidates.append(contentsOf: [
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support/Pummelchen/bin/duckdb").path,
             "/opt/homebrew/bin/duckdb",
             "/usr/local/bin/duckdb",
             "/usr/bin/duckdb",
             "/bin/duckdb"
-        ]
+        ])
         for candidate in candidates where FileManager.default.isExecutableFile(atPath: candidate) {
             return candidate
         }

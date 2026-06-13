@@ -102,6 +102,83 @@ struct ClientStatusTests {
         #expect(corrupt.errorMessage?.contains("missing or corrupt") == true)
     }
 
+    @Test("client DuckDB schema supports sync, endpoint, manifest, defaults, and inventory state")
+    func clientDuckDBSchemaSupportsProductionState() throws {
+        #if os(Linux)
+        return
+        #else
+        guard duckDBAvailable() else {
+            return
+        }
+
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pummelchen-client-duckdb-\(UUID().uuidString)", isDirectory: true)
+        let database = root.appendingPathComponent("client.duckdb")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let store = ClientStatusStore(databaseURL: database)
+        try store.initialize()
+        let schemaVersion = try duckDBScalar(database: database, sql: "SELECT MAX(version) FROM client_schema_migrations;")
+        #expect(schemaVersion == String(ClientStatusStore.schemaVersion))
+
+        let snapshot = ClientStatusSnapshot(
+            state: .synced,
+            serverURL: "https://pummelchen.91.99.176.243.nip.io",
+            nginx: EndpointConnectionStatus(label: "nginx", state: .connected, latencyMS: 42, message: "connected", checkedAt: "2026-06-13T10:00:00+00:00"),
+            webTransport: EndpointConnectionStatus(label: "WebTransport", state: .connected, latencyMS: 55, message: "connected", checkedAt: "2026-06-13T10:00:00+00:00"),
+            serverReleaseID: "release_20260613_V99_client_duckdb",
+            localReleaseID: "release_20260613_V99_client_duckdb",
+            checkedAt: "2026-06-13T10:00:00+00:00",
+            minecraftDirectory: root.appendingPathComponent("minecraft", isDirectory: true).path,
+            localDatabase: database.path,
+            defaultsHealth: [
+                ClientDefaultHealthRow(
+                    id: "memory",
+                    label: "Memory",
+                    desiredValue: "8G",
+                    observedValue: "8G",
+                    status: .ok,
+                    source: "launcher_profiles.json"
+                )
+            ],
+            errorMessage: nil
+        )
+        try store.record(snapshot: snapshot)
+        #expect(try duckDBScalar(database: database, sql: "SELECT COUNT(*) FROM endpoint_status;") == "2")
+        #expect(try duckDBScalar(database: database, sql: "SELECT COUNT(*) FROM client_defaults WHERE status = 'ok';") == "1")
+
+        let sync = ClientSyncResult(
+            runID: "sync-run-client-duckdb",
+            startedAt: "2026-06-13T10:00:01+00:00",
+            finishedAt: "2026-06-13T10:00:02+00:00",
+            fromReleaseID: nil,
+            targetReleaseID: "release_20260613_V99_client_duckdb",
+            result: "ok",
+            manifestEntries: 1,
+            filesVerified: 1,
+            filesDownloaded: 1,
+            filesQuarantined: 0,
+            message: "synced"
+        )
+        try store.record(
+            syncResult: sync,
+            defaultsHealth: snapshot.defaultsHealth,
+            installedFiles: [
+                FileInventoryEntry(
+                    section: .mods,
+                    name: "example.jar",
+                    relativePath: "mods/example.jar",
+                    sizeBytes: 7,
+                    sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                )
+            ]
+        )
+        #expect(try duckDBScalar(database: database, sql: "SELECT COUNT(*) FROM manifest_audits WHERE status = 'ok';") == "1")
+        #expect(try duckDBScalar(database: database, sql: "SELECT COUNT(*) FROM installed_files WHERE status = 'verified';") == "1")
+        #expect(try duckDBScalar(database: database, sql: "SELECT value FROM client_state WHERE key = 'last_manifest_entries';") == "1")
+        #endif
+    }
+
     private func currentReleaseJSON(releaseID: String) -> String {
         """
         {
@@ -121,4 +198,29 @@ struct ClientStatusTests {
         }
         """
     }
+}
+
+private func duckDBAvailable() -> Bool {
+    ["/opt/homebrew/bin/duckdb", "/usr/bin/duckdb", "/usr/local/bin/duckdb"].contains {
+        FileManager.default.isExecutableFile(atPath: $0)
+    }
+}
+
+private func duckDBScalar(database: URL, sql: String) throws -> String {
+    let executable = ["/opt/homebrew/bin/duckdb", "/usr/bin/duckdb", "/usr/local/bin/duckdb"].first {
+        FileManager.default.isExecutableFile(atPath: $0)
+    } ?? "duckdb"
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = [database.path, "-csv", "-noheader", "-c", sql]
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = pipe
+    try process.run()
+    process.waitUntilExit()
+    let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    if process.terminationStatus != 0 {
+        throw ContractValidationError.invalid(output)
+    }
+    return output.trimmingCharacters(in: .whitespacesAndNewlines)
 }

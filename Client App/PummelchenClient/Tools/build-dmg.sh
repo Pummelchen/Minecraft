@@ -25,6 +25,18 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 install -m 755 "$BUILD_DIR/arm64-apple-macosx/release/PummelchenClient" "$MACOS_DIR/PummelchenClient"
 install -m 755 "$BUILD_DIR/arm64-apple-macosx/release/pummelchen-client-sync" "$MACOS_DIR/pummelchen-client-sync"
 
+DUCKDB_BIN="${PUMMELCHEN_DUCKDB_BIN:-$(command -v duckdb || true)}"
+if [[ -z "$DUCKDB_BIN" || ! -x "$DUCKDB_BIN" ]]; then
+    echo "duckdb executable not found; install DuckDB or set PUMMELCHEN_DUCKDB_BIN" >&2
+    exit 1
+fi
+DUCKDB_REAL="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$DUCKDB_BIN")"
+install -m 755 "$DUCKDB_REAL" "$RESOURCES_DIR/duckdb"
+DUCKDB_PREFIX="$(cd "$(dirname "$DUCKDB_REAL")/.." && pwd)"
+if [[ -f "$DUCKDB_PREFIX/LICENSE" ]]; then
+    install -m 644 "$DUCKDB_PREFIX/LICENSE" "$RESOURCES_DIR/duckdb-LICENSE.txt"
+fi
+
 cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -51,6 +63,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 PLIST
 
 plutil -lint "$CONTENTS_DIR/Info.plist"
+codesign --force --sign - "$RESOURCES_DIR/duckdb"
 codesign --force --sign - "$MACOS_DIR/pummelchen-client-sync"
 codesign --force --sign - "$MACOS_DIR/PummelchenClient"
 codesign --force --deep --sign - "$APP_DIR"
