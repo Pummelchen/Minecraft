@@ -16,15 +16,6 @@ This project uses OpenAI Codex as a natural-language interface for mod managemen
 
 The Minecraft runtime starts from a vanilla server and layers the managed mod pack onto it through NeoForge. The same release flow also supports client-side shader packs, resource packs, and client configuration scripts so the server and macOS clients stay aligned within seconds.
 
-The Swift server app is the live service owner: it exposes the server API, feeds nginx with live status data, and starts the Minecraft NeoForge runtime from the managed server directory.
-
-The system then performs the full update pipeline automatically:
-
-- Mod discovery — Searches major Minecraft mod repositories and sources.
-- Download & integration — Retrieves the requested mod and prepares it for deployment.
-- Compatibility validation — Runs automated checks against an existing 300+ mod environment to detect conflicts or breaking changes.
-- Automated testing — Executes validation chains, including headless Minecraft client tests, to verify stability and compatibility.
-- Live deployment — Once all tests pass, the mod is distributed automatically to the Minecraft server and all connected clients.
 
 ## Core Benefits For MC Server Admins
 
