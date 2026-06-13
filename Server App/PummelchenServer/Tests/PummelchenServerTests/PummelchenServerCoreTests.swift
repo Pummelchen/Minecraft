@@ -90,6 +90,8 @@ struct PummelchenServerCoreTests {
         #expect(response.headers["Cache-Control"] == "no-store, max-age=0")
         #expect(payload.intervalSeconds == 5)
         #expect(payload.stats["Last Mod Version"] == "20260612 V6 modernarch-refresh")
+        #expect(payload.stats["Mac Installer Latest Version"] == "Latest version: 2026-06-12_V6")
+        #expect(payload.stats["Mac Installer Release URL"] == "/release.html?release=release_20260612_V6_modernarch-refresh")
         #expect(payload.stats["Server Address"] == "91.99.176.243:25565")
         #expect(payload.stats["Web Address"] == "https://pummelchen.91.99.176.243.nip.io")
         #expect(payload.stats["Client Mods"] == "1 Client Mods · 2 Shaders · 1 Resource Packs · 1 Config Files")

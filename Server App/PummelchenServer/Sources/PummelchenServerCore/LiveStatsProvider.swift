@@ -153,6 +153,8 @@ final class LiveStatsProvider: @unchecked Sendable {
 
         if let release {
             stats["Last Mod Version"] = displayReleaseID(release.releaseID)
+            stats["Mac Installer Latest Version"] = "Latest version: \(displayShortReleaseVersion(release.releaseID))"
+            stats["Mac Installer Release URL"] = "/release.html?release=\(release.releaseID)"
             stats["Minecraft"] = release.minecraftVersion ?? "unknown"
             stats["NeoForge"] = release.loaderVersion ?? "unknown"
             stats["Client Mod Pack SHA256"] = release.clientZipSHA256
@@ -475,6 +477,26 @@ final class LiveStatsProvider: @unchecked Sendable {
             value.removeFirst("release_".count)
         }
         return value.replacingOccurrences(of: "_", with: " ")
+    }
+
+    private func displayShortReleaseVersion(_ releaseID: String) -> String {
+        var value = releaseID
+        if value.hasPrefix("release_") {
+            value.removeFirst("release_".count)
+        }
+        let parts = value.split(separator: "_", omittingEmptySubsequences: true)
+        guard parts.count >= 2 else {
+            return value
+        }
+        let date = String(parts[0])
+        let version = String(parts[1])
+        guard date.count == 8, date.allSatisfy(\.isNumber), version.hasPrefix("V") else {
+            return value
+        }
+        let year = date.prefix(4)
+        let month = date.dropFirst(4).prefix(2)
+        let day = date.suffix(2)
+        return "\(year)-\(month)-\(day)_\(version)"
     }
 
     private func readFirstLine(_ path: String) -> String? {
