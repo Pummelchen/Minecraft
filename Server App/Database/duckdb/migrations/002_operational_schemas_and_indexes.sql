@@ -51,8 +51,15 @@ CREATE TABLE IF NOT EXISTS client.client_diagnostics (
   reported_at TIMESTAMP NOT NULL,
   level VARCHAR NOT NULL,
   summary VARCHAR NOT NULL,
-  details VARCHAR
+  details VARCHAR,
+  client_ip VARCHAR,
+  log_files VARCHAR,
+  log_snippet VARCHAR
 );
+
+ALTER TABLE client.client_diagnostics ADD COLUMN IF NOT EXISTS client_ip VARCHAR;
+ALTER TABLE client.client_diagnostics ADD COLUMN IF NOT EXISTS log_files VARCHAR;
+ALTER TABLE client.client_diagnostics ADD COLUMN IF NOT EXISTS log_snippet VARCHAR;
 
 CREATE TABLE IF NOT EXISTS client.client_defaults_reports (
   report_id VARCHAR PRIMARY KEY,

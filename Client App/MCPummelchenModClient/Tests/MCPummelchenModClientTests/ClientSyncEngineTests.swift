@@ -104,7 +104,7 @@ struct ClientSyncEngineTests {
         #expect((try? String(contentsOf: minecraft.appendingPathComponent("mods/example.jar"), encoding: .utf8)) == "mod-v1")
 
         let defaults = ClientDefaultsInspector.inspect(minecraftDirectory: minecraft)
-        #expect(defaults.allSatisfy { $0.status == .ok || $0.id == "java_runtime" && $0.status == .unknown })
+        #expect(defaults.allSatisfy { $0.status.isHealthy || $0.id == "java_runtime" && $0.status == .testing })
         #endif
     }
 

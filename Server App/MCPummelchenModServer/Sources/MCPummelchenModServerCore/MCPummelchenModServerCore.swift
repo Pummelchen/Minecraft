@@ -855,14 +855,19 @@ public struct ServerClientReportStore: Sendable {
         try initialize()
         try Self.validateClientID(payload.clientID)
         try execute("""
-        INSERT INTO client.client_diagnostics(diagnostic_id, client_id, reported_at, level, summary, details)
+        INSERT INTO client.client_diagnostics(
+          diagnostic_id, client_id, reported_at, level, summary, details, client_ip, log_files, log_snippet
+        )
         VALUES (
           \(Self.sqlLiteral(UUID().uuidString)),
           \(Self.sqlLiteral(payload.clientID)),
           TIMESTAMP '\(Self.sqlTimestamp(payload.reportedAt))',
           \(Self.sqlLiteral(payload.level)),
           \(Self.sqlLiteral(Self.redact(payload.summary) ?? "")),
-          \(Self.sqlLiteral(Self.redact(payload.details)))
+          \(Self.sqlLiteral(Self.redact(payload.details))),
+          \(Self.sqlLiteral(payload.clientIP)),
+          \(Self.sqlLiteral(payload.logFiles.joined(separator: ", "))),
+          \(Self.sqlLiteral(payload.logSnippet))
         );
         """)
     }
@@ -971,8 +976,14 @@ public struct ServerClientReportStore: Sendable {
           reported_at TIMESTAMP NOT NULL,
           level VARCHAR NOT NULL,
           summary VARCHAR NOT NULL,
-          details VARCHAR
+          details VARCHAR,
+          client_ip VARCHAR,
+          log_files VARCHAR,
+          log_snippet VARCHAR
         );
+        ALTER TABLE client.client_diagnostics ADD COLUMN IF NOT EXISTS client_ip VARCHAR;
+        ALTER TABLE client.client_diagnostics ADD COLUMN IF NOT EXISTS log_files VARCHAR;
+        ALTER TABLE client.client_diagnostics ADD COLUMN IF NOT EXISTS log_snippet VARCHAR;
         CREATE TABLE IF NOT EXISTS client.client_defaults_reports (
           report_id VARCHAR PRIMARY KEY,
           client_id VARCHAR NOT NULL,

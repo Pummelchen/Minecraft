@@ -147,19 +147,19 @@ public struct ClientSyncEngine: Sendable {
             try writeCurrentManifest(manifest)
             let inventory = try installedInventory(manifest: manifest)
             let defaultsHealth = ClientDefaultsInspector.inspect(minecraftDirectory: configuration.minecraftDirectory, defaults: defaults)
-            let selfUpdateResult = try? await Self.evaluateSelfUpdate(
+            let selfUpdateResult = await Self.evaluateSelfUpdate(
                 release: release,
                 serverURL: configuration.serverURL,
                 pummelchenHome: configuration.pummelchenHome,
                 http: http
             )
-            let (selfUpdate, selfUpdateMessage) = selfUpdateResult ?? (.unavailable, nil)
+            let (selfUpdate, selfUpdateMessage) = selfUpdateResult
             let networkProtocol = await http.lastNegotiatedProtocol()
 
             let finished = Date()
             let downloaded = syncCounts.downloaded
             let changed = downloaded + staleRemoved + unmanagedMoved
-            let defaultsChanged = defaultsHealth.contains { $0.status != .ok && $0.status != .unknown }
+            let defaultsChanged = defaultsHealth.contains { !$0.status.isHealthy }
             let syncMessage = downloaded == 0
                 ? (defaultsChanged ? "files synced; client defaults need attention" : "all synced, no downloads required")
                 : "synced after \(downloaded) download(s)"
@@ -468,7 +468,7 @@ public struct ClientSyncEngine: Sendable {
         let lowerMessage = result.message.lowercased()
         let status: String
         if result.result == "ok" {
-            status = defaultsHealth.contains { $0.status != .ok && $0.status != .unknown } ? "needs_defaults_repair" : "synced"
+            status = defaultsHealth.contains { !$0.status.isHealthy } ? "needs_defaults_repair" : "synced"
         } else if lowerMessage.contains("minecraft appears to be running") {
             status = "blocked_minecraft_running"
         } else if lowerMessage.contains("checksum") {
@@ -524,7 +524,7 @@ public struct ClientSyncEngine: Sendable {
         let defaultsUpload = ClientDefaultsEventUpload(
             clientID: clientID,
             reportedAt: result.finishedAt,
-            defaultsOK: defaultsHealth.allSatisfy { $0.status == .ok || $0.status == .unknown },
+            defaultsOK: defaultsHealth.allSatisfy { $0.status.isHealthy },
             events: defaultsHealth.map {
                 ClientDefaultsEvent(
                     key: $0.id,

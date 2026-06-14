@@ -2,6 +2,11 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import MCPummelchenModShared
 
 public enum ClientSyncState: String, Codable, Equatable, Sendable {
@@ -51,11 +56,12 @@ public struct ClientStatusSnapshot: Codable, Equatable, Sendable {
     public let checkedAt: String
     public let minecraftDirectory: String
     public let localDatabase: String
+    public let clientIP: String?
     public let defaultsHealth: [ClientDefaultHealthRow]
     public let errorMessage: String?
 
     public var defaultsOK: Bool {
-        defaultsHealth.allSatisfy { $0.status == .ok }
+        defaultsHealth.allSatisfy { $0.status.isHealthy }
     }
 
     public init(
@@ -68,6 +74,7 @@ public struct ClientStatusSnapshot: Codable, Equatable, Sendable {
         checkedAt: String,
         minecraftDirectory: String,
         localDatabase: String,
+        clientIP: String?,
         defaultsHealth: [ClientDefaultHealthRow],
         errorMessage: String?
     ) {
@@ -80,6 +87,7 @@ public struct ClientStatusSnapshot: Codable, Equatable, Sendable {
         self.checkedAt = checkedAt
         self.minecraftDirectory = minecraftDirectory
         self.localDatabase = localDatabase
+        self.clientIP = clientIP
         self.defaultsHealth = defaultsHealth
         self.errorMessage = errorMessage
     }
@@ -134,8 +142,8 @@ public struct ClientStatusService: Sendable {
         self.http = ClientHTTPClient(retryPolicy: configuration.retryPolicy)
     }
 
-    public func checkAndRecord() async -> ClientStatusSnapshot {
-        let snapshot = await check()
+    public func checkAndRecord(rowIDsToRepair: Set<String>? = nil) async -> ClientStatusSnapshot {
+        let snapshot = await check(rowIDsToRepair: rowIDsToRepair)
         do {
             try store.record(snapshot: snapshot)
         } catch {
@@ -149,6 +157,7 @@ public struct ClientStatusService: Sendable {
                 checkedAt: snapshot.checkedAt,
                 minecraftDirectory: snapshot.minecraftDirectory,
                 localDatabase: snapshot.localDatabase,
+                clientIP: snapshot.clientIP,
                 defaultsHealth: snapshot.defaultsHealth,
                 errorMessage: "local DuckDB write failed: \(error)"
             )
@@ -157,10 +166,28 @@ public struct ClientStatusService: Sendable {
     }
 
     public func check() async -> ClientStatusSnapshot {
+        return await check(rowIDsToRepair: nil)
+    }
+
+    public func check(rowIDsToRepair: Set<String>? = nil) async -> ClientStatusSnapshot {
         let checkedAt = Self.isoNow()
         let localRelease = readInstalledRelease()
+        let clientIP = Self.currentLocalIPAddress()
         let defaults = await defaultsForStatus()
-        let defaultsHealth = ClientDefaultsInspector.inspect(minecraftDirectory: configuration.minecraftDirectory, defaults: defaults)
+        let inspectedDefaults = ClientDefaultsInspector.inspect(minecraftDirectory: configuration.minecraftDirectory, defaults: defaults)
+        let repaired = await ClientDefaultsRepairCoordinator(maxAttempts: 2).repairDefaults(
+            defaults: defaults,
+            rows: inspectedDefaults,
+            minecraftDirectory: configuration.minecraftDirectory,
+            pummelchenHome: configuration.pummelchenHome,
+            rowIDs: rowIDsToRepair
+        )
+
+        if !repaired.failedAttempts.isEmpty {
+            await reportDefaultsRepairDiagnostics(failedAttempts: repaired.failedAttempts, clientIP: clientIP)
+        }
+
+        let defaultsHealth = repaired.rows
         let nginxTask = Task {
             await nginxStatus(checkedAt: checkedAt)
         }
@@ -175,7 +202,10 @@ public struct ClientStatusService: Sendable {
             let serverRelease = releaseProbe.value
             var state: ClientSyncState = localRelease == serverRelease.releaseID ? .synced : .updateAvailable
             var errorMessage: String?
-            if state == .synced {
+            if !defaultsHealth.allSatisfy({ $0.status.isHealthy }) {
+                state = .repairNeeded
+                errorMessage = "managed defaults need repair"
+            } else if state == .synced {
                 do {
                     let manifest = try await fetchManifest(for: serverRelease)
                     let audit = try auditInstalledFiles(manifest: manifest)
@@ -188,6 +218,7 @@ public struct ClientStatusService: Sendable {
                     errorMessage = "installed release audit failed: \(error)"
                 }
             }
+
             return ClientStatusSnapshot(
                 state: state,
                 serverURL: configuration.serverURL.absoluteString,
@@ -198,6 +229,7 @@ public struct ClientStatusService: Sendable {
                 checkedAt: checkedAt,
                 minecraftDirectory: configuration.minecraftDirectory.path,
                 localDatabase: configuration.databaseURL.path,
+                clientIP: clientIP,
                 defaultsHealth: defaultsHealth,
                 errorMessage: errorMessage
             )
@@ -212,10 +244,106 @@ public struct ClientStatusService: Sendable {
                 checkedAt: checkedAt,
                 minecraftDirectory: configuration.minecraftDirectory.path,
                 localDatabase: configuration.databaseURL.path,
+                clientIP: clientIP,
                 defaultsHealth: defaultsHealth,
                 errorMessage: String(describing: error)
             )
         }
+    }
+
+    private func reportDefaultsRepairDiagnostics(
+        failedAttempts: [ClientDefaultsRepairAttempt],
+        clientIP: String?
+    ) async {
+        guard let token = configuration.clientAPIToken, !token.isEmpty else {
+            return
+        }
+
+        do {
+            let preflight = try await fetchWebTransportPreflight()
+            guard preflight.ready else {
+                return
+            }
+            let channel = ClientWebTransportControlChannel(
+                preflight: preflight,
+                clientID: Self.validClientID(configuration.clientID),
+                clientAPIToken: token
+            )
+
+            let logFiles = collectDiagnosticLogFiles()
+            let snippet = collectDiagnosticLogSnippet(logFiles: logFiles)
+            let detail = failedAttempts.map {
+                "\($0.rowLabel):\($0.rowID) -> \($0.statusAfter.rawValue) (from \($0.statusBefore.rawValue))\($0.detail.map { ", detail=\($0)" } ?? "")"
+            }.joined(separator: "; ")
+
+            let payload = ClientDiagnosticsUpload(
+                clientID: Self.validClientID(configuration.clientID),
+                reportedAt: Self.isoNow(),
+                level: "error",
+                summary: "client defaults repair failed",
+                details: detail,
+                clientIP: clientIP,
+                logFiles: logFiles.map(\.lastPathComponent),
+                logSnippet: snippet
+            )
+            _ = try await channel.uploadDiagnostics(payload)
+            try? store.recordClientState(key: "last_defaults_repair_diagnostic", value: "sent")
+        } catch {
+            try? store.recordClientState(key: "last_defaults_repair_diagnostic", value: String(describing: error))
+        }
+    }
+
+    private func collectDiagnosticLogFiles() -> [URL] {
+        var candidates: Set<URL> = []
+
+        if let selfUpdateLog = configuration.pummelchenHome
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("self-update.log") as URL?, FileManager.default.fileExists(atPath: selfUpdateLog.path) {
+            candidates.insert(selfUpdateLog)
+        }
+
+        let possibleRoots = [
+            configuration.pummelchenHome.appendingPathComponent("logs", isDirectory: true),
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Logs", isDirectory: true)
+                .appendingPathComponent("Pummelchen", isDirectory: true),
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Logs", isDirectory: true)
+                .appendingPathComponent("PummelchenModClient", isDirectory: true)
+        ]
+
+        for root in possibleRoots {
+            guard let contents = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]) else {
+                continue
+            }
+            for item in contents where item.pathExtension == "log" {
+                candidates.insert(item)
+            }
+        }
+
+        return Array(candidates)
+            .filter { FileManager.default.isReadableFile(atPath: $0.path) }
+            .sorted { lhs, rhs in
+                let lhsTime = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                let rhsTime = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                return lhsTime > rhsTime
+            }
+            .prefix(4)
+            .map { $0 }
+    }
+
+    private func collectDiagnosticLogSnippet(logFiles: [URL]) -> String {
+        var snippets: [String] = []
+        for file in logFiles.prefix(2) {
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else {
+                continue
+            }
+            let cleaned = text.replacingOccurrences(of: "\u{0000}", with: "")
+            snippets.append("[\(file.lastPathComponent)] \(cleaned.suffix(1300))")
+        }
+
+        return snippets.joined(separator: "\n\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func defaultsForStatus() async -> MinecraftClientDefaults {
@@ -402,6 +530,59 @@ public struct ClientStatusService: Sendable {
             character.isLetter || character.isNumber || character == "_" || character == "-" || character == "."
         }
         return filtered.isEmpty ? nil : String(filtered.prefix(120))
+    }
+
+    private static func currentLocalIPAddress() -> String? {
+        var addresses: [String] = []
+
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        defer {
+            if ifaddr != nil {
+                freeifaddrs(ifaddr)
+            }
+        }
+
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else {
+            return nil
+        }
+
+        var current: UnsafeMutablePointer<ifaddrs>? = first
+        while let currentPointer = current {
+            let interface = currentPointer.pointee
+            let family = interface.ifa_addr.pointee.sa_family
+            if family == UInt8(AF_INET) || family == UInt8(AF_INET6) {
+                let name = String(cString: interface.ifa_name)
+                if name.hasPrefix("lo") {
+                    current = interface.ifa_next
+                    if current == nil { break }
+                    continue
+                }
+
+                var hostName = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                let flags: Int32 = NI_NUMERICHOST
+                let sockFamily = sa_family_t(interface.ifa_addr.pointee.sa_family)
+                let addrLen: socklen_t = (sockFamily == AF_INET) ? socklen_t(INET_ADDRSTRLEN) : socklen_t(INET6_ADDRSTRLEN)
+                let rv = getnameinfo(interface.ifa_addr, addrLen, &hostName, socklen_t(hostName.count), nil, 0, flags)
+                if rv == 0 {
+                    let terminator = hostName.firstIndex(of: 0) ?? hostName.count
+                    let bytes = hostName[0..<terminator].map { UInt8($0) }
+                    let ip = String(decoding: bytes, as: UTF8.self)
+                    if !ip.isEmpty {
+                        addresses.append(ip)
+                    }
+                }
+            }
+
+            let next = interface.ifa_next
+            if let pointer = next {
+                current = pointer
+            } else {
+                break
+            }
+        }
+
+        let ipv4 = addresses.first(where: { $0.contains(".") })
+        return ipv4 ?? addresses.first
     }
 
     private static func isoNow() -> String {

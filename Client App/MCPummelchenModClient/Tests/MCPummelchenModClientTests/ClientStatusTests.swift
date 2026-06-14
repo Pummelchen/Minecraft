@@ -57,12 +57,33 @@ struct ClientStatusTests {
         """.write(to: root.appendingPathComponent("config/physicsmod/physics_client_config.json"), atomically: true, encoding: .utf8)
 
         let rows = ClientDefaultsInspector.inspect(minecraftDirectory: root, defaults: MinecraftClientDefaults(javaExecutablePath: javaPath))
-        #expect(rows.allSatisfy { $0.status == .ok })
+        #expect(rows.allSatisfy { $0.status.isHealthy })
         #expect(rows.contains { $0.id == "shader" })
         #expect(rows.contains { $0.id == "memory" })
         #expect(rows.contains { $0.id == "java_runtime" })
         #expect(rows.contains { $0.id == "server_entry" })
         #expect(rows.contains { $0.id == "physics_mob_fracturing" && $0.observedValue == "Mob Fracturing (with blood)" })
+        let shader = try #require(rows.first { $0.id == "shader" })
+        #expect(shader.label == "Shaders")
+        #expect(shader.desiredValue == "BSL_v10.1.3.zip")
+        #expect(shader.observedValue == "OK")
+
+        let resourcePacks = try #require(rows.first { $0.id == "resource_packs" })
+        #expect(resourcePacks.label == "Resource Packs")
+        #expect(resourcePacks.desiredValue.contains("ModernArch v2.8.2 [26.1] [128x].zip"))
+        #expect(resourcePacks.desiredValue.contains("ModernArch FA Extension v2.2.zip"))
+        #expect(resourcePacks.desiredValue.contains("ModernArch Denser Grass Addon.zip"))
+        #expect(resourcePacks.observedValue == "OK")
+
+        let java = try #require(rows.first { $0.id == "java_runtime" })
+        #expect(java.label == "Java Runtime")
+        #expect(java.desiredValue == "25.0.3")
+        #expect(java.observedValue == "25.0.3")
+        #expect(java.status == .pass)
+
+        let server = try #require(rows.first { $0.id == "server_entry" })
+        #expect(server.label == "Server Entity")
+        #expect(server.observedValue == "Pummelchen Server Ready")
     }
 
     @Test("default inspector detects missing read-only defaults without mutating files")
@@ -157,21 +178,23 @@ struct ClientStatusTests {
             checkedAt: "2026-06-13T10:00:00+00:00",
             minecraftDirectory: root.appendingPathComponent("minecraft", isDirectory: true).path,
             localDatabase: database.path,
+            clientIP: nil,
             defaultsHealth: [
                 ClientDefaultHealthRow(
                     id: "memory",
                     label: "Memory",
                     desiredValue: "8G",
                     observedValue: "8G",
-                    status: .ok,
-                    source: "launcher_profiles.json"
+                    status: .pass,
+                    source: "launcher_profiles.json",
+                    recommendedAction: "Apply managed JVM arguments"
                 )
             ],
             errorMessage: nil
         )
         try store.record(snapshot: snapshot)
         #expect(try duckDBScalar(database: database, sql: "SELECT COUNT(*) FROM endpoint_status;") == "2")
-        #expect(try duckDBScalar(database: database, sql: "SELECT COUNT(*) FROM client_defaults WHERE status = 'ok';") == "1")
+        #expect(try duckDBScalar(database: database, sql: "SELECT COUNT(*) FROM client_defaults WHERE status IN ('pass', 'testing', 'fixed_ok');") == "1")
 
         let sync = ClientSyncResult(
             runID: "sync-run-client-duckdb",

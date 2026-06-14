@@ -522,12 +522,12 @@ struct HeadlessSoakRunner {
 
         let defaults = MinecraftClientDefaults(javaExecutablePath: java.path, loaderVersion: config.loaderVersion)
         let defaultsHealth = ClientDefaultsInspector.inspect(minecraftDirectory: minecraftDir, defaults: defaults)
-        let defaultFailures = defaultsHealth.filter { $0.status != .ok && $0.status != .unknown }
+        let defaultFailures = defaultsHealth.filter { !$0.status.isHealthy && $0.status != .testing }
         record("client_defaults_healthy", defaultFailures.isEmpty, defaultFailures.map { "\($0.label)=\($0.status.rawValue)" }.joined(separator: ", "))
-        record("shader_default_active", defaultsHealth.contains { $0.id == "shader" && $0.status == .ok }, "BSL shader default")
-        record("resource_packs_default_active", defaultsHealth.contains { $0.id == "resource_packs" && $0.status == .ok }, "ModernArch stack")
-        record("physics_mob_fracturing_default_active", defaultsHealth.contains { $0.id == "physics_mob_fracturing" && $0.status == .ok }, "Mob Fracturing (with blood)")
-        record("server_entry_default_present", defaultsHealth.contains { $0.id == "server_entry" && $0.status == .ok }, config.serverAddress)
+        record("shader_default_active", defaultsHealth.contains { $0.id == "shader" && $0.status.isHealthy }, "BSL shader default")
+        record("resource_packs_default_active", defaultsHealth.contains { $0.id == "resource_packs" && $0.status.isHealthy }, "ModernArch stack")
+        record("physics_mob_fracturing_default_active", defaultsHealth.contains { $0.id == "physics_mob_fracturing" && $0.status.isHealthy }, "Mob Fracturing (with blood)")
+        record("server_entry_default_present", defaultsHealth.contains { $0.id == "server_entry" && $0.status.isHealthy }, config.serverAddress)
 
         let serverCount = countServerAddress(config.serverAddress, minecraftDir: minecraftDir)
         record("server_entry_not_duplicated", serverCount == 1, "\(serverCount) occurrence(s)")

@@ -141,6 +141,9 @@ public struct ClientDiagnosticsUpload: Codable, Equatable, Sendable {
     public let level: String
     public let summary: String
     public let details: String?
+    public let clientIP: String?
+    public let logFiles: [String]
+    public let logSnippet: String?
 
     enum CodingKeys: String, CodingKey {
         case clientID = "client_id"
@@ -148,14 +151,29 @@ public struct ClientDiagnosticsUpload: Codable, Equatable, Sendable {
         case level
         case summary
         case details
+        case clientIP = "client_ip"
+        case logFiles = "log_files"
+        case logSnippet = "log_snippet"
     }
 
-    public init(clientID: String, reportedAt: String, level: String, summary: String, details: String?) {
+    public init(
+        clientID: String,
+        reportedAt: String,
+        level: String,
+        summary: String,
+        details: String?,
+        clientIP: String? = nil,
+        logFiles: [String] = [],
+        logSnippet: String? = nil
+    ) {
         self.clientID = clientID
         self.reportedAt = reportedAt
         self.level = level
         self.summary = summary
         self.details = details
+        self.clientIP = clientIP
+        self.logFiles = logFiles
+        self.logSnippet = logSnippet
     }
 }
 

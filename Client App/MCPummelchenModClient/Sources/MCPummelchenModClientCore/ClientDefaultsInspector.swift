@@ -2,10 +2,67 @@ import Foundation
 import MCPummelchenModShared
 
 public enum ClientDefaultStatus: String, Codable, Equatable, Sendable {
-    case ok
+    case pass
+    case fail
     case missing
-    case mismatch
-    case unknown
+    case fixedOK = "fixed_ok"
+    case fixedFailed = "fixed_failed"
+    case repairing
+    case testing
+
+    public var isHealthy: Bool {
+        switch self {
+        case .pass, .fixedOK, .testing:
+            return true
+        case .missing, .fail, .fixedFailed, .repairing:
+            return false
+        }
+    }
+
+    public var needsRepair: Bool {
+        switch self {
+        case .fail, .missing, .fixedFailed:
+            return true
+        case .pass, .fixedOK, .repairing, .testing:
+            return false
+        }
+    }
+
+    public var recommendedAction: String {
+        switch self {
+        case .pass:
+            return "No action"
+        case .testing:
+            return "Verify file access"
+        case .repairing:
+            return "Repairing"
+        case .fixedOK:
+            return "Auto repair succeeded"
+        case .fixedFailed:
+            return "Auto repair failed"
+        case .missing:
+            return "Create missing value"
+        case .fail:
+            return "Align value to managed default"
+        }
+    }
+
+    public var isActionable: Bool {
+        return needsRepair
+    }
+
+    public var displayValue: String {
+        switch self {
+        case .fixedOK:
+            return "FIXED OK"
+        case .fixedFailed:
+            return "FIXED FAILED"
+        case .testing:
+            return "TESTING"
+        default:
+            return rawValue.uppercased().replacingOccurrences(of: "_", with: " ")
+        }
+    }
 }
 
 public struct ClientDefaultHealthRow: Codable, Equatable, Identifiable, Sendable {
@@ -15,6 +72,7 @@ public struct ClientDefaultHealthRow: Codable, Equatable, Identifiable, Sendable
     public let observedValue: String
     public let status: ClientDefaultStatus
     public let source: String
+    public let recommendedAction: String
 
     public init(
         id: String,
@@ -22,7 +80,8 @@ public struct ClientDefaultHealthRow: Codable, Equatable, Identifiable, Sendable
         desiredValue: String,
         observedValue: String,
         status: ClientDefaultStatus,
-        source: String
+        source: String,
+        recommendedAction: String
     ) {
         self.id = id
         self.label = label
@@ -30,10 +89,14 @@ public struct ClientDefaultHealthRow: Codable, Equatable, Identifiable, Sendable
         self.observedValue = observedValue
         self.status = status
         self.source = source
+        self.recommendedAction = recommendedAction
     }
 }
 
 public enum ClientDefaultsInspector {
+
+    private static let defaultJavaVersion = "25.0.3"
+
     public static func inspect(minecraftDirectory: URL, defaults: MinecraftClientDefaults = MinecraftClientDefaults()) -> [ClientDefaultHealthRow] {
         let options = readText(minecraftDirectory.appendingPathComponent("options.txt"))
         let iris = readText(minecraftDirectory.appendingPathComponent("config/iris.properties"))
@@ -55,14 +118,17 @@ public enum ClientDefaultsInspector {
     private static func shaderHealth(defaults: MinecraftClientDefaults, iris: String?, shaderOptions: String?) -> ClientDefaultHealthRow {
         let observed = firstProperty("shaderPack", in: iris) ?? firstProperty("shaderPack", in: shaderOptions)
         let enabled = firstProperty("enableShaders", in: iris)
-        let ok = observed == defaults.shaderPack && (enabled == nil || enabled == "true")
+        let observedPack = normalizeShaderName(observed)
+        let desiredPack = normalizeShaderName(defaults.shaderPack)
+        let ok = observedPack == desiredPack && (enabled == nil || enabled == "true")
         return ClientDefaultHealthRow(
             id: "shader",
-            label: "Shader",
-            desiredValue: "\(defaults.shaderPack) active",
-            observedValue: observed ?? "missing",
-            status: observed == nil ? .missing : (ok ? .ok : .mismatch),
-            source: "config/iris.properties"
+            label: "Shaders",
+            desiredValue: desiredPack ?? defaults.shaderPack,
+            observedValue: ok ? "OK" : (observedPack ?? "missing"),
+            status: observed == nil ? .missing : (ok ? .pass : .fail),
+            source: "config/iris.properties",
+            recommendedAction: "Apply managed shader defaults"
         )
     }
 
@@ -71,24 +137,29 @@ public enum ClientDefaultsInspector {
             return ClientDefaultHealthRow(
                 id: "resource_packs",
                 label: "Resource Packs",
-                desiredValue: defaults.resourcePacks.joined(separator: " > "),
+                desiredValue: defaults.resourcePacks.map(humanResourcePackName).joined(separator: " > "),
                 observedValue: "missing",
                 status: .missing,
-                source: "options.txt"
+                source: "options.txt",
+                recommendedAction: "Rewrite managed resource pack list"
             )
         }
         let resourceLine = firstColonValue("resourcePacks", in: options) ?? ""
+        let observedPacks = parseArray(resourceLine)
+        let normalizedObserved = observedPacks.map(humanResourcePackName)
+        let normalizedDefaults = defaults.resourcePacks.map(humanResourcePackName)
         let incompatibleLine = firstColonValue("incompatibleResourcePacks", in: options) ?? ""
-        let hasAllPacks = defaults.resourcePacks.allSatisfy { resourceLine.contains($0) }
-        let ordered = isOrdered(defaults.resourcePacks, in: resourceLine)
+        let hasAllPacks = normalizedDefaults.allSatisfy { normalizedObserved.contains($0) }
+        let ordered = isOrdered(normalizedDefaults, valuesIn: normalizedObserved)
         let incompatibleCleared = incompatibleLine.trimmingCharacters(in: .whitespacesAndNewlines) == "[]" || incompatibleLine.isEmpty
         return ClientDefaultHealthRow(
             id: "resource_packs",
             label: "Resource Packs",
-            desiredValue: defaults.resourcePacks.joined(separator: " > "),
-            observedValue: resourceLine.isEmpty ? "missing" : resourceLine,
-            status: hasAllPacks && ordered && incompatibleCleared ? .ok : .mismatch,
-            source: "options.txt"
+            desiredValue: normalizedDefaults.joined(separator: " > "),
+            observedValue: (hasAllPacks && ordered && incompatibleCleared) ? "OK" : normalizedObserved.joined(separator: " > "),
+            status: hasAllPacks && ordered && incompatibleCleared ? .pass : (resourceLine.isEmpty ? .missing : .fail),
+            source: "options.txt",
+            recommendedAction: "Rewrite managed resource pack list"
         )
     }
 
@@ -96,15 +167,16 @@ public enum ClientDefaultsInspector {
         let desiredHeap = maxHeapArgument(in: defaults.javaArguments) ?? "-Xmx8G"
         let desiredGB = heapGB(from: desiredHeap) ?? 8
         guard let launcherProfiles, !launcherProfiles.isEmpty else {
-            return ClientDefaultHealthRow(
-                id: "memory",
-                label: "Memory",
-                desiredValue: desiredHeap,
-                observedValue: "launcher profile missing",
-                status: .missing,
-                source: "launcher_profiles.json"
-            )
-        }
+        return ClientDefaultHealthRow(
+            id: "memory",
+            label: "Memory",
+            desiredValue: desiredHeap,
+            observedValue: "launcher profile missing",
+            status: .missing,
+            source: "launcher_profiles.json",
+            recommendedAction: "Apply managed JVM arguments"
+        )
+    }
         let observedHeap = maxHeapArgument(in: launcherProfiles)
         let ok = observedHeap.flatMap(heapGB(from:)) == desiredGB
         return ClientDefaultHealthRow(
@@ -112,8 +184,9 @@ public enum ClientDefaultsInspector {
             label: "Memory",
             desiredValue: desiredHeap,
             observedValue: observedHeap.map { "\(heapGB(from: $0) ?? 0) GB configured" } ?? "\(desiredGB) GB not found",
-            status: ok ? .ok : .mismatch,
-            source: "launcher_profiles.json"
+            status: ok ? .pass : .fail,
+            source: "launcher_profiles.json",
+            recommendedAction: "Apply managed JVM arguments"
         )
     }
 
@@ -144,59 +217,67 @@ public enum ClientDefaultsInspector {
     }
 
     private static func javaHealth(defaults: MinecraftClientDefaults, launcherProfiles: String?) -> ClientDefaultHealthRow {
-        guard let desired = defaults.javaExecutablePath, !desired.isEmpty else {
-            return ClientDefaultHealthRow(
-                id: "java_runtime",
-                label: "Java Runtime",
-                desiredValue: "Java 25.0.3 managed by Pummelchen",
-                observedValue: "not managed in this check",
-                status: .unknown,
-                source: "launcher_profiles.json"
-            )
-        }
-        guard let launcherProfiles, !launcherProfiles.isEmpty else {
-            return ClientDefaultHealthRow(
-                id: "java_runtime",
-                label: "Java Runtime",
-                desiredValue: desired,
-                observedValue: "launcher profile missing",
-                status: .missing,
-                source: "launcher_profiles.json"
-            )
-        }
-        let escapedDesired = desired.replacingOccurrences(of: "/", with: "\\/")
-        let observed = launcherProfiles.contains(desired) || launcherProfiles.contains(escapedDesired)
-            ? desired
-            : "managed Java path not found"
+        let requiredVersion = defaults.javaExecutablePath.flatMap(javaVersionFromPath) ?? defaultJavaVersion
+
+        guard defaults.javaExecutablePath != nil else {
         return ClientDefaultHealthRow(
             id: "java_runtime",
             label: "Java Runtime",
-            desiredValue: desired,
-            observedValue: observed,
-            status: observed == desired ? .ok : .mismatch,
-            source: "launcher_profiles.json"
+            desiredValue: requiredVersion,
+            observedValue: "not managed in this check",
+            status: .testing,
+            source: "launcher_profiles.json",
+            recommendedAction: "Manage Java runtime via installer"
+        )
+    }
+        guard let launcherProfiles, !launcherProfiles.isEmpty else {
+        return ClientDefaultHealthRow(
+            id: "java_runtime",
+            label: "Java Runtime",
+            desiredValue: requiredVersion,
+            observedValue: "launcher profile missing",
+            status: .missing,
+            source: "launcher_profiles.json",
+            recommendedAction: "Create managed launcher profile"
+        )
+    }
+
+        let observedPath = extractJavaPath(from: launcherProfiles)
+        let observedVersion = observedPath.flatMap(javaVersionFromPath) ?? "unknown"
+        let observedVersionMatch = observedVersion == requiredVersion
+        let ok = observedPath != nil && observedVersionMatch
+        return ClientDefaultHealthRow(
+            id: "java_runtime",
+            label: "Java Runtime",
+            desiredValue: requiredVersion,
+            observedValue: observedVersion,
+            status: ok ? .pass : (observedPath == nil ? .missing : .fail),
+            source: "launcher_profiles.json",
+            recommendedAction: "Repair Java runtime path and version"
         )
     }
 
     private static func serverEntryHealth(servers: String?) -> ClientDefaultHealthRow {
         guard let servers, !servers.isEmpty else {
-            return ClientDefaultHealthRow(
-                id: "server_entry",
-                label: "Server Entry",
-                desiredValue: "91.99.176.243:25565",
-                observedValue: "servers.dat missing",
-                status: .missing,
-                source: "servers.dat"
-            )
-        }
+        return ClientDefaultHealthRow(
+            id: "server_entry",
+            label: "Server Entity",
+            desiredValue: "91.99.176.243:25565",
+            observedValue: "servers.dat missing",
+            status: .missing,
+            source: "servers.dat",
+            recommendedAction: "Add managed server entry"
+        )
+    }
         let ok = servers.contains("91.99.176.243") || servers.localizedCaseInsensitiveContains("Pummelchen")
         return ClientDefaultHealthRow(
             id: "server_entry",
-            label: "Server Entry",
+            label: "Server Entity",
             desiredValue: "91.99.176.243:25565",
-            observedValue: ok ? "Pummelchen server found" : "Pummelchen server not found",
-            status: ok ? .ok : .mismatch,
-            source: "servers.dat"
+            observedValue: ok ? "Pummelchen Server Ready" : "Pummelchen server not found",
+            status: ok ? .pass : .fail,
+            source: "servers.dat",
+            recommendedAction: "Add managed server entry"
         )
     }
 
@@ -212,7 +293,8 @@ public enum ClientDefaultsInspector {
                 desiredValue: "Mob Fracturing (with blood)",
                 observedValue: "missing",
                 status: .missing,
-                source: relativePath
+                source: relativePath,
+                recommendedAction: "Apply managed Physics mob settings"
             )
         }
 
@@ -223,8 +305,9 @@ public enum ClientDefaultsInspector {
             label: "Physics Mob Fracturing",
             desiredValue: "Mob Fracturing (with blood)",
             observedValue: observedType.map(physicsMobTypeDescription) ?? "missing",
-            status: observedType == defaults.physicsMobType ? .ok : .mismatch,
-            source: relativePath
+            status: observedType == defaults.physicsMobType ? .pass : .fail,
+            source: relativePath,
+            recommendedAction: "Apply managed Physics mob settings"
         )
     }
 
@@ -261,11 +344,68 @@ public enum ClientDefaultsInspector {
                     label: key,
                     desiredValue: value,
                     observedValue: observed ?? "missing",
-                    status: observed == nil ? .missing : (observed == value ? .ok : .mismatch),
-                    source: relativePath
+                    status: observed == nil ? .missing : (observed == value ? .pass : .fail),
+                    source: relativePath,
+                    recommendedAction: "Apply managed config key"
                 )
             }
         }.sorted { $0.id < $1.id }
+    }
+
+    private static func extractJavaPath(from launcherProfiles: String) -> String? {
+        let data = Data(launcherProfiles.utf8)
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let profiles = root["profiles"] as? [String: Any] else {
+            return nil
+        }
+
+        if let neoForge = profiles["NeoForge"] as? [String: Any],
+           let value = neoForge["javaDir"] as? String,
+           !value.isEmpty {
+            return value
+        }
+
+        for (_, rawProfile) in profiles {
+            if let profile = rawProfile as? [String: Any],
+               let value = profile["javaDir"] as? String,
+               !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private static func javaVersionFromPath(_ path: String) -> String? {
+        if let match = extractJavaVersion(from: path) {
+            let components = match.split(separator: "+")
+            return String(components.first ?? "")
+        }
+        return nil
+    }
+
+    private static func extractJavaVersion(from text: String) -> String? {
+        let pattern = #"\d+\.\d+\.\d+(?:\+\d+)?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+              let matchedRange = Range(match.range, in: text) else {
+            return nil
+        }
+        return String(text[matchedRange])
+    }
+
+    private static func parseArray(_ value: String) -> [String] {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = trimmed.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String] else {
+            return trimmed
+                .replacingOccurrences(of: "[", with: "")
+                .replacingOccurrences(of: "]", with: "")
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " \"")) }
+                .filter { !$0.isEmpty }
+        }
+        return parsed
     }
 
     private static func readText(_ url: URL) -> String? {
@@ -306,14 +446,43 @@ public enum ClientDefaultsInspector {
             .first
     }
 
-    private static func isOrdered(_ values: [String], in text: String) -> Bool {
-        var searchStart = text.startIndex
+    private static func isOrdered(_ values: [String], valuesIn observed: [String]) -> Bool {
+        var searchStart = 0
         for value in values {
-            guard let range = text.range(of: value, range: searchStart..<text.endIndex) else {
+            guard let index = observed.indices(of: value, startingAt: searchStart).first else {
                 return false
             }
-            searchStart = range.upperBound
+            searchStart = index + 1
         }
         return true
+    }
+
+    private static func normalizeShaderName(_ shader: String?) -> String? {
+        guard let shader else { return nil }
+        return stripMinecraftPath(shader)
+    }
+
+    private static func humanResourcePackName(_ pack: String) -> String {
+        stripMinecraftPath(pack)
+    }
+
+    private static func stripMinecraftPath(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let unwrapped = trimmed.hasPrefix("\"") && trimmed.hasSuffix("\"") && trimmed.count >= 2
+            ? String(trimmed.dropFirst().dropLast())
+            : trimmed
+        if unwrapped.hasPrefix("file/") {
+            return String(unwrapped.dropFirst("file/".count))
+        }
+        return unwrapped
+    }
+
+}
+
+private extension Array where Element == String {
+    func indices(of target: String, startingAt: Int) -> [Int] {
+        return enumerated().compactMap { index, item in
+            index >= startingAt && item == target ? index : nil
+        }
     }
 }

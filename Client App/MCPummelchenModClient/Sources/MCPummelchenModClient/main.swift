@@ -9,6 +9,7 @@ final class ClientStatusModel: ObservableObject, @unchecked Sendable {
     @Published var snapshot: ClientStatusSnapshot?
     @Published var isRefreshing = false
     @Published var isSyncing = false
+    @Published var rowsRepairing = Set<String>()
     @Published var syncMessage: String?
     @Published var controlMessage: String?
 
@@ -80,6 +81,32 @@ final class ClientStatusModel: ObservableObject, @unchecked Sendable {
                     self.isSyncing = false
                     self.refresh()
                 }
+            }
+        }
+    }
+
+    func repair(rowID: String) {
+        guard !rowsRepairing.contains(rowID) else {
+            return
+        }
+        guard let snapshot else {
+            syncMessage = "No status snapshot is available."
+            return
+        }
+        guard snapshot.defaultsHealth.contains(where: { $0.id == rowID && $0.status.isActionable }) else {
+            syncMessage = "Selected row is not actionable."
+            return
+        }
+
+        rowsRepairing.insert(rowID)
+        let config = configuration
+        Task {
+            let repaired = await ClientStatusService(configuration: config).checkAndRecord(rowIDsToRepair: [rowID])
+            await MainActor.run {
+                self.snapshot = repaired
+                self.rowsRepairing.remove(rowID)
+                self.syncMessage = repaired.errorMessage == nil ? "Row fix completed: \(rowID)" : repaired.errorMessage
+                self.refresh()
             }
         }
     }
@@ -262,8 +289,17 @@ struct PummelchenStatusView: View {
     private func defaultsTable(_ rows: [ClientDefaultHealthRow]) -> some View {
         Table(rows) {
             TableColumn("Status") { row in
-                Text(row.status.rawValue.replacingOccurrences(of: "_", with: " "))
-                    .foregroundStyle(row.status == .ok ? .green : .orange)
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(color(for: row.status))
+                        .frame(width: 8, height: 8)
+                    Text(row.status.displayValue)
+                        .foregroundStyle(color(for: row.status))
+                }
+            }
+            TableColumn("Recommended Action") { row in
+                Text(row.recommendedAction)
+                    .lineLimit(2)
             }
             TableColumn("Default") { row in
                 Text(row.label)
@@ -280,14 +316,23 @@ struct PummelchenStatusView: View {
                 Text(row.source)
                     .foregroundStyle(.secondary)
             }
+            TableColumn("Fix") { row in
+                Button("Fix") {
+                    model.repair(rowID: row.id)
+                }
+                .disabled(!row.status.isActionable || model.rowsRepairing.contains(row.id) || model.isSyncing || model.isRefreshing)
+                .controlSize(.small)
+            }
         }
         .frame(minHeight: 230)
     }
 
     private func footer(_ snapshot: ClientStatusSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        let clientIPText = snapshot.clientIP ?? "unknown"
+        return VStack(alignment: .leading, spacing: 5) {
             Text("Minecraft: \(snapshot.minecraftDirectory)")
             Text("Local DuckDB: \(snapshot.localDatabase)")
+            Text("Client IP: \(clientIPText)")
             if let error = snapshot.errorMessage {
                 Text(error)
                     .foregroundStyle(.red)
@@ -346,6 +391,17 @@ struct PummelchenStatusView: View {
         case .updateAvailable: .orange
         case .offline: .red
         case .repairNeeded: .red
+        }
+    }
+
+    private func color(for status: ClientDefaultStatus) -> Color {
+        switch status {
+        case .pass, .fixedOK, .testing:
+            return .green
+        case .repairing:
+            return .orange
+        case .fixedFailed, .fail, .missing:
+            return .red
         }
     }
 
