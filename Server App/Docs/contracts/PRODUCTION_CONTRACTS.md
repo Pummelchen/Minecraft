@@ -53,6 +53,8 @@ Current DMG contents must remain functionally available:
 
 The DMG installs `PummelchenClient.app` and keeps CLI repair functionality inside the app bundle.
 
+The app bundle `Info.plist` must include `PummelchenReleaseID` set to the release being built. The sync engine compares this value to the server release. If the server advertises matching DMG metadata and the installed app is older or missing the release marker, the client downloads the DMG, verifies SHA256, mounts it read-only, validates the app bundle/signature/helper/embedded DuckDB dylib, stages the replacement, exits, installs the new app bundle, and opens the app again.
+
 ## Client Defaults
 
 Client defaults are idempotent. Repeated syncs must not duplicate config keys or reset unrelated player preferences.
@@ -90,6 +92,13 @@ Each release contains:
 - `public/client-files`
 
 Activation publishes static files through nginx and writes `/downloads/current-release.json` plus `/downloads/current-release.txt`.
+
+`current-release.json` is also the client-app self-update contract. When a release includes a macOS DMG, the payload must include both:
+
+- `dmg_url`
+- `dmg_sha256`
+
+The DMG URL must stay inside `/downloads/releases/<release-id>/` and the SHA256 must match the exact published `Pummelchen-Client-Installer.dmg`. Clients use this metadata to stage a verified app update, replace `PummelchenClient.app`, and relaunch automatically when the installed app bundle `PummelchenReleaseID` differs from the server `release_id`.
 
 ## Manifest Format
 

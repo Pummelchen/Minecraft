@@ -180,7 +180,7 @@ public struct SwiftReleasePipeline: Sendable {
             dmgSoakReport: dmgSoakReport
         )
         if config.activate {
-            try activateRelease(releaseDir: releaseDir, createdAt: createdAt, clientZipSHA: clientZipSHA, mrpackSHA: mrpackSHA)
+            try activateRelease(releaseDir: releaseDir, createdAt: createdAt, clientZipSHA: clientZipSHA, mrpackSHA: mrpackSHA, dmgSHA: dmgSHA)
         }
         try validateRelease(releaseDir: releaseDir)
         try runReleaseHealthMonitorIfConfigured()
@@ -221,7 +221,7 @@ public struct SwiftReleasePipeline: Sendable {
         }
     }
 
-    private func activateRelease(releaseDir: URL, createdAt: String, clientZipSHA: String, mrpackSHA: String) throws {
+    private func activateRelease(releaseDir: URL, createdAt: String, clientZipSHA: String, mrpackSHA: String, dmgSHA: String?) throws {
         let publicRelease = config.publicDownloads.appendingPathComponent("releases/\(config.releaseID)", isDirectory: true)
         try fileManager.createDirectory(at: publicRelease.deletingLastPathComponent(), withIntermediateDirectories: true)
         if fileManager.fileExists(atPath: publicRelease.path) {
@@ -229,7 +229,7 @@ public struct SwiftReleasePipeline: Sendable {
         }
         try copyTree(releaseDir.appendingPathComponent("public", isDirectory: true), to: publicRelease)
 
-        let payload = currentReleasePayload(createdAt: createdAt, activatedAt: Self.isoNow(), clientZipSHA: clientZipSHA, mrpackSHA: mrpackSHA)
+        let payload = currentReleasePayload(createdAt: createdAt, activatedAt: Self.isoNow(), clientZipSHA: clientZipSHA, mrpackSHA: mrpackSHA, dmgSHA: dmgSHA)
         let data = try JSONEncoder.pummelchenSorted.encode(payload)
         try fileManager.createDirectory(at: config.publicDownloads, withIntermediateDirectories: true)
         try data.write(to: config.publicDownloads.appendingPathComponent("current-release.json"), options: .atomic)
@@ -275,12 +275,14 @@ public struct SwiftReleasePipeline: Sendable {
         }
         let clientZipSHA = try SHA256Hasher.hashFile(at: releaseDir.appendingPathComponent("artifacts/\(Self.clientZipName)"))
         let mrpackSHA = try SHA256Hasher.hashFile(at: releaseDir.appendingPathComponent("artifacts/\(Self.mrpackName)"))
-        let payload = currentReleasePayload(createdAt: createdAt, activatedAt: nil, clientZipSHA: clientZipSHA, mrpackSHA: mrpackSHA)
+        let dmg = releaseDir.appendingPathComponent("artifacts/\(Self.dmgName)")
+        let dmgSHA = fileManager.fileExists(atPath: dmg.path) ? try SHA256Hasher.hashFile(at: dmg) : nil
+        let payload = currentReleasePayload(createdAt: createdAt, activatedAt: nil, clientZipSHA: clientZipSHA, mrpackSHA: mrpackSHA, dmgSHA: dmgSHA)
         try JSONEncoder.pummelchenSorted.encode(payload).write(to: publicDir.appendingPathComponent("current-release.json"), options: .atomic)
         try writeTestedUpdatesCompatibilityFeed(to: publicDir, createdAt: createdAt)
     }
 
-    private func currentReleasePayload(createdAt: String, activatedAt: String?, clientZipSHA: String, mrpackSHA: String) -> CurrentRelease {
+    private func currentReleasePayload(createdAt: String, activatedAt: String?, clientZipSHA: String, mrpackSHA: String, dmgSHA: String?) -> CurrentRelease {
         CurrentRelease(
             releaseID: config.releaseID,
             createdAt: createdAt,
@@ -294,6 +296,8 @@ public struct SwiftReleasePipeline: Sendable {
             clientZipSHA256: clientZipSHA,
             mrpackURL: "/downloads/releases/\(config.releaseID)/\(Self.mrpackName)",
             mrpackSHA256: mrpackSHA,
+            dmgURL: dmgSHA == nil ? nil : "/downloads/releases/\(config.releaseID)/\(Self.dmgName)",
+            dmgSHA256: dmgSHA,
             notes: config.notes
         )
     }

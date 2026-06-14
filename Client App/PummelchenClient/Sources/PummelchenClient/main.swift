@@ -67,6 +67,12 @@ final class ClientStatusModel: ObservableObject, @unchecked Sendable {
                     self.syncMessage = "\(result.message) \(result.filesDownloaded) downloaded, \(result.filesVerified) verified."
                     self.isSyncing = false
                     self.refresh()
+                    if result.selfUpdateScheduled {
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 1_000_000_000)
+                            NSApp.terminate(nil)
+                        }
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -93,6 +99,12 @@ final class ClientStatusModel: ObservableObject, @unchecked Sendable {
                     Task { @MainActor in
                         model.controlMessage = message
                         model.refresh()
+                        if message.localizedCaseInsensitiveContains("self-update scheduled") {
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                                NSApp.terminate(nil)
+                            }
+                        }
                     }
                 }
             } catch {
@@ -108,7 +120,10 @@ final class ClientStatusModel: ObservableObject, @unchecked Sendable {
             serverURL: configuration.serverURL,
             minecraftDirectory: configuration.minecraftDirectory,
             pummelchenHome: configuration.pummelchenHome,
-            databaseURL: configuration.databaseURL
+            databaseURL: configuration.databaseURL,
+            clientID: configuration.clientID,
+            clientAPIToken: configuration.clientAPIToken,
+            retryPolicy: configuration.retryPolicy
         )
     }
 }

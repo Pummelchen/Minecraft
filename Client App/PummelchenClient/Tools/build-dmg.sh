@@ -14,6 +14,7 @@ FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 DMG_NAME="Pummelchen-Client-Installer.dmg"
 DMG_PATH="$DMG_DIR/$DMG_NAME"
 VERSION="${PUMMELCHEN_CLIENT_VERSION:-0.8.0}"
+APP_RELEASE_ID="${PUMMELCHEN_RELEASE_ID:-development}"
 
 cd "$ROOT_DIR"
 
@@ -85,6 +86,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
     <string>$VERSION</string>
     <key>CFBundleVersion</key>
     <string>$VERSION</string>
+    <key>PummelchenReleaseID</key>
+    <string>$APP_RELEASE_ID</string>
     <key>LSMinimumSystemVersion</key>
     <string>$MACOSX_DEPLOYMENT_TARGET</string>
 </dict>

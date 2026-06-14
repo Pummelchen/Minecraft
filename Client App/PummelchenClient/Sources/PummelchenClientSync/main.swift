@@ -97,6 +97,9 @@ struct PummelchenClientSyncMain {
                 print("Downloaded: \(result.filesDownloaded)")
                 print("Quarantined: \(result.filesQuarantined)")
                 print("Status: \(result.message)")
+                if result.selfUpdateScheduled {
+                    print("Client app update: scheduled; the app will relaunch after this helper exits.")
+                }
             }
         } catch {
             FileHandle.standardError.write(Data("pummelchen-client-sync failed: \(error)\n".utf8))

@@ -13,6 +13,8 @@ public struct CurrentRelease: Codable, Equatable, Sendable {
     public let clientZipSHA256: String
     public let mrpackURL: String
     public let mrpackSHA256: String
+    public let dmgURL: String?
+    public let dmgSHA256: String?
     public let notes: String
 
     enum CodingKeys: String, CodingKey {
@@ -28,6 +30,8 @@ public struct CurrentRelease: Codable, Equatable, Sendable {
         case clientZipSHA256 = "client_zip_sha256"
         case mrpackURL = "mrpack_url"
         case mrpackSHA256 = "mrpack_sha256"
+        case dmgURL = "dmg_url"
+        case dmgSHA256 = "dmg_sha256"
         case notes
     }
 
@@ -44,6 +48,8 @@ public struct CurrentRelease: Codable, Equatable, Sendable {
         clientZipSHA256: String,
         mrpackURL: String,
         mrpackSHA256: String,
+        dmgURL: String? = nil,
+        dmgSHA256: String? = nil,
         notes: String
     ) {
         self.releaseID = releaseID
@@ -58,6 +64,8 @@ public struct CurrentRelease: Codable, Equatable, Sendable {
         self.clientZipSHA256 = clientZipSHA256
         self.mrpackURL = mrpackURL
         self.mrpackSHA256 = mrpackSHA256
+        self.dmgURL = dmgURL
+        self.dmgSHA256 = dmgSHA256
         self.notes = notes
     }
 }
@@ -107,8 +115,24 @@ public enum CurrentReleaseValidator {
             expectedExtension: ".mrpack",
             field: "mrpack_url"
         )
+        try ContractValidation.require(
+            (release.dmgURL == nil) == (release.dmgSHA256 == nil),
+            "dmg_url and dmg_sha256 must be provided together"
+        )
+        if let dmgURL = release.dmgURL {
+            try validateRelativeReleaseURL(
+                dmgURL,
+                releaseID: release.releaseID,
+                expectedSuffix: nil,
+                expectedExtension: ".dmg",
+                field: "dmg_url"
+            )
+        }
         try ContractValidation.requireSHA256(release.clientZipSHA256, field: "client_zip_sha256")
         try ContractValidation.requireSHA256(release.mrpackSHA256, field: "mrpack_sha256")
+        if let dmgSHA256 = release.dmgSHA256 {
+            try ContractValidation.requireSHA256(dmgSHA256, field: "dmg_sha256")
+        }
     }
 
     private static func validateRelativeReleaseURL(

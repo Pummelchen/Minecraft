@@ -74,6 +74,16 @@ public struct ClientControlWatcher: Sendable {
                         do {
                             let result = try await ClientSyncEngine(configuration: syncConfiguration).sync(force: true)
                             log?("sync finished for \(event.eventID): \(result.message)")
+                            if result.selfUpdateScheduled {
+                                try await channel.acknowledge(event)
+                                log?("client self-update scheduled; exiting watcher for relaunch")
+                                return ClientControlWatcherResult(
+                                    cycles: cycles,
+                                    eventsHandled: handled,
+                                    syncsRun: syncs,
+                                    lastEventID: afterEventID
+                                )
+                            }
                         } catch {
                             log?("sync failed for \(event.eventID): \(error)")
                         }

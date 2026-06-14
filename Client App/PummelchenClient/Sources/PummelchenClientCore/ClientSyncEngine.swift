@@ -63,6 +63,35 @@ public struct ClientSyncResult: Equatable, Sendable {
     public let filesDownloaded: Int
     public let filesQuarantined: Int
     public let message: String
+    public let selfUpdateScheduled: Bool
+
+    public init(
+        runID: String,
+        startedAt: String,
+        finishedAt: String,
+        fromReleaseID: String?,
+        targetReleaseID: String,
+        result: String,
+        manifestEntries: Int,
+        filesVerified: Int,
+        filesDownloaded: Int,
+        filesQuarantined: Int,
+        message: String,
+        selfUpdateScheduled: Bool = false
+    ) {
+        self.runID = runID
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+        self.fromReleaseID = fromReleaseID
+        self.targetReleaseID = targetReleaseID
+        self.result = result
+        self.manifestEntries = manifestEntries
+        self.filesVerified = filesVerified
+        self.filesDownloaded = filesDownloaded
+        self.filesQuarantined = filesQuarantined
+        self.message = message
+        self.selfUpdateScheduled = selfUpdateScheduled
+    }
 }
 
 public enum ClientSyncError: Error, CustomStringConvertible {
@@ -118,15 +147,22 @@ public struct ClientSyncEngine: Sendable {
             try writeCurrentManifest(manifest)
             let inventory = try installedInventory(manifest: manifest)
             let defaultsHealth = ClientDefaultsInspector.inspect(minecraftDirectory: configuration.minecraftDirectory, defaults: defaults)
+            let selfUpdate = try await ClientAppSelfUpdater.stageAndScheduleIfNeeded(
+                release: release,
+                serverURL: configuration.serverURL,
+                pummelchenHome: configuration.pummelchenHome,
+                http: http
+            )
             let networkProtocol = await http.lastNegotiatedProtocol()
 
             let finished = Date()
             let downloaded = syncCounts.downloaded
             let changed = downloaded + staleRemoved + unmanagedMoved
             let defaultsChanged = defaultsHealth.contains { $0.status != .ok && $0.status != .unknown }
-            let message = downloaded == 0
+            let syncMessage = downloaded == 0
                 ? (defaultsChanged ? "files synced; client defaults need attention" : "all synced, no downloads required")
                 : "synced after \(downloaded) download(s)"
+            let message = selfUpdate.scheduled ? "\(syncMessage); \(selfUpdate.message)" : syncMessage
             let result = ClientSyncResult(
                 runID: runID,
                 startedAt: Self.iso(started),
@@ -138,7 +174,8 @@ public struct ClientSyncEngine: Sendable {
                 filesVerified: syncCounts.verified,
                 filesDownloaded: downloaded,
                 filesQuarantined: unmanagedMoved,
-                message: message
+                message: message,
+                selfUpdateScheduled: selfUpdate.scheduled
             )
             try store.record(
                 syncResult: result,
@@ -165,7 +202,8 @@ public struct ClientSyncEngine: Sendable {
                 filesVerified: 0,
                 filesDownloaded: 0,
                 filesQuarantined: 0,
-                message: String(describing: error)
+                message: String(describing: error),
+                selfUpdateScheduled: false
             )
             try? store.record(syncResult: failed, defaultsHealth: defaultsHealth)
             if let networkProtocol = await http.lastNegotiatedProtocol() {

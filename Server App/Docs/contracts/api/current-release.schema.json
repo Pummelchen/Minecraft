@@ -19,6 +19,10 @@
     "notes"
   ],
   "additionalProperties": true,
+  "dependentRequired": {
+    "dmg_url": ["dmg_sha256"],
+    "dmg_sha256": ["dmg_url"]
+  },
   "properties": {
     "release_id": {
       "type": "string",
@@ -60,6 +64,13 @@
       "type": "string"
     },
     "mrpack_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "dmg_url": {
+      "type": "string",
+      "pattern": "^/downloads/releases/.+/[^/]+\\.dmg$"
+    },
+    "dmg_sha256": {
       "$ref": "#/$defs/sha256"
     },
     "notes": {
