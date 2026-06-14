@@ -568,6 +568,21 @@ struct MCPummelchenModServerCoreTests {
 
         #expect(ModUpdateScanner.provider(for: "https://modrinth.com/mod/betterf3") == "modrinth")
         #expect(ModUpdateScanner.provider(for: "https://www.curseforge.com/minecraft/mc-mods/betterf3") == "curseforge")
+        #expect(ModUpdateScanner.curseForgeSlug(from: URL(string: "https://www.curseforge.com/minecraft/mc-mods/betterf3")!) == "betterf3")
+        #expect(ModUpdateScanner.curseForgeProjectID(fromSourceID: "curseforge_1573986_8241269") == 1573986)
+        #expect(ModUpdateScanner.bestCurseForgeFile(
+            from: [
+                ["fileName": "maplespigcollection-fabric-26.1.2-1.0.jar", "gameVersions": ["Fabric", "26.1.2"]],
+                ["fileName": "maplespigcollection-neoforge-26.1.2-1.0.jar", "gameVersions": ["NeoForge", "26.1.2"]]
+            ],
+            loader: "neoforge",
+            minecraftVersion: "26.1.2"
+        )?["fileName"] as? String == "maplespigcollection-neoforge-26.1.2-1.0.jar")
+        #expect(ModUpdateScanner.curseForgeVersion(
+            fileName: "low_latency-neoforge-26.1.2-1.0.5.jar",
+            installedFile: "low_latency-neoforge-26.1.2-1.0.5.jar",
+            installedVersion: "1.0.5"
+        ) == "1.0.5")
         #expect(ModUpdateScanner.parseLatestVersion(fromHTML: modrinthHTML, provider: "modrinth") == "18.0.3")
         #expect(ModUpdateScanner.parseLatestVersion(fromHTML: "<title>BetterF3 - Minecraft Mods - CurseForge</title>", provider: "curseforge") == nil)
         #expect(ModUpdateScanner.isCloudflareChallenge(cloudflareHTML))

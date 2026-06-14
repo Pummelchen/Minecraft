@@ -139,7 +139,7 @@ public struct SwiftReleasePipeline: Sendable {
 
         let artifacts = releaseDir.appendingPathComponent("artifacts", isDirectory: true)
         try fileManager.createDirectory(at: artifacts, withIntermediateDirectories: true)
-        try ensureClientZipAvailable(sourcePackage: releaseDir.appendingPathComponent("client-package", isDirectory: true))
+        try rebuildClientDistributionArtifacts(sourcePackage: releaseDir.appendingPathComponent("client-package", isDirectory: true))
         for name in [Self.clientZipName, "\(Self.clientZipName).sha256", Self.mrpackName, Self.dmgName, "\(Self.dmgName).sha256", Self.dmgHeadlessLiveSoakReportName] {
             try copyIfExists(config.serverDir.appendingPathComponent(name), to: artifacts.appendingPathComponent(name))
         }
@@ -536,15 +536,45 @@ public struct SwiftReleasePipeline: Sendable {
         return csv.split(separator: "\n").dropFirst().first.map(String.init)
     }
 
-    private func ensureClientZipAvailable(sourcePackage: URL) throws {
-        let target = config.serverDir.appendingPathComponent(Self.clientZipName)
-        let shaTarget = config.serverDir.appendingPathComponent("\(Self.clientZipName).sha256")
-        guard !fileManager.fileExists(atPath: target.path), config.buildClientZipIfMissing else {
+    private func rebuildClientDistributionArtifacts(sourcePackage: URL) throws {
+        guard config.buildClientZipIfMissing else {
             return
         }
-        try runCommand(executable: "/usr/bin/env", arguments: ["zip", "-qry", target.path, "client-package"], currentDirectory: sourcePackage.deletingLastPathComponent())
-        let hash = try SHA256Hasher.hashFile(at: target)
-        try "\(hash)  \(Self.clientZipName)\n".write(to: shaTarget, atomically: true, encoding: .utf8)
+
+        let zipTarget = config.serverDir.appendingPathComponent(Self.clientZipName)
+        let zipSHATarget = config.serverDir.appendingPathComponent("\(Self.clientZipName).sha256")
+        try removeIfExists(zipTarget)
+        try removeIfExists(zipSHATarget)
+        try runCommand(
+            executable: "/usr/bin/env",
+            arguments: ["zip", "-qry", zipTarget.path, "client-package"],
+            currentDirectory: sourcePackage.deletingLastPathComponent()
+        )
+        let zipHash = try SHA256Hasher.hashFile(at: zipTarget)
+        try "\(zipHash)  \(Self.clientZipName)\n".write(to: zipSHATarget, atomically: true, encoding: .utf8)
+
+        let mrpackTarget = config.serverDir.appendingPathComponent(Self.mrpackName)
+        let mrpackSHATarget = config.serverDir.appendingPathComponent("\(Self.mrpackName).sha256")
+        try removeIfExists(mrpackTarget)
+        try removeIfExists(mrpackSHATarget)
+
+        let stage = config.serverDir.appendingPathComponent(".mrpack-stage-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fileManager.removeItem(at: stage) }
+        try fileManager.createDirectory(at: stage, withIntermediateDirectories: true)
+        try copyTree(sourcePackage, to: stage.appendingPathComponent("minecraft", isDirectory: true))
+        try runCommand(
+            executable: "/usr/bin/env",
+            arguments: ["zip", "-qry", mrpackTarget.path, "minecraft"],
+            currentDirectory: stage
+        )
+        let mrpackHash = try SHA256Hasher.hashFile(at: mrpackTarget)
+        try "\(mrpackHash)  \(Self.mrpackName)\n".write(to: mrpackSHATarget, atomically: true, encoding: .utf8)
+    }
+
+    private func removeIfExists(_ url: URL) throws {
+        if fileManager.fileExists(atPath: url.path) {
+            try fileManager.removeItem(at: url)
+        }
     }
 
     private func writeChangelog(releaseDir: URL) throws {

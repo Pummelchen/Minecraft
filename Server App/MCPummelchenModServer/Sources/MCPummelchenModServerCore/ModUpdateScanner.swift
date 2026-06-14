@@ -148,6 +148,9 @@ public struct ModUpdateScanner: Sendable {
             if host.contains("modrinth.com") {
                 return try checkModrinth(source: source, sourceURL: url)
             }
+            if host.contains("curseforge.com") {
+                return try checkCurseForge(source: source, sourceURL: url)
+            }
             let body = try fetchText(url)
             if Self.isCloudflareChallenge(body) {
                 return ModUpdateCheckResult(
@@ -342,6 +345,80 @@ public struct ModUpdateScanner: Sendable {
         )
     }
 
+    private func checkCurseForge(source: ModSourceRecord, sourceURL: URL) throws -> ModUpdateCheckResult {
+        let projectID: Int?
+        if let value = Self.curseForgeProjectID(fromSourceID: source.sourceID) {
+            projectID = value
+        } else if let slug = Self.curseForgeSlug(from: sourceURL) {
+            projectID = try resolveCurseForgeProjectID(slug: slug)
+        } else {
+            projectID = nil
+        }
+
+        guard let projectID else {
+            let body = try fetchText(sourceURL)
+            let latest = Self.parseLatestVersion(fromHTML: body, provider: source.provider)
+            return ModUpdateCheckResult(
+                source: source,
+                status: Self.classify(installedVersion: source.installedVersion, latestVersion: latest),
+                latestVersion: latest,
+                latestURL: source.sourceURL,
+                details: latest == nil ? "curseforge project id not found and HTML parse failed" : "parsed from CurseForge HTML"
+            )
+        }
+
+        let endpoint = "https://www.curseforge.com/api/v1/mods/\(projectID)/files?pageIndex=0&pageSize=50&gameVersion=\(Self.urlQuery(config.minecraftVersion))&modLoaderType=\(Self.curseForgeLoaderType(config.loader))"
+        guard let endpointURL = URL(string: endpoint) else {
+            return ModUpdateCheckResult(
+                source: source,
+                status: "unresolved",
+                latestVersion: nil,
+                latestURL: source.sourceURL,
+                details: "invalid CurseForge files endpoint URL"
+            )
+        }
+        let data = try fetchData(endpointURL)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let files = object["data"] as? [[String: Any]],
+              let latest = Self.bestCurseForgeFile(from: files, loader: config.loader, minecraftVersion: config.minecraftVersion) else {
+            return ModUpdateCheckResult(
+                source: source,
+                status: "unresolved",
+                latestVersion: nil,
+                latestURL: endpoint,
+                details: "CurseForge API returned no compatible \(config.loader) \(config.minecraftVersion) files"
+            )
+        }
+
+        let fileName = (latest["fileName"] as? String) ?? (latest["displayName"] as? String)
+        let latestVersion = Self.curseForgeVersion(
+            fileName: fileName,
+            installedFile: source.installedFile,
+            installedVersion: source.installedVersion
+        )
+        let fileID = latest["id"].map { String(describing: $0) }
+        let latestURL = fileID.map { "https://www.curseforge.com/api/v1/mods/\(projectID)/files/\($0)/download" } ?? endpoint
+        return ModUpdateCheckResult(
+            source: source,
+            status: Self.classify(installedVersion: source.installedVersion, latestVersion: latestVersion),
+            latestVersion: latestVersion,
+            latestURL: latestURL,
+            details: "checked CurseForge project API for \(config.loader) \(config.minecraftVersion)"
+        )
+    }
+
+    private func resolveCurseForgeProjectID(slug: String) throws -> Int? {
+        let endpoint = "https://api.curse.tools/v1/cf/mods/search?gameId=432&slug=\(Self.urlQuery(slug))&pageSize=5"
+        guard let url = URL(string: endpoint) else { return nil }
+        let data = try fetchData(url)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let mods = object["data"] as? [[String: Any]] else {
+            return nil
+        }
+        return mods.first(where: { ($0["slug"] as? String) == slug })?["id"] as? Int
+            ?? mods.first?["id"] as? Int
+    }
+
     private func upsert(source: ModSourceRecord) throws {
         try execute("""
         DELETE FROM core.mod_sources WHERE source_id = \(Self.sqlLiteral(source.sourceID));
@@ -459,6 +536,57 @@ public struct ModUpdateScanner: Sendable {
             return nil
         }
         return parts[index + 1]
+    }
+
+    public static func curseForgeSlug(from url: URL) -> String? {
+        let parts = url.path.split(separator: "/").map(String.init)
+        guard let index = parts.firstIndex(of: "mc-mods"), parts.indices.contains(index + 1) else {
+            return nil
+        }
+        return parts[index + 1]
+    }
+
+    public static func curseForgeProjectID(fromSourceID sourceID: String) -> Int? {
+        let pattern = #"^curseforge_(\d+)(?:_|$)"#
+        guard let value = firstMatch(pattern: pattern, in: sourceID) else {
+            return nil
+        }
+        return Int(value)
+    }
+
+    public static func bestCurseForgeFile(from files: [[String: Any]], loader: String, minecraftVersion: String) -> [String: Any]? {
+        let loaderName = loader.lowercased() == "neoforge" ? "neoforge" : loader.lowercased()
+        return files.first { file in
+            guard let versions = file["gameVersions"] as? [String] else { return false }
+            let normalized = versions.map { $0.lowercased() }
+            return normalized.contains(minecraftVersion.lowercased()) && normalized.contains(loaderName)
+        } ?? files.first { file in
+            guard let versions = file["gameVersions"] as? [String] else { return false }
+            return versions.map { $0.lowercased() }.contains(minecraftVersion.lowercased())
+        } ?? files.first
+    }
+
+    public static func curseForgeVersion(fileName: String?, installedFile: String?, installedVersion: String?) -> String? {
+        if let fileName,
+           let installedFile,
+           fileName.caseInsensitiveCompare(installedFile) == .orderedSame {
+            return installedVersion ?? versionFromFilename(fileName)
+        }
+        return fileName.flatMap(versionFromFilename)
+    }
+
+    private static func curseForgeLoaderType(_ loader: String) -> Int {
+        switch loader.lowercased() {
+        case "forge": return 1
+        case "fabric": return 4
+        case "quilt": return 5
+        case "neoforge": return 6
+        default: return 0
+        }
+    }
+
+    private static func urlQuery(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
     }
 
     private static func files(from value: String?) -> [String] {
