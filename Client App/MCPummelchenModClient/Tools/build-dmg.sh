@@ -15,6 +15,88 @@ DMG_NAME="MCPummelchenModClient.dmg"
 DMG_PATH="$DMG_DIR/$DMG_NAME"
 VERSION="${PUMMELCHEN_CLIENT_VERSION:-0.8.0}"
 APP_RELEASE_ID="${PUMMELCHEN_RELEASE_ID:-development}"
+SERVER_URL="${PUMMELCHEN_SERVER_URL:-https://pummelchen.91.99.176.243.nip.io}"
+
+require_client_token_resource() {
+    local token_file="$RESOURCES_DIR/client-api-token"
+    if [[ ! -s "$token_file" ]]; then
+        echo "DMG validation failed: missing bundled client API token resource" >&2
+        exit 1
+    fi
+}
+
+run_webtransport_live_test() {
+    if [[ "${PUMMELCHEN_SKIP_WEBTRANSPORT_LIVE_TEST:-false}" == "true" ]]; then
+        echo "Skipping WebTransport live test because PUMMELCHEN_SKIP_WEBTRANSPORT_LIVE_TEST=true"
+        return
+    fi
+    require_client_token_resource
+
+    local client_id="dmg-webtransport-$(date -u +%Y%m%d%H%M%S)-$$"
+    local event_json
+    event_json="$(CLIENT_ID="$client_id" python3 - <<'PY'
+import json
+import os
+print(json.dumps({
+    "event_type": "server_message",
+    "target_client_id": os.environ["CLIENT_ID"],
+    "release_id": None,
+    "priority": "normal",
+    "title": "DMG WebTransport validation",
+    "message": "Temporary DMG validation event.",
+    "payload": {"probe": "dmg_webtransport_validation"}
+}))
+PY
+)"
+
+    local create_body="$BUILD_DIR/webtransport-live-event.json"
+    local create_status
+    create_status="$(curl -sk --max-time 15 -o "$create_body" -w '%{http_code}' \
+        -H "Authorization: Bearer $CLIENT_API_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "$event_json" \
+        "$SERVER_URL/api/v1/control/events")"
+    if [[ "$create_status" != "201" ]]; then
+        echo "DMG validation failed: could not create WebTransport probe event (HTTP $create_status)" >&2
+        exit 1
+    fi
+
+    local work="$BUILD_DIR/webtransport-live-test"
+    rm -rf "$work"
+    mkdir -p "$work"
+    "$MACOS_DIR/pummelchen-client-sync" watch \
+        --server-url "$SERVER_URL" \
+        --minecraft-dir "$work/minecraft" \
+        --pummelchen-home "$work/home" \
+        --db "$work/home/client.duckdb" \
+        --client-id "$client_id" \
+        --max-cycles 1 \
+        --allow-while-running \
+        --no-report \
+        --skip-java-repair > "$BUILD_DIR/webtransport-live-test.log"
+
+    if ! grep -q "Events handled: 1" "$BUILD_DIR/webtransport-live-test.log"; then
+        echo "DMG validation failed: WebTransport probe event was not fetched" >&2
+        exit 1
+    fi
+    if ! grep -q "Syncs run: 0" "$BUILD_DIR/webtransport-live-test.log"; then
+        echo "DMG validation failed: passive WebTransport probe unexpectedly triggered sync" >&2
+        exit 1
+    fi
+
+    local pending
+    pending="$(curl -sk --max-time 15 \
+        -H "Authorization: Bearer $CLIENT_API_TOKEN" \
+        -H "X-Pummelchen-Client-ID: $client_id" \
+        "$SERVER_URL/api/v1/control/events?client_id=$client_id&limit=5" \
+        | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("events", [])))')"
+    if [[ "$pending" != "0" ]]; then
+        echo "DMG validation failed: WebTransport probe ack did not clear pending event queue" >&2
+        exit 1
+    fi
+
+    echo "DMG WebTransport live test passed: session accepted, event fetched, event acknowledged, pending_events=0"
+}
 
 cd "$ROOT_DIR"
 
@@ -33,6 +115,9 @@ CLIENT_API_TOKEN="${PUMMELCHEN_CLIENT_API_TOKEN:-}"
 if [[ -n "$CLIENT_API_TOKEN" ]]; then
     printf '%s\n' "$CLIENT_API_TOKEN" > "$RESOURCES_DIR/client-api-token"
     chmod 600 "$RESOURCES_DIR/client-api-token"
+fi
+if [[ -n "${PUMMELCHEN_RELEASE_ID:-}" || "${PUMMELCHEN_REQUIRE_CLIENT_TOKEN:-false}" == "true" ]]; then
+    require_client_token_resource
 fi
 
 ICON_SRC="$ROOT_DIR/Resources/AppIcon.png"
@@ -106,6 +191,9 @@ codesign --force --sign - "$MACOS_DIR/pummelchen-client-sync"
 codesign --force --sign - "$MACOS_DIR/MCPummelchenModClient"
 codesign --force --deep --sign - "$APP_DIR"
 codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+if [[ -n "${PUMMELCHEN_RELEASE_ID:-}" || "${PUMMELCHEN_REQUIRE_WEBTRANSPORT_LIVE_TEST:-false}" == "true" ]]; then
+    run_webtransport_live_test
+fi
 
 hdiutil create \
     -volname "MCPummelchenModClient" \
@@ -126,7 +214,7 @@ if [[ -n "${PUMMELCHEN_RELEASE_ID:-}" ]]; then
         --dmg "$DMG_PATH"
         --release-id "$PUMMELCHEN_RELEASE_ID"
         --server-address "${PUMMELCHEN_SERVER_ADDRESS:-91.99.176.243:25565}"
-        --server-url "${PUMMELCHEN_SERVER_URL:-https://pummelchen.91.99.176.243.nip.io}"
+        --server-url "$SERVER_URL"
         --duration-seconds "${PUMMELCHEN_HEADLESS_SOAK_SECONDS:-300}"
     )
     if [[ -n "${PUMMELCHEN_HEADLESS_COMMAND:-}" ]]; then
