@@ -248,10 +248,10 @@ public struct ClientStatusService: Sendable {
             let probe = try await measure {
                 _ = try await fetchCurrentReleaseFromNginx()
             }
-            return endpointStatus(label: "nginx", latencyMS: probe.latencyMS, checkedAt: checkedAt)
+            return endpointStatus(label: "Downloads", latencyMS: probe.latencyMS, checkedAt: checkedAt)
         } catch {
             return EndpointConnectionStatus(
-                label: "nginx",
+                label: "Downloads",
                 state: .cannotConnect,
                 latencyMS: nil,
                 message: String(describing: error),
@@ -282,19 +282,19 @@ public struct ClientStatusService: Sendable {
             }
             guard preflightProbe.value.ready else {
                 return EndpointConnectionStatus(
-                    label: "WebTransport",
+                    label: "Live Updates",
                     state: .cannotConnect,
                     latencyMS: preflightProbe.latencyMS,
-                    message: preflightProbe.value.unsupportedReason ?? "WebTransport preflight is not ready",
+                    message: preflightProbe.value.unsupportedReason ?? "live update connection is not ready",
                     checkedAt: checkedAt
                 )
             }
             guard let token = configuration.clientAPIToken, !token.isEmpty else {
                 return EndpointConnectionStatus(
-                    label: "WebTransport",
+                    label: "Live Updates",
                     state: .degraded,
                     latencyMS: preflightProbe.latencyMS,
-                    message: "preflight ready, client API token unavailable",
+                    message: "ready, client credentials unavailable",
                     checkedAt: checkedAt
                 )
             }
@@ -305,10 +305,10 @@ public struct ClientStatusService: Sendable {
                     clientAPIToken: token
                 ).fetchEvents(limit: 1)
             }
-            return endpointStatus(label: "WebTransport", latencyMS: sessionProbe.latencyMS, checkedAt: checkedAt)
+            return endpointStatus(label: "Live Updates", latencyMS: sessionProbe.latencyMS, checkedAt: checkedAt)
         } catch {
             return EndpointConnectionStatus(
-                label: "WebTransport",
+                label: "Live Updates",
                 state: .cannotConnect,
                 latencyMS: nil,
                 message: String(describing: error),

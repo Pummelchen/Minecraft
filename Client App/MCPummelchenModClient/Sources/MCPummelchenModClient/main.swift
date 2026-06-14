@@ -88,10 +88,10 @@ final class ClientStatusModel: ObservableObject, @unchecked Sendable {
         controlTask?.cancel()
         let syncConfiguration = makeSyncConfiguration()
         guard let token = syncConfiguration.clientAPIToken, !token.isEmpty else {
-            controlMessage = "Control channel waiting for client credentials."
+            controlMessage = "Live updates waiting for client credentials."
             return
         }
-        controlMessage = "Control channel connected."
+        controlMessage = "Live updates connected."
         let model = self
         controlTask = Task {
             do {
@@ -109,7 +109,7 @@ final class ClientStatusModel: ObservableObject, @unchecked Sendable {
                 }
             } catch {
                 await MainActor.run {
-                    model.controlMessage = "Control channel stopped: \(error)"
+                    model.controlMessage = "Live updates stopped: \(error)"
                 }
             }
         }
@@ -171,7 +171,7 @@ struct PummelchenStatusView: View {
                 if let controlMessage = model.controlMessage {
                     Text(controlMessage)
                         .font(.callout)
-                        .foregroundStyle(controlMessage.hasPrefix("Control channel stopped") ? .red : .secondary)
+                        .foregroundStyle(controlMessage.hasPrefix("Live updates stopped") ? .red : .secondary)
                         .textSelection(.enabled)
                 }
                 statusSummary(snapshot)
