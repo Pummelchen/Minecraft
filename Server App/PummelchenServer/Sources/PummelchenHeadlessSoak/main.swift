@@ -1,4 +1,5 @@
 import Foundation
+import PummelchenClientCore
 import PummelchenCore
 
 enum HeadlessSoakError: Error, CustomStringConvertible {
@@ -11,6 +12,7 @@ enum HeadlessSoakError: Error, CustomStringConvertible {
     case connectedTooShort(Double)
     case fatalLogLines(Int)
     case crashReports(Int)
+    case setupAcceptanceFailed([String])
 
     var description: String {
         switch self {
@@ -43,6 +45,8 @@ enum HeadlessSoakError: Error, CustomStringConvertible {
             return "headless client logs contain \(count) fatal line(s)"
         case .crashReports(let count):
             return "headless client produced \(count) crash report(s)"
+        case .setupAcceptanceFailed(let failures):
+            return "new-player setup acceptance failed: \(failures.joined(separator: "; "))"
         }
     }
 }
@@ -138,6 +142,19 @@ struct ProcessResult {
     let timedOut: Bool
 }
 
+private extension Data {
+    func occurrences(of needle: Data) -> Int {
+        guard !needle.isEmpty else { return 0 }
+        var count = 0
+        var searchStart = startIndex
+        while searchStart < endIndex, let range = self[searchStart..<endIndex].range(of: needle) {
+            count += 1
+            searchStart = range.upperBound
+        }
+        return count
+    }
+}
+
 struct SoakReport: Encodable {
     let releaseID: String
     let dmgSHA256: String
@@ -156,6 +173,7 @@ struct SoakReport: Encodable {
     let fatalLogCount: Int
     let rendererSummary: String
     let notes: String
+    let newPlayerSetup: NewPlayerSetupReport?
 
     enum CodingKeys: String, CodingKey {
         case releaseID = "release_id"
@@ -175,6 +193,47 @@ struct SoakReport: Encodable {
         case fatalLogCount = "fatal_log_count"
         case rendererSummary = "renderer_summary"
         case notes
+        case newPlayerSetup = "new_player_setup"
+    }
+}
+
+struct AcceptanceCheck: Encodable {
+    let name: String
+    let status: String
+    let details: String
+}
+
+struct NewPlayerSetupReport: Encodable {
+    let status: String
+    let appBundlePath: String
+    let minecraftDirectory: String
+    let pummelchenHome: String
+    let checks: [AcceptanceCheck]
+    let manifestEntries: Int
+    let verifiedManagedFiles: Int
+    let downloadedFiles: Int
+    let defaultsOK: Bool
+    let serverEntryCount: Int
+    let javaExecutable: String
+    let javaVersion: String
+    let neoforgeVersion: String
+    let installedReleaseID: String
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case appBundlePath = "app_bundle_path"
+        case minecraftDirectory = "minecraft_directory"
+        case pummelchenHome = "pummelchen_home"
+        case checks
+        case manifestEntries = "manifest_entries"
+        case verifiedManagedFiles = "verified_managed_files"
+        case downloadedFiles = "downloaded_files"
+        case defaultsOK = "defaults_ok"
+        case serverEntryCount = "server_entry_count"
+        case javaExecutable = "java_executable"
+        case javaVersion = "java_version"
+        case neoforgeVersion = "neoforge_version"
+        case installedReleaseID = "installed_release_id"
     }
 }
 
@@ -195,6 +254,7 @@ struct HeadlessSoakRunner {
         var stayedConnected = false
         var crashReportCount = 0
         var fatalLogCount = 0
+        var setupReport: NewPlayerSetupReport?
         var notes: [String] = []
         let dmgSHA = try SHA256Hasher.hashFile(at: config.dmg)
 
@@ -205,6 +265,7 @@ struct HeadlessSoakRunner {
 
             let installedApp = try installApp(from: mountPoint)
             installedFromDMG = true
+            try validateInstalledAppBundle(installedApp)
             let syncBinary = installedApp.appendingPathComponent("Contents/MacOS/pummelchen-client-sync")
             guard fileManager.isExecutableFile(atPath: syncBinary.path) else {
                 throw HeadlessSoakError.missingPath(syncBinary.path)
@@ -234,6 +295,16 @@ struct HeadlessSoakRunner {
                 throw HeadlessSoakError.missingPath(minecraftDir.appendingPathComponent("versions/neoforge-26.1.2.76").path)
             }
 
+            setupReport = try inspectNewPlayerSetup(
+                installedApp: installedApp,
+                syncBinary: syncBinary,
+                minecraftDir: minecraftDir,
+                pummelchenHome: pummelchenHome,
+                java: java,
+                javaVersionOutput: javaResult.output,
+                syncResult: syncResult
+            )
+
             let soak = try runHeadless(minecraftDir: minecraftDir, pummelchenHome: pummelchenHome, java: java)
             try soak.output.write(to: config.workDir.appendingPathComponent("headless-minecraft.log"), atomically: true, encoding: .utf8)
             loginOK = observedLogin(in: soak.output, minecraftDir: minecraftDir)
@@ -262,6 +333,7 @@ struct HeadlessSoakRunner {
                 stayedConnected: stayedConnected,
                 crashReportCount: crashReportCount,
                 fatalLogCount: fatalLogCount,
+                newPlayerSetup: setupReport,
                 notes: notes.joined(separator: " ")
             )
             throw error
@@ -281,6 +353,7 @@ struct HeadlessSoakRunner {
             stayedConnected: stayedConnected,
             crashReportCount: crashReportCount,
             fatalLogCount: fatalLogCount,
+            newPlayerSetup: setupReport,
             notes: notes.joined(separator: " ")
         )
         if !config.keepWorkDir {
@@ -318,6 +391,32 @@ struct HeadlessSoakRunner {
         }
         _ = try runProcess(executable: "/bin/cp", arguments: ["-R", app.path, target.path], timeoutSeconds: 120, environment: [:])
         return target
+    }
+
+    private func validateInstalledAppBundle(_ app: URL) throws {
+        let info = app.appendingPathComponent("Contents/Info.plist")
+        let guiBinary = app.appendingPathComponent("Contents/MacOS/PummelchenClient")
+        let syncBinary = app.appendingPathComponent("Contents/MacOS/pummelchen-client-sync")
+        let duckDB = app.appendingPathComponent("Contents/Frameworks/libduckdb.dylib")
+        for required in [info, guiBinary, syncBinary, duckDB] {
+            guard fileManager.fileExists(atPath: required.path) else {
+                throw HeadlessSoakError.missingPath(required.path)
+            }
+        }
+        guard fileManager.isExecutableFile(atPath: guiBinary.path) else {
+            throw HeadlessSoakError.missingPath(guiBinary.path)
+        }
+        guard fileManager.isExecutableFile(atPath: syncBinary.path) else {
+            throw HeadlessSoakError.missingPath(syncBinary.path)
+        }
+        let plist = try runProcess(executable: "/usr/bin/plutil", arguments: ["-lint", info.path], timeoutSeconds: 30, environment: [:])
+        guard plist.exitCode == 0 else {
+            throw HeadlessSoakError.commandFailed("app Info.plist failed validation: \(plist.output)")
+        }
+        let signature = try runProcess(executable: "/usr/bin/codesign", arguments: ["--verify", "--deep", "--strict", app.path], timeoutSeconds: 60, environment: [:])
+        guard signature.exitCode == 0 else {
+            throw HeadlessSoakError.commandFailed("app code signature failed validation: \(signature.output)")
+        }
     }
 
     private func runSync(syncBinary: URL, minecraftDir: URL, pummelchenHome: URL) throws -> ProcessResult {
@@ -360,6 +459,146 @@ struct HeadlessSoakRunner {
         let version = minecraftDir.appendingPathComponent("versions/neoforge-\(config.loaderVersion)/neoforge-\(config.loaderVersion).json")
         let libraries = minecraftDir.appendingPathComponent("libraries/net/neoforged/neoforge/\(config.loaderVersion)", isDirectory: true)
         return fileManager.fileExists(atPath: version.path) && fileManager.fileExists(atPath: libraries.path)
+    }
+
+    private func inspectNewPlayerSetup(
+        installedApp: URL,
+        syncBinary: URL,
+        minecraftDir: URL,
+        pummelchenHome: URL,
+        java: URL,
+        javaVersionOutput: String,
+        syncResult: ProcessResult
+    ) throws -> NewPlayerSetupReport {
+        var checks: [AcceptanceCheck] = []
+        var failures: [String] = []
+
+        func record(_ name: String, _ ok: Bool, _ details: String) {
+            checks.append(AcceptanceCheck(name: name, status: ok ? "passed" : "failed", details: details))
+            if !ok {
+                failures.append("\(name): \(details)")
+            }
+        }
+
+        let appInfo = installedApp.appendingPathComponent("Contents/Info.plist")
+        let guiBinary = installedApp.appendingPathComponent("Contents/MacOS/PummelchenClient")
+        let duckDBDylib = installedApp.appendingPathComponent("Contents/Frameworks/libduckdb.dylib")
+        record("dmg_app_bundle_installed", fileManager.fileExists(atPath: appInfo.path), installedApp.path)
+        record("gui_binary_executable", fileManager.isExecutableFile(atPath: guiBinary.path), guiBinary.path)
+        record("sync_helper_executable", fileManager.isExecutableFile(atPath: syncBinary.path), syncBinary.path)
+        record("duckdb_embedded_dylib_present", fileManager.fileExists(atPath: duckDBDylib.path), duckDBDylib.path)
+        let codeSignature = (try? runProcess(executable: "/usr/bin/codesign", arguments: ["--verify", "--deep", "--strict", installedApp.path], timeoutSeconds: 60, environment: [:]))?.exitCode == 0
+        record("app_code_signature_valid", codeSignature, "codesign --verify --deep --strict")
+
+        let database = pummelchenHome.appendingPathComponent("client.duckdb")
+        let manifestPath = minecraftDir.appendingPathComponent(".pummelchen/client-sync-manifest.tsv")
+        let installedReleasePath = minecraftDir.appendingPathComponent(".pummelchen/installed-release.txt")
+        let installedRelease = readText(installedReleasePath).trimmingCharacters(in: .whitespacesAndNewlines)
+        let manifest = try readSyncedManifest(at: manifestPath)
+        let verifiedFiles = try countVerifiedManagedFiles(manifest: manifest, minecraftDir: minecraftDir, pummelchenHome: pummelchenHome)
+
+        record("isolated_minecraft_directory_created", fileManager.fileExists(atPath: minecraftDir.path), minecraftDir.path)
+        record("isolated_pummelchen_home_created", fileManager.fileExists(atPath: pummelchenHome.path), pummelchenHome.path)
+        record("client_duckdb_created", fileManager.fileExists(atPath: database.path), database.path)
+        record("installed_release_recorded", installedRelease == config.releaseID, installedRelease.isEmpty ? "missing" : installedRelease)
+        record("manifest_saved", !manifest.entries.isEmpty, "\(manifest.entries.count) entries")
+        record("managed_files_verified", verifiedFiles == manifest.entries.count, "\(verifiedFiles)/\(manifest.entries.count)")
+
+        let defaults = MinecraftClientDefaults(javaExecutablePath: java.path, loaderVersion: config.loaderVersion)
+        let defaultsHealth = ClientDefaultsInspector.inspect(minecraftDirectory: minecraftDir, defaults: defaults)
+        let defaultFailures = defaultsHealth.filter { $0.status != .ok && $0.status != .unknown }
+        record("client_defaults_healthy", defaultFailures.isEmpty, defaultFailures.map { "\($0.label)=\($0.status.rawValue)" }.joined(separator: ", "))
+        record("shader_default_active", defaultsHealth.contains { $0.id == "shader" && $0.status == .ok }, "BSL shader default")
+        record("resource_packs_default_active", defaultsHealth.contains { $0.id == "resource_packs" && $0.status == .ok }, "ModernArch stack")
+        record("physics_mob_fracturing_default_active", defaultsHealth.contains { $0.id == "physics_mob_fracturing" && $0.status == .ok }, "Mob Fracturing (with blood)")
+        record("server_entry_default_present", defaultsHealth.contains { $0.id == "server_entry" && $0.status == .ok }, config.serverAddress)
+
+        let serverCount = countServerAddress(config.serverAddress, minecraftDir: minecraftDir)
+        record("server_entry_not_duplicated", serverCount == 1, "\(serverCount) occurrence(s)")
+        record("managed_java_marker_present", fileManager.fileExists(atPath: pummelchenHome.appendingPathComponent("java/current-runtime.txt").path), java.path)
+        record("managed_java_version_ok", javaVersionOutput.contains("25.0.3"), oneLine(javaVersionOutput))
+        record("neoforge_installed", hasNeoForgeInstall(minecraftDir: minecraftDir), config.loaderVersion)
+        record("launcher_profile_points_to_managed_java", launcherProfileContains(minecraftDir: minecraftDir, value: java.path), java.path)
+        record("launcher_profile_uses_neoforge", launcherProfileContains(minecraftDir: minecraftDir, value: "neoforge-\(config.loaderVersion)"), config.loaderVersion)
+        record("sync_helper_completed", syncResult.exitCode == 0, oneLine(syncResult.output))
+
+        if !failures.isEmpty {
+            throw HeadlessSoakError.setupAcceptanceFailed(failures)
+        }
+
+        return NewPlayerSetupReport(
+            status: "passed",
+            appBundlePath: installedApp.path,
+            minecraftDirectory: minecraftDir.path,
+            pummelchenHome: pummelchenHome.path,
+            checks: checks,
+            manifestEntries: manifest.entries.count,
+            verifiedManagedFiles: verifiedFiles,
+            downloadedFiles: downloadedCount(fromSyncOutput: syncResult.output),
+            defaultsOK: defaultFailures.isEmpty,
+            serverEntryCount: serverCount,
+            javaExecutable: java.path,
+            javaVersion: oneLine(javaVersionOutput),
+            neoforgeVersion: config.loaderVersion,
+            installedReleaseID: installedRelease
+        )
+    }
+
+    private func readSyncedManifest(at path: URL) throws -> ClientSyncManifest {
+        guard let text = try? String(contentsOf: path, encoding: .utf8), !text.isEmpty else {
+            throw HeadlessSoakError.missingPath(path.path)
+        }
+        return try ClientSyncManifestParser.parse(text)
+    }
+
+    private func countVerifiedManagedFiles(manifest: ClientSyncManifest, minecraftDir: URL, pummelchenHome: URL) throws -> Int {
+        var count = 0
+        for entry in manifest.entries {
+            let destination = try managedDestination(for: entry, minecraftDir: minecraftDir, pummelchenHome: pummelchenHome)
+            if (try? FileInventory.verify(fileURL: destination, expectedSize: entry.sizeBytes, expectedSHA256: entry.sha256)) == true {
+                count += 1
+            }
+        }
+        return count
+    }
+
+    private func managedDestination(for entry: ClientSyncManifestEntry, minecraftDir: URL, pummelchenHome: URL) throws -> URL {
+        guard let section = ManagedClientSection(rawValue: entry.section) else {
+            throw HeadlessSoakError.invalidValue("invalid manifest section: \(entry.section)")
+        }
+        switch section {
+        case .mods, .resourcepacks, .shaderpacks:
+            return minecraftDir.appendingPathComponent(entry.section, isDirectory: true).appendingPathComponent(entry.name)
+        case .tools:
+            return pummelchenHome.appendingPathComponent("bin", isDirectory: true).appendingPathComponent(entry.name)
+        }
+    }
+
+    private func countServerAddress(_ address: String, minecraftDir: URL) -> Int {
+        let path = minecraftDir.appendingPathComponent("servers.dat")
+        guard let data = try? Data(contentsOf: path) else { return 0 }
+        return data.occurrences(of: Data(address.utf8))
+    }
+
+    private func launcherProfileContains(minecraftDir: URL, value: String) -> Bool {
+        readText(minecraftDir.appendingPathComponent("launcher_profiles.json")).contains(value)
+            || readText(minecraftDir.appendingPathComponent("launcher_profiles.json")).contains(value.replacingOccurrences(of: "/", with: "\\/"))
+    }
+
+    private func downloadedCount(fromSyncOutput output: String) -> Int {
+        output
+            .split(separator: "\n")
+            .first { $0.hasPrefix("Downloaded:") }
+            .flatMap { Int($0.replacingOccurrences(of: "Downloaded:", with: "").trimmingCharacters(in: .whitespaces)) }
+            ?? 0
+    }
+
+    private func oneLine(_ value: String) -> String {
+        value
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " | ")
     }
 
     private func runHeadless(minecraftDir: URL, pummelchenHome: URL, java: URL) throws -> ProcessResult {
@@ -716,6 +955,7 @@ struct HeadlessSoakRunner {
         stayedConnected: Bool,
         crashReportCount: Int,
         fatalLogCount: Int,
+        newPlayerSetup: NewPlayerSetupReport?,
         notes: String
     ) throws {
         try fileManager.createDirectory(at: config.report.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -736,7 +976,8 @@ struct HeadlessSoakRunner {
             crashReportCount: crashReportCount,
             fatalLogCount: fatalLogCount,
             rendererSummary: "Swift DMG headless live soak",
-            notes: notes
+            notes: notes,
+            newPlayerSetup: newPlayerSetup
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

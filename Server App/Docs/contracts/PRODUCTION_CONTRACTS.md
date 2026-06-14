@@ -131,9 +131,9 @@ Release health must verify:
 - ZIP/MRPack/DMG checksum files match artifacts
 - active DB release row matches published release
 
-## DMG Headless Live Soak Gate
+## DMG New-Player Acceptance And Live Soak Gate
 
-Every new `Pummelchen-Client-Installer.dmg` must be tested before release activation by installing from that exact DMG, repairing/installing the bundled Java runtime, installing NeoForge, syncing the full client pack, logging into the live Pummelchen Minecraft server, and staying connected for at least 5 minutes.
+Every new `Pummelchen-Client-Installer.dmg` must be tested before release activation by installing from that exact DMG into an isolated fresh-player environment, repairing/installing the managed Java runtime, installing NeoForge, syncing the full client pack, applying client defaults, validating the local client DuckDB, adding the Pummelchen server entry exactly once, logging into the live Pummelchen Minecraft server, and staying connected for at least 5 minutes.
 
 The Swift runner that produces this proof is:
 
@@ -141,7 +141,7 @@ The Swift runner that produces this proof is:
 pummelchen-headless-soak --dmg <Pummelchen-Client-Installer.dmg> --release-id <release_id> --server-address 91.99.176.243:25565
 ```
 
-The runner mounts the DMG, copies the macOS app into an isolated work directory, runs the bundled `pummelchen-client-sync` helper, verifies managed Java and NeoForge, prepares HeadlessMC plus HMC-Specifics, launches NeoForge with `--quickPlayMultiplayer`, scans the isolated logs/crash reports, and writes the release-gate report beside the DMG. `--headless-command` remains available only as an override. The default HeadlessMC home is `~/Library/Application Support/Pummelchen/headlessmc` so the Minecraft account login can persist while every soak still uses a fresh isolated Minecraft game directory.
+The runner mounts the DMG, copies the macOS app into an isolated work directory, validates the app bundle/signature/helper binary/embedded DuckDB dylib, runs the bundled `pummelchen-client-sync` helper, verifies managed Java and NeoForge, verifies every manifest file by size and SHA-256, checks all managed client defaults with the same inspector used by the GUI, prepares HeadlessMC plus HMC-Specifics, launches NeoForge with `--quickPlayMultiplayer`, scans the isolated logs/crash reports, and writes the release-gate report beside the DMG. `--headless-command` remains available only as an override. The default HeadlessMC home is `~/Library/Application Support/Pummelchen/headlessmc` so the Minecraft account login can persist while every soak still uses a fresh isolated Minecraft game directory.
 
 The macOS DMG builder can invoke this automatically when these environment variables are set:
 
@@ -163,10 +163,15 @@ The report must prove:
 - `installed_from_dmg`, `java_ok`, `neoforge_ok`, `sync_ok`, `login_ok`, and `stayed_connected` are all `true`
 - `duration_seconds` is at least `300`
 - `crash_report_count` and `fatal_log_count` are `0`
+- `new_player_setup.status` is `passed`
+- `new_player_setup.defaults_ok` is `true`
+- `new_player_setup.manifest_entries` is greater than `0`
+- `new_player_setup.verified_managed_files` equals `new_player_setup.manifest_entries`
+- `new_player_setup.server_entry_count` is exactly `1`
 - `status` is `passed`
 - `started_at` and `completed_at` are ISO-8601 timestamps
 
-If the report is missing, stale, too short, points at the wrong DMG or server, or records a crash/fatal log, the Swift release pipeline must reject the DMG release. Passed reports are recorded in DuckDB `core.headless_client_runs`.
+If the report is missing, stale, too short, points at the wrong DMG or server, lacks the new-player setup acceptance block, records a setup failure, or records a crash/fatal log, the Swift release pipeline must reject the DMG release. Passed reports are recorded in DuckDB `core.headless_client_runs`.
 
 ## Mod Source Update Scans
 

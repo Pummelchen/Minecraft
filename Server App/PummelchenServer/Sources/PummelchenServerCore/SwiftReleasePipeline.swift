@@ -415,6 +415,11 @@ public struct SwiftReleasePipeline: Sendable {
         try ContractValidation.require(report.crashReportCount == 0, "DMG headless live soak must not create crash reports")
         try ContractValidation.require(report.fatalLogCount == 0, "DMG headless live soak must not contain fatal log entries")
         try ContractValidation.require(Self.isLivePummelchenServerAddress(report.serverAddress), "DMG headless live soak must target the live Pummelchen server")
+        try ContractValidation.require(report.newPlayerSetup?.status.lowercased() == "passed", "DMG headless live soak must include passed new-player setup acceptance")
+        try ContractValidation.require(report.newPlayerSetup?.defaultsOK == true, "DMG new-player setup must verify client defaults")
+        try ContractValidation.require((report.newPlayerSetup?.manifestEntries ?? 0) > 0, "DMG new-player setup must verify a non-empty client manifest")
+        try ContractValidation.require(report.newPlayerSetup?.verifiedManagedFiles == report.newPlayerSetup?.manifestEntries, "DMG new-player setup must verify every managed file")
+        try ContractValidation.require(report.newPlayerSetup?.serverEntryCount == 1, "DMG new-player setup must add exactly one Pummelchen server entry")
         try ContractValidation.require(ISO8601DateFormatter().date(from: report.startedAt) != nil, "DMG headless live soak started_at must be ISO-8601")
         try ContractValidation.require(ISO8601DateFormatter().date(from: report.completedAt) != nil, "DMG headless live soak completed_at must be ISO-8601")
         return report
@@ -427,6 +432,7 @@ public struct SwiftReleasePipeline: Sendable {
             "java_ok=\(report.javaOK)",
             "neoforge_ok=\(report.neoforgeOK)",
             "sync_ok=\(report.syncOK)",
+            "new_player_setup=\(report.newPlayerSetup?.status ?? "missing")",
             report.notes
         ].compactMap { $0 }.joined(separator: "; ")
         try executeDuckDB("""
@@ -882,6 +888,7 @@ private struct DMGHeadlessLiveSoakReport: Decodable {
     let fatalLogCount: Int
     let rendererSummary: String?
     let notes: String?
+    let newPlayerSetup: DMGNewPlayerSetupReport?
 
     enum CodingKeys: String, CodingKey {
         case releaseID = "release_id"
@@ -901,6 +908,23 @@ private struct DMGHeadlessLiveSoakReport: Decodable {
         case fatalLogCount = "fatal_log_count"
         case rendererSummary = "renderer_summary"
         case notes
+        case newPlayerSetup = "new_player_setup"
+    }
+}
+
+private struct DMGNewPlayerSetupReport: Decodable {
+    let status: String
+    let manifestEntries: Int
+    let verifiedManagedFiles: Int
+    let defaultsOK: Bool
+    let serverEntryCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case manifestEntries = "manifest_entries"
+        case verifiedManagedFiles = "verified_managed_files"
+        case defaultsOK = "defaults_ok"
+        case serverEntryCount = "server_entry_count"
     }
 }
 

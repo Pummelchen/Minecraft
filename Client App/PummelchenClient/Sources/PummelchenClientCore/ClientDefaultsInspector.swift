@@ -164,7 +164,10 @@ public enum ClientDefaultsInspector {
                 source: "launcher_profiles.json"
             )
         }
-        let observed = launcherProfiles.contains(desired) ? desired : "managed Java path not found"
+        let escapedDesired = desired.replacingOccurrences(of: "/", with: "\\/")
+        let observed = launcherProfiles.contains(desired) || launcherProfiles.contains(escapedDesired)
+            ? desired
+            : "managed Java path not found"
         return ClientDefaultHealthRow(
             id: "java_runtime",
             label: "Java Runtime",

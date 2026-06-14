@@ -21,8 +21,9 @@ struct ClientStatusTests {
         enableShaders=true
         """.write(to: root.appendingPathComponent("config/iris.properties"), atomically: true, encoding: .utf8)
         let javaPath = "/tmp/pummelchen-test/java/temurin-25.0.3+9/Contents/Home/bin/java"
+        let escapedJavaPath = javaPath.replacingOccurrences(of: "/", with: "\\/")
         try """
-        {"profiles":{"NeoForge":{"javaArgs":"-Xmx8G -XX:+UseG1GC","javaDir":"\(javaPath)"}}}
+        {"profiles":{"NeoForge":{"javaArgs":"-Xmx8G -XX:+UseG1GC","javaDir":"\(escapedJavaPath)"}}}
         """
             .write(to: root.appendingPathComponent("launcher_profiles.json"), atomically: true, encoding: .utf8)
         try "Pummelchen 91.99.176.243:25565".write(to: root.appendingPathComponent("servers.dat"), atomically: true, encoding: .utf8)

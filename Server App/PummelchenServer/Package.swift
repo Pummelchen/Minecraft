@@ -58,7 +58,8 @@ let package = Package(
         .executableTarget(
             name: "PummelchenHeadlessSoak",
             dependencies: [
-                .product(name: "PummelchenCore", package: "PummelchenShared")
+                .product(name: "PummelchenCore", package: "PummelchenShared"),
+                .product(name: "PummelchenClientCore", package: "PummelchenClient")
             ]
         ),
         .executableTarget(

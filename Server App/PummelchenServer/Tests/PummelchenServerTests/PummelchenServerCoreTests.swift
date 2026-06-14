@@ -520,6 +520,44 @@ struct PummelchenServerCoreTests {
         }
     }
 
+    @Test("phase 7 rejects old DMG soak reports without new-player setup acceptance")
+    func phase7RejectsDMGSoakWithoutNewPlayerSetupAcceptance() throws {
+        try requireDuckDB()
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pummelchen-phase7-dmg-new-player-gate-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let serverDir = root.appendingPathComponent("server", isDirectory: true)
+        let releaseRoot = root.appendingPathComponent("releases", isDirectory: true)
+        let publicDownloads = root.appendingPathComponent("site/downloads", isDirectory: true)
+        let clientPackage = serverDir.appendingPathComponent("client-package", isDirectory: true)
+        try FileManager.default.createDirectory(at: clientPackage.appendingPathComponent("mods"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: serverDir, withIntermediateDirectories: true)
+        try "client mod".write(to: clientPackage.appendingPathComponent("mods/example-client.jar"), atomically: true, encoding: .utf8)
+        try writeArtifact(name: SwiftReleasePipeline.clientZipName, content: "zip", serverDir: serverDir)
+        try writeArtifact(name: SwiftReleasePipeline.mrpackName, content: "mrpack", serverDir: serverDir)
+        let dmgSHA = try writeArtifact(name: SwiftReleasePipeline.dmgName, content: "dmg", serverDir: serverDir)
+        let releaseID = "release_20260613_V79_missing_new_player_setup"
+        try writeLegacyDMGHeadlessLiveSoakReport(releaseID: releaseID, dmgSHA: dmgSHA, serverDir: serverDir)
+
+        let pipeline = SwiftReleasePipeline(config: SwiftReleasePipelineConfig(
+            projectRoot: root,
+            serverDir: serverDir,
+            releaseRoot: releaseRoot,
+            publicDownloads: publicDownloads,
+            databaseURL: root.appendingPathComponent("phase7.duckdb"),
+            releaseID: releaseID,
+            buildClientZipIfMissing: false
+        ))
+
+        do {
+            _ = try pipeline.createRelease()
+            Issue.record("DMG release should require new-player setup acceptance evidence")
+        } catch ContractValidationError.invalid(let message) {
+            #expect(message.contains("new-player setup acceptance"))
+        }
+    }
+
     @Test("mod update scanner detects provider pages and Cloudflare blocks")
     func modUpdateScannerParsesSources() throws {
         let modrinthHTML = #"""
@@ -1199,7 +1237,57 @@ struct PummelchenServerCoreTests {
           "crash_report_count": 0,
           "fatal_log_count": 0,
           "renderer_summary": "headless",
-          "notes": "test fixture"
+          "notes": "test fixture",
+          "new_player_setup": {
+            "status": "passed",
+            "app_bundle_path": "/tmp/Pummelchen Client.app",
+            "minecraft_directory": "/tmp/minecraft",
+            "pummelchen_home": "/tmp/pummelchen",
+            "checks": [
+              {
+                "name": "client_defaults_healthy",
+                "status": "passed",
+                "details": "fixture"
+              }
+            ],
+            "manifest_entries": 3,
+            "verified_managed_files": 3,
+            "downloaded_files": 3,
+            "defaults_ok": true,
+            "server_entry_count": 1,
+            "java_executable": "/tmp/pummelchen/java/temurin-25.0.3+9/Contents/Home/bin/java",
+            "java_version": "openjdk version \\"25.0.3\\"",
+            "neoforge_version": "26.1.2.76",
+            "installed_release_id": "\(releaseID)"
+          }
+        }
+        """.write(
+            to: serverDir.appendingPathComponent(SwiftReleasePipeline.dmgHeadlessLiveSoakReportName),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
+    private func writeLegacyDMGHeadlessLiveSoakReport(releaseID: String, dmgSHA: String, serverDir: URL) throws {
+        try """
+        {
+          "release_id": "\(releaseID)",
+          "dmg_sha256": "\(dmgSHA)",
+          "server_address": "91.99.176.243:25565",
+          "started_at": "2026-06-13T12:00:00Z",
+          "completed_at": "2026-06-13T12:05:05Z",
+          "duration_seconds": 305,
+          "status": "passed",
+          "installed_from_dmg": true,
+          "java_ok": true,
+          "neoforge_ok": true,
+          "sync_ok": true,
+          "login_ok": true,
+          "stayed_connected": true,
+          "crash_report_count": 0,
+          "fatal_log_count": 0,
+          "renderer_summary": "headless",
+          "notes": "legacy fixture"
         }
         """.write(
             to: serverDir.appendingPathComponent(SwiftReleasePipeline.dmgHeadlessLiveSoakReportName),
