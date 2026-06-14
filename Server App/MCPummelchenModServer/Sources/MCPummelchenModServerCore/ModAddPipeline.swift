@@ -123,6 +123,7 @@ public struct ModAddPipeline: Sendable {
     public func run() throws -> ModAddPipelineResult {
         _ = try ReleaseIdentifier(config.releaseID)
         let resolved = try resolveArtifactGraph()
+        defer { cleanupDownloadedArtifacts(resolved) }
         let artifacts = try install(artifacts: resolved)
         var steps = [
             "resolved \(resolved.count) artifact(s) from provider metadata",
@@ -247,7 +248,8 @@ public struct ModAddPipeline: Sendable {
             downloadURL: artifact,
             localFile: artifact,
             side: metadata.side,
-            requiredDependencies: []
+            requiredDependencies: [],
+            cleanupDirectory: nil
         )
     }
 
@@ -276,8 +278,8 @@ public struct ModAddPipeline: Sendable {
         guard let downloadURL = URL(string: download) else {
             throw ModAddPipelineError.invalidURL(download)
         }
-        let local = try downloadArtifact(downloadURL, preferredName: fileName)
-        let metadata = try inspectJar(local)
+        let downloaded = try downloadArtifact(downloadURL, preferredName: fileName)
+        let metadata = try inspectJar(downloaded.file)
         return ResolvedArtifact(
             sourceURL: sourceURL,
             provider: "curseforge",
@@ -287,9 +289,10 @@ public struct ModAddPipeline: Sendable {
             fileName: fileName,
             version: metadata.version ?? Self.versionFromFilename(fileName),
             downloadURL: downloadURL,
-            localFile: local,
+            localFile: downloaded.file,
             side: metadata.side,
-            requiredDependencies: Self.curseForgeRequiredDependencies(from: file)
+            requiredDependencies: Self.curseForgeRequiredDependencies(from: file),
+            cleanupDirectory: downloaded.directory
         )
     }
 
@@ -311,8 +314,8 @@ public struct ModAddPipeline: Sendable {
             throw ModAddPipelineError.noCompatibleFile(sourceURL.absoluteString)
         }
         let fileName = (file["filename"] as? String) ?? downloadURL.lastPathComponent
-        let local = try downloadArtifact(downloadURL, preferredName: fileName)
-        let metadata = try inspectJar(local)
+        let downloaded = try downloadArtifact(downloadURL, preferredName: fileName)
+        let metadata = try inspectJar(downloaded.file)
         return ResolvedArtifact(
             sourceURL: sourceURL.absoluteString,
             provider: "modrinth",
@@ -322,9 +325,10 @@ public struct ModAddPipeline: Sendable {
             fileName: fileName,
             version: metadata.version ?? version["version_number"] as? String ?? Self.versionFromFilename(fileName),
             downloadURL: downloadURL,
-            localFile: local,
+            localFile: downloaded.file,
             side: metadata.side,
-            requiredDependencies: Self.modrinthRequiredDependencies(from: version)
+            requiredDependencies: Self.modrinthRequiredDependencies(from: version),
+            cleanupDirectory: downloaded.directory
         )
     }
 
@@ -430,7 +434,7 @@ public struct ModAddPipeline: Sendable {
             "quilt.mod.json"
         ]
         for path in candidates {
-            if let text = try? runCommand("/usr/bin/env unzip -p \(Self.shellQuote(file.path)) \(Self.shellQuote(path))") {
+            if let text = try? runProcess(executable: "/usr/bin/env", arguments: ["unzip", "-p", file.path, path]) {
                 let metadata = Self.parseMetadata(text)
                 if metadata.displayName != nil || metadata.version != nil || metadata.side != "both" {
                     return metadata
@@ -464,13 +468,26 @@ public struct ModAddPipeline: Sendable {
         return id
     }
 
-    private func downloadArtifact(_ url: URL, preferredName: String) throws -> URL {
+    private func downloadArtifact(_ url: URL, preferredName: String) throws -> (file: URL, directory: URL) {
         let work = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("pummelchen-add-mod-\(UUID().uuidString)", isDirectory: true)
         try fileManager.createDirectory(at: work, withIntermediateDirectories: true)
         let target = work.appendingPathComponent(preferredName)
         try fetchData(url).write(to: target, options: .atomic)
-        return target
+        return (target, work)
+    }
+
+    private func cleanupDownloadedArtifacts(_ artifacts: [ResolvedArtifact]) {
+        var cleaned = Set<String>()
+        for artifact in artifacts {
+            guard let directory = artifact.cleanupDirectory,
+                  directory.path.hasPrefix(URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true).path),
+                  !cleaned.contains(directory.path) else {
+                continue
+            }
+            try? fileManager.removeItem(at: directory)
+            cleaned.insert(directory.path)
+        }
     }
 
     private func fetchData(_ url: URL) throws -> Data {
@@ -519,6 +536,24 @@ public struct ModAddPipeline: Sendable {
         let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         guard process.terminationStatus == 0 else {
             throw ModAddPipelineError.commandFailed(Self.redactSecrets(command + "\n" + output))
+        }
+        return output
+    }
+
+    @discardableResult
+    private func runProcess(executable: String, arguments: [String]) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.currentDirectoryURL = config.projectRoot
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        process.waitUntilExit()
+        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        guard process.terminationStatus == 0 else {
+            throw ModAddPipelineError.commandFailed(Self.redactSecrets(([executable] + arguments).joined(separator: " ") + "\n" + output))
         }
         return output
     }
@@ -630,10 +665,6 @@ public struct ModAddPipeline: Sendable {
         return "'\(value.replacingOccurrences(of: "'", with: "''"))'"
     }
 
-    private static func shellQuote(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
-    }
-
     private static func urlQuery(_ value: String) -> String {
         value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
     }
@@ -658,6 +689,7 @@ private struct ResolvedArtifact {
     let localFile: URL
     let side: String
     let requiredDependencies: [RequiredModDependency]
+    let cleanupDirectory: URL?
 
     var identityKey: String {
         if let projectID, !projectID.isEmpty {

@@ -11,6 +11,11 @@ struct CoreUtilityTests {
         let config = root.appendingPathComponent("config/physicsmod/physics_server_config.json")
         try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        try "gamemode=creative\ndifficulty=easy\nforce-gamemode=false\nhardcore=true\nwhite-list=false\n".write(
+            to: root.appendingPathComponent("server.properties"),
+            atomically: true,
+            encoding: .utf8
+        )
 
         try """
         {
@@ -29,6 +34,13 @@ struct CoreUtilityTests {
         #expect(rootObject["dropBlocks"] as? Bool == true)
         #expect(rootObject["collapseSpeed"] as? Int == 10)
         #expect(rootObject["maxCollapseObjects"] as? Int == 100)
+
+        let properties = try String(contentsOf: root.appendingPathComponent("server.properties"), encoding: .utf8)
+        #expect(properties.contains("gamemode=survival"))
+        #expect(properties.contains("difficulty=hard"))
+        #expect(properties.contains("force-gamemode=true"))
+        #expect(properties.contains("hardcore=false"))
+        #expect(properties.contains("white-list=false"))
     }
 
     @Test("formats website timestamps in UTC table shape")

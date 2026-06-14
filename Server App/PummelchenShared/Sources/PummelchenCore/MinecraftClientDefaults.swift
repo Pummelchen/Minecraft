@@ -236,15 +236,40 @@ public enum MinecraftClientDefaultWriter {
 
 public struct MinecraftServerDefaults: Equatable, Sendable {
     public let physicsCollapseEnabled: Bool
+    public let gameMode: String
+    public let difficulty: String
+    public let forceGameMode: Bool
+    public let hardcore: Bool
 
-    public init(physicsCollapseEnabled: Bool = false) {
+    public init(
+        physicsCollapseEnabled: Bool = false,
+        gameMode: String = "survival",
+        difficulty: String = "hard",
+        forceGameMode: Bool = true,
+        hardcore: Bool = false
+    ) {
         self.physicsCollapseEnabled = physicsCollapseEnabled
+        self.gameMode = gameMode
+        self.difficulty = difficulty
+        self.forceGameMode = forceGameMode
+        self.hardcore = hardcore
     }
 }
 
 public enum MinecraftServerDefaultWriter {
     public static func apply(defaults: MinecraftServerDefaults = MinecraftServerDefaults(), to serverDirectory: URL) throws {
+        try setServerPropertiesDefaults(defaults, serverDirectory: serverDirectory)
         try setPhysicsServerDefaults(defaults, serverDirectory: serverDirectory)
+    }
+
+    private static func setServerPropertiesDefaults(_ defaults: MinecraftServerDefaults, serverDirectory: URL) throws {
+        let path = serverDirectory.appendingPathComponent("server.properties")
+        var values = readProperties(path)
+        values["gamemode"] = defaults.gameMode
+        values["difficulty"] = defaults.difficulty
+        values["force-gamemode"] = defaults.forceGameMode ? "true" : "false"
+        values["hardcore"] = defaults.hardcore ? "true" : "false"
+        try writeProperties(values, to: path)
     }
 
     private static func setPhysicsServerDefaults(_ defaults: MinecraftServerDefaults, serverDirectory: URL) throws {
@@ -270,6 +295,38 @@ public enum MinecraftServerDefaultWriter {
 
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: path, options: .atomic)
+    }
+
+    private static func readProperties(_ path: URL) -> [String: String] {
+        guard let text = try? String(contentsOf: path, encoding: .utf8) else {
+            return [:]
+        }
+        var values: [String: String] = [:]
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty, !line.hasPrefix("#"), let equal = line.firstIndex(of: "=") else {
+                continue
+            }
+            let key = String(line[..<equal]).trimmingCharacters(in: .whitespaces)
+            let value = String(line[line.index(after: equal)...]).trimmingCharacters(in: .whitespaces)
+            values[key] = value
+        }
+        return values
+    }
+
+    private static func writeProperties(_ values: [String: String], to path: URL) throws {
+        try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let preferredOrder = ["gamemode", "difficulty", "force-gamemode", "hardcore"]
+        var lines: [String] = []
+        for key in preferredOrder {
+            if let value = values[key] {
+                lines.append("\(key)=\(value)")
+            }
+        }
+        for key in values.keys.sorted() where !preferredOrder.contains(key) {
+            lines.append("\(key)=\(values[key] ?? "")")
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: path, atomically: true, encoding: .utf8)
     }
 }
 
