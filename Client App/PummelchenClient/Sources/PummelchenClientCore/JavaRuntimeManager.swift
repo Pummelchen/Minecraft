@@ -71,6 +71,7 @@ public enum JavaRuntimeManager {
 
         if let output = try? verify(javaExecutable: java, requirement: requirement) {
             try removeStaleManagedJava(in: javaRoot, keeping: target.lastPathComponent)
+            try writeCurrentRuntimeMarker(pummelchenHome: pummelchenHome, java: java, output: output, requirement: requirement)
             return JavaRuntimeStatus(javaExecutableURL: java, versionOutput: output, repaired: false)
         }
 

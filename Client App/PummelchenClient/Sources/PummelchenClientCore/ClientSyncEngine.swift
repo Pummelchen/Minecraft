@@ -184,7 +184,13 @@ public struct ClientSyncEngine: Sendable {
             return try await requireWebTransportChannel(token: token, clientID: clientID).currentRelease()
         }
         let url = configuration.serverURL.appendingPathComponent("downloads/current-release.json")
-        let data = try await http.data(from: url)
+        let data: Data
+        do {
+            data = try await http.data(from: url)
+        } catch {
+            let apiURL = configuration.serverURL.appendingPathComponent("api/v1/releases/current")
+            data = try await http.data(from: apiURL)
+        }
         let release = try CurrentReleaseValidator.decode(data)
         try CurrentReleaseValidator.validate(release)
         return release

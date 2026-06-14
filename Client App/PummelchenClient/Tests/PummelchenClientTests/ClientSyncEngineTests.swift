@@ -108,6 +108,56 @@ struct ClientSyncEngineTests {
         #endif
     }
 
+    @Test("sync falls back to Swift current release API when nginx pointer is missing")
+    func syncFallsBackToSwiftCurrentReleaseAPI() async throws {
+        #if os(Linux)
+        return
+        #else
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pummelchen-swift-sync-api-fallback-\(UUID().uuidString)", isDirectory: true)
+        let site = root.appendingPathComponent("site", isDirectory: true)
+        let minecraft = root.appendingPathComponent("minecraft", isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let releaseID = "release_20260613_V99_api_fallback"
+        let releaseDir = site.appendingPathComponent("downloads/releases/\(releaseID)", isDirectory: true)
+        let filesDir = releaseDir.appendingPathComponent("client-files/mods", isDirectory: true)
+        let apiCurrent = site.appendingPathComponent("api/v1/releases/current")
+        try FileManager.default.createDirectory(at: filesDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: apiCurrent.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        let mod = filesDir.appendingPathComponent("fallback.jar")
+        try "fallback-mod".write(to: mod, atomically: true, encoding: .utf8)
+        let hash = try SHA256Hasher.hashFile(at: mod)
+        let size = (try FileManager.default.attributesOfItem(atPath: mod.path)[.size] as? NSNumber)?.intValue ?? 0
+        try """
+        mods\tfallback.jar\t\(size)\tsha256:\(hash)\tdownloads/releases/\(releaseID)/client-files/mods/fallback.jar
+        """.write(to: releaseDir.appendingPathComponent("client-sync-manifest.tsv"), atomically: true, encoding: .utf8)
+        try currentReleaseJSON(releaseID: releaseID, manifestURL: "/downloads/releases/\(releaseID)/client-sync-manifest.tsv")
+            .write(to: apiCurrent, atomically: true, encoding: .utf8)
+
+        let server = try LocalHTTPServer(root: site)
+        try server.start()
+        defer { server.stop() }
+
+        let engine = ClientSyncEngine(configuration: ClientSyncConfiguration(
+            serverURL: URL(string: "http://127.0.0.1:\(server.port)")!,
+            minecraftDirectory: minecraft,
+            pummelchenHome: home,
+            databaseURL: home.appendingPathComponent("client.duckdb"),
+            allowWhileMinecraftRunning: true,
+            reportToServer: false,
+            manageJavaRuntime: false
+        ))
+
+        let result = try await engine.sync(force: true)
+        #expect(result.targetReleaseID == releaseID)
+        #expect(result.filesDownloaded == 1)
+        #expect(FileManager.default.fileExists(atPath: minecraft.appendingPathComponent("mods/fallback.jar").path))
+        #endif
+    }
+
     private func currentReleaseJSON(releaseID: String, manifestURL: String) -> String {
         """
         {

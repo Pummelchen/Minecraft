@@ -158,6 +158,65 @@ struct PummelchenServerCoreTests {
         #expect(neoForgeObject?["latest_neoforge_version"] as? String == "26.1.2.76")
     }
 
+    @Test("tested updates feed includes live DuckDB releases")
+    func testedUpdatesFeedIncludesLiveDuckDBReleases() throws {
+        try requireDuckDB()
+        let fixture = try makeProjectFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let database = fixture.root.appendingPathComponent("data/test-phase6.duckdb")
+        try DuckDBDatabase(databaseURL: database).execute("""
+        CREATE SCHEMA IF NOT EXISTS release;
+        CREATE TABLE IF NOT EXISTS release.pack_releases (
+          release_id VARCHAR PRIMARY KEY,
+          created_at TIMESTAMP NOT NULL,
+          activated_at TIMESTAMP,
+          server_key VARCHAR NOT NULL,
+          minecraft_version VARCHAR,
+          loader_version VARCHAR,
+          server_dir VARCHAR NOT NULL,
+          release_dir VARCHAR NOT NULL,
+          status VARCHAR NOT NULL,
+          active BOOLEAN NOT NULL DEFAULT false,
+          previous_release_id VARCHAR,
+          git_commit VARCHAR,
+          server_manifest_sha256 VARCHAR,
+          client_manifest_sha256 VARCHAR,
+          db_snapshot_sha256 VARCHAR,
+          client_zip_sha256 VARCHAR,
+          mrpack_sha256 VARCHAR,
+          dmg_sha256 VARCHAR,
+          changelog_path VARCHAR,
+          notes VARCHAR
+        );
+        INSERT INTO release.pack_releases(
+          release_id, created_at, activated_at, server_key, server_dir, release_dir, status, active, notes
+        )
+        VALUES (
+          'release_20260613_V23_update_check',
+          TIMESTAMP '2026-06-13 18:25:41',
+          TIMESTAMP '2026-06-13 18:26:12',
+          'minecraft_26_1_2',
+          '/srv/minecraft',
+          '/srv/releases/release_20260613_V23_update_check',
+          'active',
+          true,
+          'DMG release promoted'
+        );
+        """)
+
+        let api = makeAPI(fixture: fixture)
+        let response = api.response(for: HTTPRequest(method: "GET", path: "/api/v1/site/tested-updates"))
+        let object = try JSONSerialization.jsonObject(with: response.body) as? [String: Any]
+        let updates = try #require(object?["updates"] as? [[String: Any]])
+
+        #expect(response.statusCode == 200)
+        #expect(response.headers["X-Pummelchen-Stats-Source"] == "swift-server-duckdb")
+        #expect(updates.contains { ($0["id"] as? String) == "pr_release_20260613_V23_update_check" })
+        #expect(updates.first?["test_label"] as? String == "release_20260613_V23_update_check")
+        #expect(updates.first?["source_url"] as? String == "/release.html?release=release_20260613_V23_update_check")
+    }
+
     @Test("rejects writes")
     func rejectsWrites() throws {
         let fixture = try makeProjectFixture()

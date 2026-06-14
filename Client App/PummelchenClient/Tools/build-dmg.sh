@@ -28,6 +28,24 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR"
 install -m 755 "$BUILD_DIR/arm64-apple-macosx/release/PummelchenClient" "$MACOS_DIR/PummelchenClient"
 install -m 755 "$BUILD_DIR/arm64-apple-macosx/release/pummelchen-client-sync" "$MACOS_DIR/pummelchen-client-sync"
 
+ICON_SRC="$ROOT_DIR/Resources/AppIcon.png"
+if [[ -f "$ICON_SRC" ]]; then
+    ICONSET="$BUILD_DIR/AppIcon.iconset"
+    rm -rf "$ICONSET"
+    mkdir -p "$ICONSET"
+    sips -z 16 16 "$ICON_SRC" --out "$ICONSET/icon_16x16.png" >/dev/null
+    sips -z 32 32 "$ICON_SRC" --out "$ICONSET/icon_16x16@2x.png" >/dev/null
+    sips -z 32 32 "$ICON_SRC" --out "$ICONSET/icon_32x32.png" >/dev/null
+    sips -z 64 64 "$ICON_SRC" --out "$ICONSET/icon_32x32@2x.png" >/dev/null
+    sips -z 128 128 "$ICON_SRC" --out "$ICONSET/icon_128x128.png" >/dev/null
+    sips -z 256 256 "$ICON_SRC" --out "$ICONSET/icon_128x128@2x.png" >/dev/null
+    sips -z 256 256 "$ICON_SRC" --out "$ICONSET/icon_256x256.png" >/dev/null
+    sips -z 512 512 "$ICON_SRC" --out "$ICONSET/icon_256x256@2x.png" >/dev/null
+    sips -z 512 512 "$ICON_SRC" --out "$ICONSET/icon_512x512.png" >/dev/null
+    sips -z 1024 1024 "$ICON_SRC" --out "$ICONSET/icon_512x512@2x.png" >/dev/null
+    iconutil -c icns "$ICONSET" -o "$RESOURCES_DIR/AppIcon.icns"
+fi
+
 DUCKDB_LIB="${PUMMELCHEN_DUCKDB_DYLIB:-/opt/homebrew/lib/libduckdb.dylib}"
 if [[ ! -f "$DUCKDB_LIB" ]]; then
     echo "libduckdb.dylib not found; install DuckDB or set PUMMELCHEN_DUCKDB_DYLIB" >&2
@@ -57,6 +75,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
     <string>PummelchenClient</string>
     <key>CFBundleIdentifier</key>
     <string>de.pummelchen.minecraft.client</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleName</key>
     <string>Pummelchen Client</string>
     <key>CFBundlePackageType</key>

@@ -168,7 +168,7 @@ public final class PummelchenServerAPI: @unchecked Sendable {
             case ("GET", "/api/v1/site/live-stats"):
                 return try siteLiveStats()
             case ("GET", "/api/v1/site/tested-updates"):
-                return try siteJSON(named: "tested-updates.json")
+                return try siteTestedUpdates()
             case ("GET", "/api/v1/site/update-activity"):
                 return try siteJSON(named: "update-activity.json")
             case ("GET", "/api/v1/site/neoforge-version"):
@@ -284,6 +284,79 @@ public final class PummelchenServerAPI: @unchecked Sendable {
             "Cache-Control": "no-store, max-age=0",
             "X-Pummelchen-Stats-Source": "swift-server"
         ])
+    }
+
+    private func siteTestedUpdates() throws -> HTTPResponse {
+        let fallbackURL = config.projectRoot.appendingPathComponent("site/public/tested-updates.json")
+        var object = (try? Data(contentsOf: fallbackURL))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        var updates = object["updates"] as? [[String: Any]] ?? []
+
+        if let releaseUpdates = try? latestReleaseUpdatesFromDuckDB() {
+            var seen = Set(updates.compactMap { $0["id"] as? String })
+            for update in releaseUpdates where !seen.contains(update.id) {
+                updates.append(update.jsonObject)
+                seen.insert(update.id)
+            }
+        }
+
+        updates.sort {
+            let left = ($0["tested_at"] as? String) ?? ""
+            let right = ($1["tested_at"] as? String) ?? ""
+            return left > right
+        }
+        object["generated_at"] = Self.isoNow()
+        object["generated_by"] = "pummelchen-swift-server-duckdb-live"
+        object["cutoff_days"] = object["cutoff_days"] ?? 30
+        object["total_entries"] = updates.count
+        object["updates"] = updates
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        return .json(data, headers: [
+            "Cache-Control": "no-store, max-age=0",
+            "X-Pummelchen-Stats-Source": "swift-server-duckdb"
+        ])
+    }
+
+    private struct TestedUpdateRow {
+        let id: String
+        let jsonObject: [String: Any]
+    }
+
+    private func latestReleaseUpdatesFromDuckDB() throws -> [TestedUpdateRow] {
+        let csv = try DuckDBDatabase(databaseURL: config.duckDBURL, readOnly: true).queryCSV("""
+        SELECT
+          release_id,
+          CAST(COALESCE(activated_at, created_at) AS VARCHAR) AS tested_at,
+          COALESCE(status, '') AS status,
+          COALESCE(notes, '') AS notes
+        FROM release.pack_releases
+        WHERE COALESCE(activated_at, created_at) >= now() - INTERVAL 30 DAYS
+        ORDER BY COALESCE(activated_at, created_at) DESC
+        LIMIT 100;
+        """)
+        let rows = Self.parseCSV(csv)
+        return rows.compactMap { row in
+            guard let releaseID = row["release_id"], !releaseID.isEmpty else {
+                return nil
+            }
+            let testedAt = Self.isoTimestamp(fromDuckDB: row["tested_at"] ?? "")
+            let id = "pr_\(releaseID)"
+            return TestedUpdateRow(id: id, jsonObject: [
+                "id": id,
+                "source": "pack_releases",
+                "title": "Release promoted: \(releaseID)",
+                "event_type": "release_promotion",
+                "status": row["status"]?.isEmpty == false ? row["status"]! : "active",
+                "tested_at": testedAt,
+                "tested_at_display": Self.displayTimestamp(fromISO: testedAt),
+                "old_file": NSNull(),
+                "new_file": NSNull(),
+                "source_url": "/release.html?release=\(releaseID)",
+                "test_label": releaseID,
+                "notes": row["notes"]?.isEmpty == false ? row["notes"]! : "New immutable release activated",
+                "mod_id": NSNull()
+            ])
+        }
     }
 
     private func controlInfo() throws -> HTTPResponse {
@@ -554,6 +627,83 @@ public final class PummelchenServerAPI: @unchecked Sendable {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.string(from: Date())
+    }
+
+    private static func isoTimestamp(fromDuckDB value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.contains("T") {
+            return trimmed
+        }
+        if trimmed.count >= 19 {
+            return trimmed.replacingOccurrences(of: " ", with: "T") + "Z"
+        }
+        return isoNow()
+    }
+
+    private static func displayTimestamp(fromISO value: String) -> String {
+        value
+            .replacingOccurrences(of: "T", with: " ")
+            .replacingOccurrences(of: "Z", with: " UTC")
+    }
+
+    private static func parseCSV(_ csv: String) -> [[String: String]] {
+        let rows = parseCSVRows(csv)
+        guard let header = rows.first else {
+            return []
+        }
+        return rows.dropFirst().map { row in
+            var object: [String: String] = [:]
+            for index in 0..<min(header.count, row.count) {
+                object[header[index]] = row[index]
+            }
+            return object
+        }
+    }
+
+    private static func parseCSVRows(_ csv: String) -> [[String]] {
+        var rows: [[String]] = []
+        var row: [String] = []
+        var field = ""
+        var inQuotes = false
+        var index = csv.startIndex
+        while index < csv.endIndex {
+            let char = csv[index]
+            if inQuotes {
+                if char == "\"" {
+                    let next = csv.index(after: index)
+                    if next < csv.endIndex, csv[next] == "\"" {
+                        field.append("\"")
+                        index = next
+                    } else {
+                        inQuotes = false
+                    }
+                } else {
+                    field.append(char)
+                }
+            } else if char == "\"" {
+                inQuotes = true
+            } else if char == "," {
+                row.append(field)
+                field = ""
+            } else if char == "\n" {
+                row.append(field)
+                if !row.allSatisfy({ $0.isEmpty }) {
+                    rows.append(row)
+                }
+                row = []
+                field = ""
+            } else if char != "\r" {
+                field.append(char)
+            }
+            index = csv.index(after: index)
+        }
+        if !field.isEmpty || !row.isEmpty {
+            row.append(field)
+            if !row.allSatisfy({ $0.isEmpty }) {
+                rows.append(row)
+            }
+        }
+        return rows
     }
 
     private static func constantTimeEquals(_ left: String, _ right: String) -> Bool {

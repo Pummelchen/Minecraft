@@ -159,7 +159,8 @@ public struct ClientStatusService: Sendable {
     public func check() async -> ClientStatusSnapshot {
         let checkedAt = Self.isoNow()
         let localRelease = readInstalledRelease()
-        let defaultsHealth = ClientDefaultsInspector.inspect(minecraftDirectory: configuration.minecraftDirectory)
+        let defaults = await defaultsForStatus()
+        let defaultsHealth = ClientDefaultsInspector.inspect(minecraftDirectory: configuration.minecraftDirectory, defaults: defaults)
         let nginxTask = Task {
             await nginxStatus(checkedAt: checkedAt)
         }
@@ -217,6 +218,16 @@ public struct ClientStatusService: Sendable {
         }
     }
 
+    private func defaultsForStatus() async -> MinecraftClientDefaults {
+        do {
+            let java = try await JavaRuntimeManager.ensureInstalled(pummelchenHome: configuration.pummelchenHome)
+            let loader = NeoForgeClientRequirement()
+            return MinecraftClientDefaults(javaExecutablePath: java.javaExecutableURL.path, loaderVersion: loader.loaderVersion)
+        } catch {
+            return MinecraftClientDefaults()
+        }
+    }
+
     private func fetchCurrentRelease() async throws -> CurrentRelease {
         if let token = configuration.clientAPIToken, !token.isEmpty {
             let preflight = try await fetchWebTransportPreflight()
@@ -252,7 +263,13 @@ public struct ClientStatusService: Sendable {
     private func fetchCurrentReleaseFromNginx() async throws -> CurrentRelease {
         let url = configuration.serverURL.appendingPathComponent("downloads/current-release.json")
         let probeHTTP = ClientHTTPClient(retryPolicy: ClientHTTPRetryPolicy(maxAttempts: 1, requestTimeoutSeconds: 5))
-        let data = try await probeHTTP.data(from: url)
+        let data: Data
+        do {
+            data = try await probeHTTP.data(from: url)
+        } catch {
+            let apiURL = configuration.serverURL.appendingPathComponent("api/v1/releases/current")
+            data = try await probeHTTP.data(from: apiURL)
+        }
         let release = try CurrentReleaseValidator.decode(data)
         try CurrentReleaseValidator.validate(release)
         return release
