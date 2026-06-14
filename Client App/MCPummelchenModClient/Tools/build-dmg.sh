@@ -29,6 +29,12 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR"
 install -m 755 "$BUILD_DIR/arm64-apple-macosx/release/MCPummelchenModClient" "$MACOS_DIR/MCPummelchenModClient"
 install -m 755 "$BUILD_DIR/arm64-apple-macosx/release/pummelchen-client-sync" "$MACOS_DIR/pummelchen-client-sync"
 
+CLIENT_API_TOKEN="${PUMMELCHEN_CLIENT_API_TOKEN:-}"
+if [[ -n "$CLIENT_API_TOKEN" ]]; then
+    printf '%s\n' "$CLIENT_API_TOKEN" > "$RESOURCES_DIR/client-api-token"
+    chmod 600 "$RESOURCES_DIR/client-api-token"
+fi
+
 ICON_SRC="$ROOT_DIR/Resources/AppIcon.png"
 if [[ -f "$ICON_SRC" ]]; then
     ICONSET="$BUILD_DIR/AppIcon.iconset"

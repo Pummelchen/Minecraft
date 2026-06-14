@@ -11,7 +11,7 @@ enum ClientSyncCLIError: Error, CustomStringConvertible {
             return """
             usage:
               pummelchen-client-sync sync [--force] [--server-url <url>] [--minecraft-dir <path>] [--pummelchen-home <path>] [--db <path>] [--client-id <id>] [--client-api-token <token>] [--allow-while-running] [--no-report] [--skip-java-repair]
-              pummelchen-client-sync watch [--server-url <url>] [--minecraft-dir <path>] [--pummelchen-home <path>] [--db <path>] [--client-id <id>] [--client-api-token <token>] [--allow-while-running] [--no-report] [--skip-java-repair]
+              pummelchen-client-sync watch [--server-url <url>] [--minecraft-dir <path>] [--pummelchen-home <path>] [--db <path>] [--client-id <id>] [--client-api-token <token>] [--max-cycles <n>] [--allow-while-running] [--no-report] [--skip-java-repair]
             """
         case .missingValue(let option):
             return "missing value for \(option)"
@@ -68,7 +68,7 @@ func config(from args: Args) throws -> ClientSyncConfiguration {
         reportToServer: !args.flags.contains("--no-report"),
         manageJavaRuntime: !args.flags.contains("--skip-java-repair"),
         clientID: args.options["--client-id"],
-        clientAPIToken: args.options["--client-api-token"] ?? ProcessInfo.processInfo.environment["PUMMELCHEN_CLIENT_API_TOKEN"]
+        clientAPIToken: args.options["--client-api-token"] ?? ClientCredentialProvider.defaultClientAPIToken()
     )
 }
 
@@ -84,8 +84,15 @@ struct MCPummelchenModClientSyncMain {
             if args.command == "watch" {
                 print("Pummelchen Swift Control Watcher")
                 print("Server: \(configuration.serverURL.absoluteString)")
-                _ = try await ClientControlWatcher(syncConfiguration: configuration).run { message in
+                let maxCycles = args.options["--max-cycles"].flatMap(Int.init)
+                let result = try await ClientControlWatcher(syncConfiguration: configuration).run(maxCycles: maxCycles) { message in
                     print(message)
+                }
+                print("Cycles: \(result.cycles)")
+                print("Events handled: \(result.eventsHandled)")
+                print("Syncs run: \(result.syncsRun)")
+                if let lastEventID = result.lastEventID {
+                    print("Last event: \(lastEventID)")
                 }
             } else {
                 let engine = ClientSyncEngine(configuration: configuration)

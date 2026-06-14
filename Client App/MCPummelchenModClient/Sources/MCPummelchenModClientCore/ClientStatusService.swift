@@ -101,7 +101,7 @@ public struct ClientStatusConfiguration: Sendable {
         databaseURL: URL,
         retryPolicy: ClientHTTPRetryPolicy = ClientHTTPRetryPolicy(),
         clientID: String? = nil,
-        clientAPIToken: String? = ProcessInfo.processInfo.environment["PUMMELCHEN_CLIENT_API_TOKEN"]
+        clientAPIToken: String? = ClientCredentialProvider.defaultClientAPIToken()
     ) {
         self.serverURL = serverURL
         self.minecraftDirectory = minecraftDirectory

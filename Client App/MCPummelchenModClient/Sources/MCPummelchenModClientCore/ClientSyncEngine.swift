@@ -25,7 +25,7 @@ public struct ClientSyncConfiguration: Sendable {
         reportToServer: Bool = true,
         manageJavaRuntime: Bool = true,
         clientID: String? = nil,
-        clientAPIToken: String? = ProcessInfo.processInfo.environment["PUMMELCHEN_CLIENT_API_TOKEN"],
+        clientAPIToken: String? = ClientCredentialProvider.defaultClientAPIToken(),
         retryPolicy: ClientHTTPRetryPolicy = ClientHTTPRetryPolicy()
     ) {
         self.serverURL = serverURL

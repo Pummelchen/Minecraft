@@ -5,6 +5,21 @@ import Testing
 
 @Suite("Client read-only status")
 struct ClientStatusTests {
+    @Test("client API token resolves from environment, app plist, or bundled resource")
+    func clientAPITokenResolutionUsesBundledFallbacks() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pummelchen-client-token-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let tokenFile = root.appendingPathComponent("client-api-token")
+        try " bundled-token \n".write(to: tokenFile, atomically: true, encoding: .utf8)
+
+        #expect(ClientCredentialProvider.clientAPIToken(environmentToken: " env-token ", infoPlistToken: "plist-token", resourceURLs: [tokenFile]) == "env-token")
+        #expect(ClientCredentialProvider.clientAPIToken(environmentToken: nil, infoPlistToken: " plist-token ", resourceURLs: [tokenFile]) == "plist-token")
+        #expect(ClientCredentialProvider.clientAPIToken(environmentToken: nil, infoPlistToken: nil, resourceURLs: [tokenFile]) == "bundled-token")
+        #expect(ClientCredentialProvider.clientAPIToken(environmentToken: nil, infoPlistToken: nil, resourceURLs: [nil]) == nil)
+    }
+
     @Test("default inspector reports healthy configured Minecraft defaults")
     func defaultInspectorReportsHealthyDefaults() throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
