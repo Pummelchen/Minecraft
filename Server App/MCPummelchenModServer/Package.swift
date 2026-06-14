@@ -30,15 +30,15 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(path: "../PummelchenShared"),
-        .package(path: "../../Client App/PummelchenClient"),
+        .package(path: "../MCPummelchenModShared"),
+        .package(path: "../../Client App/MCPummelchenModClient"),
         .package(path: "../Vendor/Quiver")
     ],
     targets: [
         .target(
             name: "MCPummelchenModServerCore",
             dependencies: [
-                .product(name: "PummelchenCore", package: "PummelchenShared"),
+                .product(name: "MCPummelchenModShared", package: "MCPummelchenModShared"),
                 .product(name: "HTTP3", package: "Quiver"),
                 .product(name: "QUIC", package: "Quiver"),
                 .product(name: "QUICCore", package: "Quiver"),
@@ -49,34 +49,34 @@ let package = Package(
             name: "MCPummelchenModServer",
             dependencies: [
                 "MCPummelchenModServerCore",
-                .product(name: "PummelchenCore", package: "PummelchenShared")
+                .product(name: "MCPummelchenModShared", package: "MCPummelchenModShared")
             ]
         ),
         .executableTarget(
             name: "PummelchenDuckDB",
             dependencies: [
-                .product(name: "PummelchenCore", package: "PummelchenShared")
+                .product(name: "MCPummelchenModShared", package: "MCPummelchenModShared")
             ]
         ),
         .executableTarget(
             name: "PummelchenHeadlessSoak",
             dependencies: [
-                .product(name: "PummelchenCore", package: "PummelchenShared"),
-                .product(name: "PummelchenClientCore", package: "PummelchenClient")
+                .product(name: "MCPummelchenModShared", package: "MCPummelchenModShared"),
+                .product(name: "MCPummelchenModClientCore", package: "MCPummelchenModClient")
             ]
         ),
         .executableTarget(
             name: "pummelchen-contracts",
             dependencies: [
-                .product(name: "PummelchenCore", package: "PummelchenShared")
+                .product(name: "MCPummelchenModShared", package: "MCPummelchenModShared")
             ]
         ),
         .testTarget(
             name: "MCPummelchenModServerTests",
             dependencies: [
                 "MCPummelchenModServerCore",
-                .product(name: "PummelchenCore", package: "PummelchenShared"),
-                .product(name: "PummelchenClientCore", package: "PummelchenClient")
+                .product(name: "MCPummelchenModShared", package: "MCPummelchenModShared"),
+                .product(name: "MCPummelchenModClientCore", package: "MCPummelchenModClient")
             ],
             resources: [
                 .copy("Fixtures")

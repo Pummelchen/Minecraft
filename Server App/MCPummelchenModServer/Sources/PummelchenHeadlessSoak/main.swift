@@ -1,6 +1,6 @@
 import Foundation
-import PummelchenClientCore
-import PummelchenCore
+import MCPummelchenModClientCore
+import MCPummelchenModShared
 
 enum HeadlessSoakError: Error, CustomStringConvertible {
     case usage
@@ -411,7 +411,7 @@ struct HeadlessSoakRunner {
 
     private func validateInstalledAppBundle(_ app: URL) throws {
         let info = app.appendingPathComponent("Contents/Info.plist")
-        let guiBinary = app.appendingPathComponent("Contents/MacOS/PummelchenClient")
+        let guiBinary = app.appendingPathComponent("Contents/MacOS/MCPummelchenModClient")
         let syncBinary = app.appendingPathComponent("Contents/MacOS/pummelchen-client-sync")
         let duckDB = app.appendingPathComponent("Contents/Frameworks/libduckdb.dylib")
         for required in [info, guiBinary, syncBinary, duckDB] {
@@ -497,7 +497,7 @@ struct HeadlessSoakRunner {
         }
 
         let appInfo = installedApp.appendingPathComponent("Contents/Info.plist")
-        let guiBinary = installedApp.appendingPathComponent("Contents/MacOS/PummelchenClient")
+        let guiBinary = installedApp.appendingPathComponent("Contents/MacOS/MCPummelchenModClient")
         let duckDBDylib = installedApp.appendingPathComponent("Contents/Frameworks/libduckdb.dylib")
         record("dmg_app_bundle_installed", fileManager.fileExists(atPath: appInfo.path), installedApp.path)
         record("gui_binary_executable", fileManager.isExecutableFile(atPath: guiBinary.path), guiBinary.path)

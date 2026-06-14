@@ -1,5 +1,5 @@
 import Foundation
-import PummelchenCore
+import MCPummelchenModShared
 
 #if os(Linux)
 import Glibc

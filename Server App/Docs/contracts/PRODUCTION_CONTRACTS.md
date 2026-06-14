@@ -10,7 +10,7 @@ Reason:
 
 - `Server App` owns the Debian service, release orchestration, safe world reset, DuckDB writes, and nginx-facing API data.
 - `Client App` owns the macOS app, background sync, local status database, and player-facing sync UI.
-- `Server App/PummelchenShared` owns the shared contracts used by both sides.
+- `Server App/MCPummelchenModShared` owns the shared contracts used by both sides.
 
 The client identity/token model is frozen in `docs/contracts/CLIENT_IDENTITY.md`.
 

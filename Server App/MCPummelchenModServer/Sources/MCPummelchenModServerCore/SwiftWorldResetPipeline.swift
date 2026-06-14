@@ -1,5 +1,5 @@
 import Foundation
-import PummelchenCore
+import MCPummelchenModShared
 
 public enum PregenerationShape: String, Codable, Sendable {
     case circle

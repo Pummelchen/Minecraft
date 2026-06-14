@@ -1,5 +1,5 @@
 import Foundation
-import PummelchenCore
+import MCPummelchenModShared
 
 #if canImport(FoundationNetworking)
 import FoundationNetworking

@@ -1,7 +1,7 @@
 import Foundation
 import Testing
-import PummelchenCore
-import PummelchenClientCore
+import MCPummelchenModShared
+import MCPummelchenModClientCore
 @testable import MCPummelchenModServerCore
 
 #if os(Linux)

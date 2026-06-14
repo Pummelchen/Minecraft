@@ -1,6 +1,6 @@
 import Foundation
 import HTTP3
-import PummelchenCore
+import MCPummelchenModShared
 import QUIC
 import QUICCrypto
 

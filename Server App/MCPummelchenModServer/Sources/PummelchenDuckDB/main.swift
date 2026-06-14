@@ -1,5 +1,5 @@
 import Foundation
-import PummelchenCore
+import MCPummelchenModShared
 
 enum DuckDBCommandError: Error, CustomStringConvertible {
     case usage

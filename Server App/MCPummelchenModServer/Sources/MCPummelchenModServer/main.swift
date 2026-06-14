@@ -1,5 +1,5 @@
 import Foundation
-import PummelchenCore
+import MCPummelchenModShared
 import MCPummelchenModServerCore
 
 #if os(Linux)

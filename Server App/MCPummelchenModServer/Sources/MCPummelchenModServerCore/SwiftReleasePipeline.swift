@@ -1,5 +1,5 @@
 import Foundation
-import PummelchenCore
+import MCPummelchenModShared
 
 public enum SwiftReleasePipelineError: Error, CustomStringConvertible {
     case releaseExists(String)

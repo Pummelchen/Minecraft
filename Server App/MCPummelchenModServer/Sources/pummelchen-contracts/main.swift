@@ -1,5 +1,5 @@
 import Foundation
-import PummelchenCore
+import MCPummelchenModShared
 
 enum CommandError: Error, CustomStringConvertible {
     case usage

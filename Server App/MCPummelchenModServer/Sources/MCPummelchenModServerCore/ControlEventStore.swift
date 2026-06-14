@@ -1,5 +1,5 @@
 import Foundation
-import PummelchenCore
+import MCPummelchenModShared
 
 public struct ControlEventStore: Sendable {
     public static let maxControlPayloadBytes = 16 * 1024

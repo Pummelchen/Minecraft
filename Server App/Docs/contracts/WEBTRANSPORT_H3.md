@@ -1,6 +1,6 @@
 # WebTransport Over HTTP/3 Contract
 
-Pummelchen targets WebTransport over HTTP/3 for near-realtime client/server control traffic. The implementation follows `draft-ietf-webtrans-http3-15`, the latest active IETF working group draft checked for this project, and keeps the protocol constants in `PummelchenCore/WebTransportH3.swift` so the macOS client and Debian server use one shared contract.
+Pummelchen targets WebTransport over HTTP/3 for near-realtime client/server control traffic. The implementation follows `draft-ietf-webtrans-http3-15`, the latest active IETF working group draft checked for this project, and keeps the protocol constants in `MCPummelchenModShared/WebTransportH3.swift` so the macOS client and Debian server use one shared contract.
 
 ## Required Wire Features
 
