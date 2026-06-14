@@ -558,6 +558,87 @@ struct MCPummelchenModServerCoreTests {
         }
     }
 
+    @Test("add-mod dry run resolves local NeoForge metadata without changing package dirs")
+    func addModDryRunResolvesLocalNeoForgeMetadata() throws {
+        try requireDuckDB()
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pummelchen-add-mod-dry-run-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let serverDir = root.appendingPathComponent("server", isDirectory: true)
+        let artifact = try writeNeoForgeJar(
+            root: root,
+            fileName: "pummelchen-example-1.2.3.jar",
+            displayName: "Pummelchen Example",
+            version: "1.2.3",
+            side: "BOTH"
+        )
+        let result = try ModAddPipeline(config: ModAddPipelineConfig(
+            projectRoot: root,
+            serverDir: serverDir,
+            releaseRoot: root.appendingPathComponent("releases", isDirectory: true),
+            publicDownloads: root.appendingPathComponent("site/public/downloads", isDirectory: true),
+            databaseURL: root.appendingPathComponent("add-mod.duckdb"),
+            sourceURL: "https://www.curseforge.com/minecraft/mc-mods/pummelchen-example",
+            localArtifact: artifact,
+            releaseID: "release_20260614_V99_add_mod_dry_run"
+        )).run()
+
+        #expect(result.dryRun)
+        #expect(!result.releaseCreated)
+        #expect(result.artifacts.first?.displayName == "Pummelchen Example")
+        #expect(result.artifacts.first?.version == "1.2.3")
+        #expect(result.artifacts.first?.copiedToServer == true)
+        #expect(result.artifacts.first?.copiedToClient == true)
+        #expect(!FileManager.default.fileExists(atPath: serverDir.appendingPathComponent("mods/pummelchen-example-1.2.3.jar").path))
+    }
+
+    @Test("add-mod installs a local NeoForge jar and creates a release")
+    func addModInstallsLocalNeoForgeJarAndCreatesRelease() throws {
+        try requireDuckDB()
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pummelchen-add-mod-release-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let serverDir = root.appendingPathComponent("server", isDirectory: true)
+        try FileManager.default.createDirectory(at: serverDir.appendingPathComponent("client-package/mods"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: serverDir.appendingPathComponent("mods"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("site/public/data"), withIntermediateDirectories: true)
+        try #"{"updates":[]}"#.write(to: root.appendingPathComponent("site/public/data/tested-updates.json"), atomically: true, encoding: .utf8)
+        let artifact = try writeNeoForgeJar(
+            root: root,
+            fileName: "pummelchen-release-example-2.0.0.jar",
+            displayName: "Pummelchen Release Example",
+            version: "2.0.0",
+            side: "BOTH"
+        )
+
+        let releaseID = "release_20260614_V100_add_mod_release"
+        let result = try ModAddPipeline(config: ModAddPipelineConfig(
+            projectRoot: root,
+            serverDir: serverDir,
+            releaseRoot: root.appendingPathComponent("releases", isDirectory: true),
+            publicDownloads: root.appendingPathComponent("site/public/downloads", isDirectory: true),
+            databaseURL: root.appendingPathComponent("add-mod.duckdb"),
+            sourceURL: "https://www.curseforge.com/minecraft/mc-mods/pummelchen-release-example",
+            localArtifact: artifact,
+            releaseID: releaseID,
+            activate: true,
+            dryRun: false,
+            healthCommand: "echo add-mod-health-ok"
+        )).run()
+
+        #expect(result.releaseCreated)
+        #expect(result.releaseActivated)
+        #expect(FileManager.default.fileExists(atPath: serverDir.appendingPathComponent("mods/pummelchen-release-example-2.0.0.jar").path))
+        #expect(FileManager.default.fileExists(atPath: serverDir.appendingPathComponent("client-package/mods/pummelchen-release-example-2.0.0.jar").path))
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("site/public/downloads/current-release.json").path))
+        let current = try CurrentReleaseValidator.decode(Data(contentsOf: root.appendingPathComponent("site/public/downloads/current-release.json")))
+        #expect(current.releaseID == releaseID)
+        let sourceRows = try duckDBScalar(database: root.appendingPathComponent("add-mod.duckdb"), sql: "SELECT COUNT(*) FROM core.mod_sources WHERE installed_file = 'pummelchen-release-example-2.0.0.jar';")
+        #expect(sourceRows == "1")
+    }
+
     @Test("mod update scanner detects provider pages and Cloudflare blocks")
     func modUpdateScannerParsesSources() throws {
         let modrinthHTML = #"""
@@ -1203,6 +1284,25 @@ struct MCPummelchenModServerCoreTests {
                 userInfo: [NSLocalizedDescriptionKey: error]
             )
         }
+    }
+
+    private func writeNeoForgeJar(root: URL, fileName: String, displayName: String, version: String, side: String) throws -> URL {
+        let work = root.appendingPathComponent("jar-fixture-\(UUID().uuidString)", isDirectory: true)
+        let metaInf = work.appendingPathComponent("META-INF", isDirectory: true)
+        try FileManager.default.createDirectory(at: metaInf, withIntermediateDirectories: true)
+        try """
+        modLoader="javafml"
+        loaderVersion="[1,)"
+        license="All Rights Reserved"
+        [[mods]]
+        modId="\(displayName.lowercased().replacingOccurrences(of: #"[^a-z0-9]+"#, with: "_", options: .regularExpression))"
+        version="\(version)"
+        displayName="\(displayName)"
+        side="\(side)"
+        """.write(to: metaInf.appendingPathComponent("neoforge.mods.toml"), atomically: true, encoding: .utf8)
+        let jar = root.appendingPathComponent(fileName)
+        try runZip(arguments: ["-q", "-r", jar.path, "META-INF"], currentDirectory: work)
+        return jar
     }
 
     private func authHeaders(token: String, clientID: String) -> [String: String] {

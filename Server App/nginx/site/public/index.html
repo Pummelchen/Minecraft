@@ -711,6 +711,17 @@
       </div>
     </section>
 
+    <section id="add-mod-command">
+      <h2>Add A Mod</h2>
+      <div class="operator-section">
+        <p class="note">Send a plain operator request through Codex, OpenCode, Qwen, or another AI coding tool with access to this project and the VPS.</p>
+        <p class="safe-reset-command">"Add this mod: https://www.curseforge.com/minecraft/mc-mods/example-mod"</p>
+        <pre class="terminal-cmd"><code>MCPummelchenModServer add-mod --project-root /opt/pummelchen-swift/runtime --server-dir /opt/pummelchen-swift/runtime/minecraft --release-root /opt/pummelchen-swift/runtime/releases --public-downloads /opt/pummelchen-swift/runtime/site/public/downloads --duckdb /opt/pummelchen-swift/runtime/data/pummelchen.duckdb --url https://www.curseforge.com/minecraft/mc-mods/example-mod --release-id release_YYYYMMDD_VNN_add_example_mod --dry-run false --activate true</code></pre>
+        <p class="note">The Swift server app resolves the mod, downloads the correct NeoForge file, classifies whether it belongs on the server, client, or both, updates DuckDB, rebuilds release artifacts, runs the configured validation hooks, and only promotes the release when the release pipeline accepts all required checks.</p>
+        <p class="operator-warning">Do not copy mod files into the live folders by hand. Manual installs skip dependency records, validation, release manifests, client sync metadata, and rollback history.</p>
+      </div>
+    </section>
+
     <section id="safe-world-reset">
       <h2>Safe World Reset</h2>
       <div class="operator-section">

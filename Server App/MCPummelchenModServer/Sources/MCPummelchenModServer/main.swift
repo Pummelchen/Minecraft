@@ -23,6 +23,7 @@ enum ServerCommandError: Error, CustomStringConvertible {
               MCPummelchenModServer serve --project-root <repo> [--host 127.0.0.1] [--port 8787] [--webtransport-host pummelchen.91.99.176.243.nip.io] [--webtransport-bind-host 0.0.0.0] [--webtransport-port 443] [--webtransport-path /webtransport/v1/control] [--webtransport-cert <cert.pem>] [--webtransport-key <privkey.pem>]
               MCPummelchenModServer release-create --project-root <repo> --server-dir <dir> --release-root <dir> --public-downloads <dir> --duckdb <file> --release-id <id> [--activate true] [--restart-command <shell>] [--health-command <shell>]
               MCPummelchenModServer release-validate --project-root <repo> --server-dir <dir> --release-root <dir> --public-downloads <dir> --duckdb <file> --release-id <id>
+              MCPummelchenModServer add-mod --project-root <repo> --server-dir <dir> --release-root <dir> --public-downloads <dir> --duckdb <file> --url <curseforge-or-modrinth-url> --release-id <id> [--local-artifact <jar>] [--install-scope auto|server|client|both] [--activate true] [--dry-run false] [--server-test-command <shell>] [--build-dmg-command <shell>] [--restart-command <shell>] [--health-command <shell>]
               MCPummelchenModServer mod-update-scan --project-root <repo> --duckdb <file> [--minecraft-version 26.1.2] [--loader neoforge] [--seed-from-tested-updates true] [--limit <n>] [--max-urls-per-window 5] [--window-seconds 10] [--dry-run true]
               MCPummelchenModServer world-reset --project-root <repo> --server-dir <dir> --duckdb <file> --seed <seed> [--dry-run true] [--yes true] [--radius-blocks 1000] [--delete-backup-after-success true] [--stop-command <shell>] [--start-command <shell>] [--gamerule-command <shell>] [--pregenerate-command <shell>] [--verify-forceloads-command <shell>] [--rcon-host 127.0.0.1] [--rcon-port 25575] [--rcon-password <secret>] [--pregeneration-batch-size 384]
               MCPummelchenModServer rcon-command --project-root <repo> --server-dir <dir> --command <minecraft command> [--rcon-host 127.0.0.1] [--rcon-port 25575] [--rcon-password <secret>]
@@ -333,6 +334,19 @@ func run(arguments: [String]) throws {
         let pipeline = try releasePipeline(args: args, projectRoot: projectRoot)
         try pipeline.validateRelease()
         print("swift_release_valid=\(try args.require("--release-id"))")
+    case "add-mod":
+        let pipeline = try addModPipeline(args: args, projectRoot: projectRoot)
+        let result = try pipeline.run()
+        print("mod_add_release_id=\(result.releaseID)")
+        print("mod_add_dry_run=\(result.dryRun)")
+        print("mod_add_release_created=\(result.releaseCreated)")
+        print("mod_add_release_activated=\(result.releaseActivated)")
+        for artifact in result.artifacts {
+            print("mod_add_artifact=\(artifact.fileName) provider=\(artifact.provider) side=\(artifact.side) server=\(artifact.copiedToServer) client=\(artifact.copiedToClient) sha256=\(artifact.sha256)")
+        }
+        for step in result.steps {
+            print("mod_add_step=\(step)")
+        }
     case "mod-update-scan":
         let scanner = try modUpdateScanner(args: args, projectRoot: projectRoot)
         let summary = try scanner.run()
@@ -428,6 +442,34 @@ private func releasePipeline(args: Arguments, projectRoot: URL) throws -> SwiftR
         healthCommand: args.options["--health-command"]
     )
     return SwiftReleasePipeline(config: config)
+}
+
+private func addModPipeline(args: Arguments, projectRoot: URL) throws -> ModAddPipeline {
+    let serverDir = URL(fileURLWithPath: try args.require("--server-dir"), isDirectory: true).standardizedFileURL
+    let releaseRoot = URL(fileURLWithPath: try args.require("--release-root"), isDirectory: true).standardizedFileURL
+    let publicDownloads = URL(fileURLWithPath: try args.require("--public-downloads"), isDirectory: true).standardizedFileURL
+    let duckDB = URL(fileURLWithPath: try args.require("--duckdb")).standardizedFileURL
+    let localArtifact = args.options["--local-artifact"].map { URL(fileURLWithPath: $0).standardizedFileURL }
+    return ModAddPipeline(config: ModAddPipelineConfig(
+        projectRoot: projectRoot,
+        serverDir: serverDir,
+        releaseRoot: releaseRoot,
+        publicDownloads: publicDownloads,
+        databaseURL: duckDB,
+        sourceURL: try args.require("--url"),
+        localArtifact: localArtifact,
+        releaseID: try args.require("--release-id"),
+        minecraftVersion: args.options["--minecraft-version"] ?? "26.1.2",
+        loader: args.options["--loader"] ?? "neoforge",
+        loaderVersion: args.options["--loader-version"] ?? "26.1.2.76",
+        installScope: args.options["--install-scope"] ?? "auto",
+        activate: args.options["--activate"] == "true",
+        dryRun: args.options["--dry-run"] != "false",
+        buildDMGCommand: args.options["--build-dmg-command"],
+        serverTestCommand: args.options["--server-test-command"],
+        restartCommand: args.options["--restart-command"],
+        healthCommand: args.options["--health-command"]
+    ))
 }
 
 private func modUpdateScanner(args: Arguments, projectRoot: URL) throws -> ModUpdateScanner {
