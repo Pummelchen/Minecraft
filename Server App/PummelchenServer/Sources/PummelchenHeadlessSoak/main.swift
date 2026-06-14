@@ -114,7 +114,7 @@ struct HeadlessSoakConfig {
             ?? defaultWork
         let report = arguments.options["--report"]
             .map { URL(fileURLWithPath: $0).standardizedFileURL }
-            ?? dmg.deletingLastPathComponent().appendingPathComponent("Pummelchen-Client-Installer.dmg.headless-live-soak.json")
+            ?? dmg.deletingLastPathComponent().appendingPathComponent("MCPummelchenModClient.dmg.headless-live-soak.json")
         self.dmg = dmg
         self.releaseID = releaseID
         self.serverAddress = serverAddress
@@ -397,11 +397,11 @@ struct HeadlessSoakRunner {
     }
 
     private func installApp(from mountPoint: URL) throws -> URL {
-        let app = mountPoint.appendingPathComponent("Pummelchen Client.app", isDirectory: true)
+        let app = mountPoint.appendingPathComponent("MCPummelchenModClient.app", isDirectory: true)
         guard fileManager.fileExists(atPath: app.path) else {
             throw HeadlessSoakError.missingPath(app.path)
         }
-        let target = config.workDir.appendingPathComponent("Pummelchen Client.app", isDirectory: true)
+        let target = config.workDir.appendingPathComponent("MCPummelchenModClient.app", isDirectory: true)
         if fileManager.fileExists(atPath: target.path) {
             try fileManager.removeItem(at: target)
         }

@@ -373,12 +373,12 @@ final class LiveStatsProvider: @unchecked Sendable {
 
     private func macInstallerDMGURL(release: CurrentRelease?) -> String {
         if let release {
-            let releasePath = "/downloads/releases/\(release.releaseID)/Pummelchen-Client-Installer.dmg"
+            let releasePath = "/downloads/releases/\(release.releaseID)/MCPummelchenModClient.dmg"
             if let releaseURL = urlForPublicPath(releasePath), FileManager.default.fileExists(atPath: releaseURL.path) {
                 return releasePath
             }
         }
-        let rootPath = "/downloads/Pummelchen-Client-Installer.dmg"
+        let rootPath = "/downloads/MCPummelchenModClient.dmg"
         if let rootURL = urlForPublicPath(rootPath), FileManager.default.fileExists(atPath: rootURL.path) {
             return rootPath
         }

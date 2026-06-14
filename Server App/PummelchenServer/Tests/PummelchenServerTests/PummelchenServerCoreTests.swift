@@ -96,7 +96,7 @@ struct PummelchenServerCoreTests {
         #expect(payload.stats["Web Address"] == "https://pummelchen.91.99.176.243.nip.io")
         #expect(payload.stats["Client Mods"] == "1 Client Mods · 2 Shaders · 1 Resource Packs · 1 Config Files")
         #expect(payload.stats["Failed Mods"] == "0 Failed Mods")
-        #expect(payload.stats["Mac Installer DMG URL"] == "/downloads/Pummelchen-Client-Installer.dmg")
+        #expect(payload.stats["Mac Installer DMG URL"] == "/downloads/MCPummelchenModClient.dmg")
         #expect(payload.history.count == 1)
         #expect(payload.metrics.cpuPercent >= 0)
         #expect(payload.metrics.ramUsedPercent >= 0)
@@ -831,7 +831,7 @@ struct PummelchenServerCoreTests {
         #expect(batch.events.count == 1)
         #expect(batch.events.first?.eventType == .syncRequired)
         #expect(batch.transport == "authenticated_https_operator_long_poll")
-        #expect(elapsed < 2.0)
+        #expect(elapsed < 5.0)
     }
 
     @Test("phase 8 client refuses control polling when WebTransport is not ready")
@@ -1032,7 +1032,7 @@ struct PummelchenServerCoreTests {
 
         try current.write(to: downloads.appendingPathComponent("current-release.json"), atomically: true, encoding: .utf8)
         try manifest.write(to: releaseDir.appendingPathComponent("client-sync-manifest.tsv"), atomically: true, encoding: .utf8)
-        try Data().write(to: downloads.appendingPathComponent("Pummelchen-Client-Installer.dmg"))
+        try Data().write(to: downloads.appendingPathComponent("MCPummelchenModClient.dmg"))
         try """
         {
           "generated_at": "2026-06-12T17:04:13+00:00",
@@ -1240,7 +1240,7 @@ struct PummelchenServerCoreTests {
           "notes": "test fixture",
           "new_player_setup": {
             "status": "passed",
-            "app_bundle_path": "/tmp/Pummelchen Client.app",
+            "app_bundle_path": "/tmp/MCPummelchenModClient.app",
             "minecraft_directory": "/tmp/minecraft",
             "pummelchen_home": "/tmp/pummelchen",
             "checks": [

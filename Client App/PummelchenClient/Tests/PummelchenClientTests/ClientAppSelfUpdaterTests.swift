@@ -20,7 +20,7 @@ struct ClientAppSelfUpdaterTests {
             clientZipSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             mrpackURL: "/downloads/releases/release_20260613_V99_self_update/pack.mrpack",
             mrpackSHA256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            dmgURL: "/downloads/releases/release_20260613_V99_self_update/Pummelchen-Client-Installer.dmg",
+            dmgURL: "/downloads/releases/release_20260613_V99_self_update/MCPummelchenModClient.dmg",
             dmgSHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
             notes: "test"
         )
@@ -49,7 +49,7 @@ struct ClientAppSelfUpdaterTests {
 
     @Test("only treats executables inside Contents/MacOS as app-bundle self-update targets")
     func appBundleDetectionRequiresMacOSExecutableLocation() throws {
-        let app = URL(fileURLWithPath: "/Applications/Pummelchen Client.app", isDirectory: true)
+        let app = URL(fileURLWithPath: "/Applications/MCPummelchenModClient.app", isDirectory: true)
         let appExecutable = app.appendingPathComponent("Contents/MacOS/PummelchenClient")
         #expect(ClientAppSelfUpdater.appBundleURL(containingExecutable: appExecutable) == app)
 

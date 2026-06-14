@@ -5,13 +5,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/.build"
 DMG_DIR="$BUILD_DIR/pummelchen-dmg"
 STAGE_DIR="$DMG_DIR/stage"
-APP_NAME="Pummelchen Client.app"
+APP_NAME="MCPummelchenModClient.app"
 APP_DIR="$STAGE_DIR/$APP_NAME"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
-DMG_NAME="Pummelchen-Client-Installer.dmg"
+DMG_NAME="MCPummelchenModClient.dmg"
 DMG_PATH="$DMG_DIR/$DMG_NAME"
 VERSION="${PUMMELCHEN_CLIENT_VERSION:-0.8.0}"
 APP_RELEASE_ID="${PUMMELCHEN_RELEASE_ID:-development}"
@@ -71,7 +71,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleDisplayName</key>
-    <string>Pummelchen Client</string>
+    <string>MCPummelchenModClient</string>
     <key>CFBundleExecutable</key>
     <string>PummelchenClient</string>
     <key>CFBundleIdentifier</key>
@@ -79,7 +79,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleName</key>
-    <string>Pummelchen Client</string>
+    <string>MCPummelchenModClient</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -102,7 +102,7 @@ codesign --force --deep --sign - "$APP_DIR"
 codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 
 hdiutil create \
-    -volname "Pummelchen Client" \
+    -volname "MCPummelchenModClient" \
     -srcfolder "$STAGE_DIR" \
     -ov \
     -format UDZO \

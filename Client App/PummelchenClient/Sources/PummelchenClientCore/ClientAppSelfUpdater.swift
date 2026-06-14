@@ -93,7 +93,7 @@ public enum ClientAppSelfUpdater {
             .appendingPathComponent("tmp", isDirectory: true)
             .appendingPathComponent("self-update-\(release.releaseID)-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-        let localDMG = work.appendingPathComponent("Pummelchen-Client-Installer.dmg")
+        let localDMG = work.appendingPathComponent("MCPummelchenModClient.dmg")
         let downloaded = try await http.download(from: absoluteURL(dmgURL, serverURL: serverURL))
         try? FileManager.default.removeItem(at: localDMG)
         try FileManager.default.moveItem(at: downloaded, to: localDMG)

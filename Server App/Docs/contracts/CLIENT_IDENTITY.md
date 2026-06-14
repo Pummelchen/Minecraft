@@ -1,4 +1,4 @@
-# Pummelchen Client Identity Contract
+# MCPummelchenModClient Identity Contract
 
 This contract freezes the client identity/token model for the Swift/DuckDB production system.
 

@@ -135,7 +135,7 @@ struct PummelchenStatusView: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Pummelchen Client")
+                    Text("MCPummelchenModClient")
                         .font(.title.bold())
                     Text("Read-only sync status")
                         .foregroundStyle(.secondary)
@@ -370,7 +370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "Pummelchen Client"
+        window.title = "MCPummelchenModClient"
         window.center()
         window.contentView = NSHostingView(rootView: view)
         window.makeKeyAndOrderFront(nil)

@@ -51,7 +51,7 @@ Current DMG contents must remain functionally available:
 - default configs
 - Pummelchen server entry setup
 
-The DMG installs `PummelchenClient.app` and keeps CLI repair functionality inside the app bundle.
+The DMG installs `MCPummelchenModClient.app` and keeps CLI repair functionality inside the app bundle.
 
 The app bundle `Info.plist` must include `PummelchenReleaseID` set to the release being built. The sync engine compares this value to the server release. If the server advertises matching DMG metadata and the installed app is older or missing the release marker, the client downloads the DMG, verifies SHA256, mounts it read-only, validates the app bundle/signature/helper/embedded DuckDB dylib, stages the replacement, exits, installs the new app bundle, and opens the app again.
 
@@ -98,7 +98,7 @@ Activation publishes static files through nginx and writes `/downloads/current-r
 - `dmg_url`
 - `dmg_sha256`
 
-The DMG URL must stay inside `/downloads/releases/<release-id>/` and the SHA256 must match the exact published `Pummelchen-Client-Installer.dmg`. Clients use this metadata to stage a verified app update, replace `PummelchenClient.app`, and relaunch automatically when the installed app bundle `PummelchenReleaseID` differs from the server `release_id`.
+The DMG URL must stay inside `/downloads/releases/<release-id>/` and the SHA256 must match the exact published `MCPummelchenModClient.dmg`. Clients use this metadata to stage a verified app update, replace `MCPummelchenModClient.app`, and relaunch automatically when the installed app bundle `PummelchenReleaseID` differs from the server `release_id`.
 
 ## Manifest Format
 
@@ -142,12 +142,12 @@ Release health must verify:
 
 ## DMG New-Player Acceptance And Live Soak Gate
 
-Every new `Pummelchen-Client-Installer.dmg` must be tested before release activation by installing from that exact DMG into an isolated fresh-player environment, repairing/installing the managed Java runtime, installing NeoForge, syncing the full client pack, applying client defaults, validating the local client DuckDB, adding the Pummelchen server entry exactly once, logging into the live Pummelchen Minecraft server, and staying connected for at least 5 minutes.
+Every new `MCPummelchenModClient.dmg` must be tested before release activation by installing from that exact DMG into an isolated fresh-player environment, repairing/installing the managed Java runtime, installing NeoForge, syncing the full client pack, applying client defaults, validating the local client DuckDB, adding the Pummelchen server entry exactly once, logging into the live Pummelchen Minecraft server, and staying connected for at least 5 minutes.
 
 The Swift runner that produces this proof is:
 
 ```text
-pummelchen-headless-soak --dmg <Pummelchen-Client-Installer.dmg> --release-id <release_id> --server-address 91.99.176.243:25565
+pummelchen-headless-soak --dmg <MCPummelchenModClient.dmg> --release-id <release_id> --server-address 91.99.176.243:25565
 ```
 
 The runner mounts the DMG, copies the macOS app into an isolated work directory, validates the app bundle/signature/helper binary/embedded DuckDB dylib, runs the bundled `pummelchen-client-sync` helper, verifies managed Java and NeoForge, verifies every manifest file by size and SHA-256, checks all managed client defaults with the same inspector used by the GUI, prepares HeadlessMC plus HMC-Specifics, launches NeoForge with `--quickPlayMultiplayer`, scans the isolated logs/crash reports, and writes the release-gate report beside the DMG. The built-in runner defaults to `--suppress-gui true`: it does not send HeadlessMC GUI display commands and requests a small 320x240 window if a renderer fallback still appears. Use `--suppress-gui false` only when visual debugging is required. `--headless-command` remains available only as an override. The default HeadlessMC home is `~/Library/Application Support/Pummelchen/headlessmc` so the Minecraft account login can persist while every soak still uses a fresh isolated Minecraft game directory.
@@ -161,7 +161,7 @@ The macOS DMG builder can invoke this automatically when these environment varia
 The release pipeline hard-requires this proof file next to the DMG:
 
 ```text
-Pummelchen-Client-Installer.dmg.headless-live-soak.json
+MCPummelchenModClient.dmg.headless-live-soak.json
 ```
 
 The report must prove:

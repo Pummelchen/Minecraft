@@ -90,8 +90,8 @@ public struct SwiftReleaseResult: Equatable, Sendable {
 public struct SwiftReleasePipeline: Sendable {
     public static let clientZipName = "minecraft_26.1.2_client_macos_apple_silicon.zip"
     public static let mrpackName = "pummelchen-server-26.1.2.mrpack"
-    public static let dmgName = "Pummelchen-Client-Installer.dmg"
-    public static let dmgHeadlessLiveSoakReportName = "Pummelchen-Client-Installer.dmg.headless-live-soak.json"
+    public static let dmgName = "MCPummelchenModClient.dmg"
+    public static let dmgHeadlessLiveSoakReportName = "MCPummelchenModClient.dmg.headless-live-soak.json"
     public static let requiredDMGLiveSoakSeconds: Double = 300
 
     public let config: SwiftReleasePipelineConfig
