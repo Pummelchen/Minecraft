@@ -26,7 +26,11 @@ public struct ClientControlWatcher: Sendable {
         self.errorDelayNanoseconds = errorDelayNanoseconds
     }
 
-    public func run(maxCycles: Int? = nil, log: (@Sendable (String) -> Void)? = nil) async throws -> ClientControlWatcherResult {
+    public func run(
+        maxCycles: Int? = nil,
+        afterEventID initialAfterEventID: String? = nil,
+        log: (@Sendable (String) -> Void)? = nil
+    ) async throws -> ClientControlWatcherResult {
         guard let token = syncConfiguration.clientAPIToken, !token.isEmpty else {
             throw ContractValidationError.invalid("client API token is required for the control channel")
         }
@@ -42,7 +46,7 @@ public struct ClientControlWatcher: Sendable {
         var cycles = 0
         var handled = 0
         var syncs = 0
-        var afterEventID: String?
+        var afterEventID = initialAfterEventID
 
         while !Task.isCancelled {
             if let maxCycles, cycles >= maxCycles {

@@ -33,6 +33,12 @@ run_webtransport_live_test() {
     require_client_token_resource
 
     local client_id="dmg-webtransport-$(date -u +%Y%m%d%H%M%S)-$$"
+    local token_header=(-H "Authorization: Bearer $CLIENT_API_TOKEN" -H "X-Pummelchen-Client-ID: $client_id")
+    local before_json="$BUILD_DIR/webtransport-live-before.json"
+    local after_event_id=""
+    curl -sk --max-time 15 "${token_header[@]}" \
+        "$SERVER_URL/api/v1/control/events?client_id=$client_id&limit=1" > "$before_json"
+    after_event_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("next_after_event_id") or "")' "$before_json")"
     local event_json
     event_json="$(CLIENT_ID="$client_id" python3 - <<'PY'
 import json
@@ -64,7 +70,8 @@ PY
     local work="$BUILD_DIR/webtransport-live-test"
     rm -rf "$work"
     mkdir -p "$work"
-    "$MACOS_DIR/pummelchen-client-sync" watch \
+    local watch_args=(
+        watch
         --server-url "$SERVER_URL" \
         --minecraft-dir "$work/minecraft" \
         --pummelchen-home "$work/home" \
@@ -73,7 +80,12 @@ PY
         --max-cycles 1 \
         --allow-while-running \
         --no-report \
-        --skip-java-repair > "$BUILD_DIR/webtransport-live-test.log"
+        --skip-java-repair
+    )
+    if [[ -n "$after_event_id" ]]; then
+        watch_args+=(--after-event-id "$after_event_id")
+    fi
+    "$MACOS_DIR/pummelchen-client-sync" "${watch_args[@]}" > "$BUILD_DIR/webtransport-live-test.log"
 
     if ! grep -q "Events handled: 1" "$BUILD_DIR/webtransport-live-test.log"; then
         echo "DMG validation failed: WebTransport probe event was not fetched" >&2
@@ -85,10 +97,14 @@ PY
     fi
 
     local pending
+    local pending_url="$SERVER_URL/api/v1/control/events?client_id=$client_id&limit=5"
+    if [[ -n "$after_event_id" ]]; then
+        pending_url="$pending_url&after_event_id=$after_event_id"
+    fi
     pending="$(curl -sk --max-time 15 \
         -H "Authorization: Bearer $CLIENT_API_TOKEN" \
         -H "X-Pummelchen-Client-ID: $client_id" \
-        "$SERVER_URL/api/v1/control/events?client_id=$client_id&limit=5" \
+        "$pending_url" \
         | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("events", [])))')"
     if [[ "$pending" != "0" ]]; then
         echo "DMG validation failed: WebTransport probe ack did not clear pending event queue" >&2

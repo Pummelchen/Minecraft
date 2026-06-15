@@ -11,7 +11,7 @@ enum ClientSyncCLIError: Error, CustomStringConvertible {
             return """
             usage:
               pummelchen-client-sync sync [--force] [--server-url <url>] [--minecraft-dir <path>] [--pummelchen-home <path>] [--db <path>] [--client-id <id>] [--client-api-token <token>] [--allow-while-running] [--no-report] [--skip-java-repair]
-              pummelchen-client-sync watch [--server-url <url>] [--minecraft-dir <path>] [--pummelchen-home <path>] [--db <path>] [--client-id <id>] [--client-api-token <token>] [--max-cycles <n>] [--allow-while-running] [--no-report] [--skip-java-repair]
+              pummelchen-client-sync watch [--server-url <url>] [--minecraft-dir <path>] [--pummelchen-home <path>] [--db <path>] [--client-id <id>] [--client-api-token <token>] [--max-cycles <n>] [--after-event-id <id>] [--allow-while-running] [--no-report] [--skip-java-repair]
             """
         case .missingValue(let option):
             return "missing value for \(option)"
@@ -85,7 +85,10 @@ struct MCPummelchenModClientSyncMain {
                 print("Pummelchen Swift Control Watcher")
                 print("Server: \(configuration.serverURL.absoluteString)")
                 let maxCycles = args.options["--max-cycles"].flatMap(Int.init)
-                let result = try await ClientControlWatcher(syncConfiguration: configuration).run(maxCycles: maxCycles) { message in
+                let result = try await ClientControlWatcher(syncConfiguration: configuration).run(
+                    maxCycles: maxCycles,
+                    afterEventID: args.options["--after-event-id"]
+                ) { message in
                     print(message)
                 }
                 print("Cycles: \(result.cycles)")
