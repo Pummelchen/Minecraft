@@ -1,4 +1,4 @@
-# MinecraftAI
+# Minecraft
 
 [![Stars](https://img.shields.io/github/stars/Pummelchen/Minecraft?style=flat-square&logo=github&label=Stars&color=e3b341)](https://github.com/Pummelchen/Minecraft/stargazers)
 [![Profile Visitors](https://komarev.com/ghpvc/?username=Pummelchen&label=Profile%20Visitors&color=blueviolet&style=flat-square)](https://github.com/Pummelchen)
@@ -45,7 +45,7 @@ All three servers run continuously on 25565–25567. Conflict tests are addition
 
 ### One engine, not one per version
 
-v1 ran three Swift services on three loopback ports, one per Minecraft version — three systemd units, three Caddy route blocks, three copies of every fix, and nowhere to put logic spanning versions. The engine instead holds every version in one process, so **adding a Minecraft version creates no service and changes no Caddy configuration.** See [Adding a Version](https://github.com/Pummelchen/MinecraftAI/wiki/Adding-a-Version).
+v1 ran three Swift services on three loopback ports, one per Minecraft version — three systemd units, three Caddy route blocks, three copies of every fix, and nowhere to put logic spanning versions. The engine instead holds every version in one process, so **adding a Minecraft version creates no service and changes no Caddy configuration.** See [Adding a Version](https://github.com/Pummelchen/Minecraft/wiki/Adding-a-Version).
 
 ## The edge
 
@@ -69,24 +69,24 @@ caddy/scripts/test-edge.sh
 
 **[`PLAN.md`](PLAN.md)** is the build plan: phases, deliverables, exit criteria and prerequisites. It is updated in the same commit that completes each phase.
 
-The reasoning behind the design lives in the [wiki](https://github.com/Pummelchen/MinecraftAI/wiki):
+The reasoning behind the design lives in the [wiki](https://github.com/Pummelchen/Minecraft/wiki):
 
-- [Architecture](https://github.com/Pummelchen/MinecraftAI/wiki/Architecture) — shape, components, filesystem layout
-- [Engine](https://github.com/Pummelchen/MinecraftAI/wiki/Engine) — the Swift process, dependencies, command surface, API
-- [Adding a Version](https://github.com/Pummelchen/MinecraftAI/wiki/Adding-a-Version) — how a new Minecraft version arrives
-- [Modset Model](https://github.com/Pummelchen/MinecraftAI/wiki/Modset-Model) — digests, the content store, the conflict graph, configs
-- [Change Safety](https://github.com/Pummelchen/MinecraftAI/wiki/Change-Safety) — plan and apply, destructive removals, world protection
-- [Supply Chain](https://github.com/Pummelchen/MinecraftAI/wiki/Supply-Chain) — pinning, re-verification, archival, and where trust rests
-- [Client Parity](https://github.com/Pummelchen/MinecraftAI/wiki/Client-Parity) — generating modpacks instead of maintaining a client
-- [State Database](https://github.com/Pummelchen/MinecraftAI/wiki/State-Database) — SQLite in WAL mode: configuration, contents, backup
-- [Conflict Testing](https://github.com/Pummelchen/MinecraftAI/wiki/Conflict-Testing) — detection tiers and the session lifecycle
-- [Bisection](https://github.com/Pummelchen/MinecraftAI/wiki/Bisection) — fault localization and its cost model
-- [Sheet Contract](https://github.com/Pummelchen/MinecraftAI/wiki/Sheet-Contract) — column ownership rules
-- [Edge and TLS](https://github.com/Pummelchen/MinecraftAI/wiki/Edge-and-TLS) — Caddy, HTTP/3, and the certificate problem
-- [Website](https://github.com/Pummelchen/MinecraftAI/wiki/Website) — pages, API, and what latency can honestly be measured
-- [Deployment and Rollback](https://github.com/Pummelchen/MinecraftAI/wiki/Deployment-and-Rollback) — the live gate
-- [Build Order](https://github.com/Pummelchen/MinecraftAI/wiki/Build-Order) — why the phases run in this order, and what never to build
-- [Open Decisions](https://github.com/Pummelchen/MinecraftAI/wiki/Open-Decisions) — what is still undecided
+- [Architecture](https://github.com/Pummelchen/Minecraft/wiki/Architecture) — shape, components, filesystem layout
+- [Engine](https://github.com/Pummelchen/Minecraft/wiki/Engine) — the Swift process, dependencies, command surface, API
+- [Adding a Version](https://github.com/Pummelchen/Minecraft/wiki/Adding-a-Version) — how a new Minecraft version arrives
+- [Modset Model](https://github.com/Pummelchen/Minecraft/wiki/Modset-Model) — digests, the content store, the conflict graph, configs
+- [Change Safety](https://github.com/Pummelchen/Minecraft/wiki/Change-Safety) — plan and apply, destructive removals, world protection
+- [Supply Chain](https://github.com/Pummelchen/Minecraft/wiki/Supply-Chain) — pinning, re-verification, archival, and where trust rests
+- [Client Parity](https://github.com/Pummelchen/Minecraft/wiki/Client-Parity) — generating modpacks instead of maintaining a client
+- [State Database](https://github.com/Pummelchen/Minecraft/wiki/State-Database) — SQLite in WAL mode: configuration, contents, backup
+- [Conflict Testing](https://github.com/Pummelchen/Minecraft/wiki/Conflict-Testing) — detection tiers and the session lifecycle
+- [Bisection](https://github.com/Pummelchen/Minecraft/wiki/Bisection) — fault localization and its cost model
+- [Sheet Contract](https://github.com/Pummelchen/Minecraft/wiki/Sheet-Contract) — column ownership rules
+- [Edge and TLS](https://github.com/Pummelchen/Minecraft/wiki/Edge-and-TLS) — Caddy, HTTP/3, and the certificate problem
+- [Website](https://github.com/Pummelchen/Minecraft/wiki/Website) — pages, API, and what latency can honestly be measured
+- [Deployment and Rollback](https://github.com/Pummelchen/Minecraft/wiki/Deployment-and-Rollback) — the live gate
+- [Build Order](https://github.com/Pummelchen/Minecraft/wiki/Build-Order) — why the phases run in this order, and what never to build
+- [Open Decisions](https://github.com/Pummelchen/Minecraft/wiki/Open-Decisions) — what is still undecided
 
 ## The retired v1 system
 
@@ -96,4 +96,4 @@ The previous implementation — three Swift packages, DuckDB, Caddy, per-version
 git checkout v1-retired
 ```
 
-Also available as the branch `archive/v1`. Its production contracts are worth reading as prior art on release immutability, manifest verification and world-reset safety. Its architecture is deliberately not carried forward. See [v1 Archive](https://github.com/Pummelchen/MinecraftAI/wiki/v1-Archive).
+Also available as the branch `archive/v1`. Its production contracts are worth reading as prior art on release immutability, manifest verification and world-reset safety. Its architecture is deliberately not carried forward. See [v1 Archive](https://github.com/Pummelchen/Minecraft/wiki/v1-Archive).
