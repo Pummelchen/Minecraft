@@ -97,3 +97,7 @@ git checkout v1-retired
 ```
 
 Also available as the branch `archive/v1`. Its production contracts are worth reading as prior art on release immutability, manifest verification and world-reset safety. Its architecture is deliberately not carried forward. See [v1 Archive](https://github.com/Pummelchen/Minecraft/wiki/v1-Archive).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
