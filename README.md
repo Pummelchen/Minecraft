@@ -101,3 +101,7 @@ Also available as the branch `archive/v1`. Its production contracts are worth re
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Contact
+
+Questions, bug reports and suggestions are always welcome. You can contact André Borchert by email at [0xa0b1@gmail.com](mailto:0xa0b1@gmail.com).
