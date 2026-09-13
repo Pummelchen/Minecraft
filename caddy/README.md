@@ -14,7 +14,7 @@ project's deploy overwrote the others'. A routing entry is not something a
 deploy rewrites, so that failure cannot recur.
 
 ```
-                        minecraft.*.nip.io ──▶ 127.0.0.1:8801  minecraftai-caddy
+                        minecraft.*.nip.io ──▶ 127.0.0.1:8801  minecraft-caddy
 :80 :443  master Caddy ─┬ roomcad.*.nip.io ──▶ 127.0.0.1:8443  roomcad-caddy (https)
  TLS + h3               ├─── xaios.*.nip.io ──▶ 127.0.0.1:8090  xaios-caddy
                         └─ <next>.*.nip.io  ──▶ 127.0.0.1:88xx  <next>'s own server
@@ -43,7 +43,7 @@ one. That happened within a day of the edge going live: RoomCAD moved its server
 to loopback and added an SSE flush setting, and the copy here went stale
 immediately.
 
-What this repository ships is the master config, MinecraftAI's own entry, and
+What this repository ships is the master config, Minecraft's own entry, and
 the XAIOS updater's — the last only because that project has no repository yet,
 and it should move.
 
@@ -115,12 +115,12 @@ that match any host hide the bug.
 own standard order, not the order written. A `respond` guarding sensitive paths
 placed next to `handle` runs *after* `file_server` and serves the files it was
 meant to block — silently, with a 200. `scripts/test-edge.sh` catches this; it
-found exactly that bug in the first draft of `minecraftai.caddy`.
+found exactly that bug in the first draft of `minecraft.caddy`.
 
 ## Does a project need its own Caddy?
 
 Usually not. A fragment can serve static files and proxy an app directly, which
-is what `projects/minecraftai.caddy` does — the mod site is static files plus
+is what `projects/minecraft.caddy` does — the mod site is static files plus
 one API route, and a second Caddy would add a process and a hop for nothing.
 
 A dedicated instance earns its place when a project needs its own cache and

@@ -53,7 +53,7 @@ A **master Caddy** owns ports 80 and 443 for the whole VPS, terminates TLS and H
 
 | Hostname | Project |
 |---|---|
-| [`minecraft.91.99.176.243.nip.io`](https://minecraft.91.99.176.243.nip.io) | this one — `/var/minecraftai` |
+| [`minecraft.91.99.176.243.nip.io`](https://minecraft.91.99.176.243.nip.io) | this one — `/var/minecraft` |
 | [`roomcad.91.99.176.243.nip.io`](https://roomcad.91.99.176.243.nip.io) | `/var/roomcad` |
 | [`xaios.91.99.176.243.nip.io`](https://xaios.91.99.176.243.nip.io) | `/var/xaios_updater` |
 

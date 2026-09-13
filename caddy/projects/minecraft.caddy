@@ -1,8 +1,8 @@
-# MinecraftAI — https://minecraft.91.99.176.243.nip.io
-# Own web server: /var/minecraftai/caddy, minecraftai-caddy.service
+# Minecraft — https://minecraft.91.99.176.243.nip.io
+# Own web server: /var/minecraft/caddy, minecraft-caddy.service
 
-{$MINECRAFTAI_SITE_ADDRESS:minecraft.91.99.176.243.nip.io} {
-	reverse_proxy {$MINECRAFTAI_UPSTREAM:127.0.0.1:8801} {
+{$MINECRAFT_SITE_ADDRESS:minecraft.91.99.176.243.nip.io} {
+	reverse_proxy {$MINECRAFT_UPSTREAM:127.0.0.1:8801} {
 		# Preserve the client's Host. Caddy sends the dial address as Host to an
 		# HTTPS upstream otherwise, so a project whose own config matches a
 		# specific hostname sees "127.0.0.1:<port>", matches nothing, and returns

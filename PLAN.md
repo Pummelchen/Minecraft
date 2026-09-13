@@ -1,8 +1,8 @@
 # Implementation Plan
 
-The build plan for the MinecraftAI mod engine: what gets built, in what order, and what "done" means for each phase.
+The build plan for the Minecraft mod engine: what gets built, in what order, and what "done" means for each phase.
 
-This file is the **canonical phase list** and lives with the code on purpose. The phase that completes it updates it in the same commit. The reasoning behind each decision lives in the [wiki](https://github.com/Pummelchen/MinecraftAI/wiki); this file records what to build, in what order, and when it counts as done.
+This file is the **canonical phase list** and lives with the code on purpose. The phase that completes it updates it in the same commit. The reasoning behind each decision lives in the [wiki](https://github.com/Pummelchen/Minecraft/wiki); this file records what to build, in what order, and when it counts as done.
 
 **Status:** Phase 0 is live. Phases 1–8 are not started.
 
@@ -14,16 +14,16 @@ These are settled. Changing one means reopening the design, not editing this tab
 |---|---|
 | Language | Swift 6.3.3, strict concurrency |
 | Process model | One engine process for every Minecraft version and the website API |
-| State | Local SQLite in WAL mode via GRDB — see [State Database](https://github.com/Pummelchen/MinecraftAI/wiki/State-Database) |
+| State | Local SQLite in WAL mode via GRDB — see [State Database](https://github.com/Pummelchen/Minecraft/wiki/State-Database) |
 | Edge | Master Caddy owning 80/443 for the host, routing by hostname — **live** |
 | Addressing | Hostname-only. `https://minecraft.91.99.176.243.nip.io`. Nothing on the host answers by bare IP |
 | Input | Google Sheet, one tab per Minecraft version; the engine reads and writes it |
-| Versions | Data in a table, never code — see [Adding a Version](https://github.com/Pummelchen/MinecraftAI/wiki/Adding-a-Version) |
+| Versions | Data in a table, never code — see [Adding a Version](https://github.com/Pummelchen/Minecraft/wiki/Adding-a-Version) |
 | Resolution | Pin exact files and hashes; update only on explicit request |
 | Validation | Boot plus idle soak in a throwaway session |
 | Unit of validation | The modset digest — jars plus config overrides — never the individual mod |
 | Deploys | Every change goes through a plan. Staging applies itself; the live version waits for approval. The live role is a column |
-| Removals | Classified as potentially destructive and gated on a world-content check — see [Change Safety](https://github.com/Pummelchen/MinecraftAI/wiki/Change-Safety) |
+| Removals | Classified as potentially destructive and gated on a world-content check — see [Change Safety](https://github.com/Pummelchen/Minecraft/wiki/Change-Safety) |
 | Players | An `.mrpack` per version. No client application |
 
 ## Target layout
@@ -31,13 +31,13 @@ These are settled. Changing one means reopening the design, not editing this tab
 ```
 engine/      Swift package: EngineCore library, pummelchen-engine CLI, tests
 caddy/       master edge for the whole host (live)
-site/        MinecraftAI's own web server and web root (live, placeholder)
+site/        Minecraft's own web server and web root (live, placeholder)
 PLAN.md      this file
 ```
 
 ## Phase 0 — Edge ✅
 
-**Delivered.** Master Caddy on 80/443 with automatic certificates and HTTP/3; hostname routing to each project's own web server; MinecraftAI's site server on `127.0.0.1:8801`; security headers on every site; nginx and epmd disabled; nothing reachable by bare IP.
+**Delivered.** Master Caddy on 80/443 with automatic certificates and HTTP/3; hostname routing to each project's own web server; Minecraft's site server on `127.0.0.1:8801`; security headers on every site; nginx and epmd disabled; nothing reachable by bare IP.
 
 **Exit criteria — met:**
 - [x] `caddy/scripts/test-edge.sh` passes: routing, Host preservation, isolation
@@ -52,7 +52,7 @@ The foundation. Useful on its own: it answers "which of these 300 mods have a bu
 **Deliverables**
 - `engine/` Swift package; `pummelchen-engine` builds with `--static-swift-stdlib`
 - GRDB schema through `DatabaseMigrator`: versions, mods, resolved files, provenance
-- Content-addressed store at `/var/minecraftai/shared/store/<sha256>.jar`, materialised through hardlinks
+- Content-addressed store at `/var/minecraft/shared/store/<sha256>.jar`, materialised through hardlinks
 - Sheet reader authenticated as a Google service account (RS256 JWT); read-only in this phase
 - Modrinth resolver; CurseForge once an API key exists
 - Commands: `version list`, `version add` (row only), `sync`, `resolve`
@@ -62,7 +62,7 @@ The foundation. Useful on its own: it answers "which of these 300 mods have a bu
 - [ ] `resolve` reports, for every row of a tab, either a pinned file and SHA-256 or `unavailable` with a reason
 - [ ] Running `resolve` twice changes nothing and downloads nothing
 - [ ] A blob is written once per hash, and a corrupted blob is detected on read
-- [ ] Re-resolving an **unchanged** version whose upstream bytes have changed keeps the pinned file and raises an alert — see [Supply Chain](https://github.com/Pummelchen/MinecraftAI/wiki/Supply-Chain)
+- [ ] Re-resolving an **unchanged** version whose upstream bytes have changed keeps the pinned file and raises an alert — see [Supply Chain](https://github.com/Pummelchen/Minecraft/wiki/Supply-Chain)
 - [ ] A test fails if a Minecraft version string appears anywhere in `engine/Sources`
 
 ## Phase 2 — Static analysis, modset digest, sheet write-back
@@ -103,7 +103,7 @@ After this phase the engine is a working mod manager. Everything later is about 
 ## Phase 4 — Boot validation
 
 **Deliverables**
-- Throwaway sessions under `/var/minecraftai/test/<run-id>/`, launched with `systemd-run --scope`, resource limits and a raised `oom_score_adj`
+- Throwaway sessions under `/var/minecraft/test/<run-id>/`, launched with `systemd-run --scope`, resource limits and a raised `oom_score_adj`
 - Readiness detection on `Done (…)! For help`, followed by an idle hold
 - Failure classification: crash report, `FATAL`, mixin error, duplicate registration, mod-count mismatch, timeout
 - Verdicts stored against digests; any digest whose verdict flips is marked `flaky`

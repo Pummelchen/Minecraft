@@ -69,8 +69,8 @@ start_stub minecraft $((stub_base + 0)); s1=$!
 start_stub xaios     $((stub_base + 2)); s3=$!
 api_pid="$s1 $s3"
 
-MINECRAFTAI_SITE_ADDRESS="http://minecraft.localhost:$edge_port" \
-MINECRAFTAI_UPSTREAM="127.0.0.1:$((stub_base + 0))" \
+MINECRAFT_SITE_ADDRESS="http://minecraft.localhost:$edge_port" \
+MINECRAFT_UPSTREAM="127.0.0.1:$((stub_base + 0))" \
 XAIOS_SITE_ADDRESS="http://xaios.localhost:$edge_port" \
 XAIOS_UPSTREAM="127.0.0.1:$((stub_base + 2))" \
 CADDY_LOG_DIR="$scratch/logs" \

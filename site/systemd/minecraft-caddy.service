@@ -1,0 +1,26 @@
+[Unit]
+Description=Minecraft site web server
+Documentation=https://github.com/Pummelchen/Minecraft/wiki/Edge-and-TLS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=minecraftweb
+Group=minecraftweb
+Environment=XDG_DATA_HOME=/var/minecraft/caddy/data
+Environment=XDG_CONFIG_HOME=/var/minecraft/caddy/config
+Environment=CADDY_LOG_DIR=/var/log/caddy
+ExecStart=/usr/bin/caddy run --environ --config /var/minecraft/caddy/Caddyfile
+ExecReload=/usr/bin/caddy reload --config /var/minecraft/caddy/Caddyfile --address unix//var/minecraft/caddy/admin.sock --force
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+RestrictSUIDSGID=true
+ReadWritePaths=/var/minecraft /var/log/caddy
+
+[Install]
+WantedBy=multi-user.target

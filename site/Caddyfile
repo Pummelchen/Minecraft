@@ -1,7 +1,7 @@
-# MinecraftAI's own web server.
+# Minecraft's own web server.
 #
 # A PRIVATE Caddy instance, matching the convention every project on this host
-# follows: its own config here, its own storage under /var/minecraftai/caddy,
+# follows: its own config here, its own storage under /var/minecraft/caddy,
 # its own unix user and its own systemd unit. It shares no configuration file
 # with any other project, so no other project's deploy can touch it and this
 # project's deploy cannot touch theirs.
@@ -16,7 +16,7 @@
 
 	# Its own admin socket. Two Caddy processes cannot share the default
 	# 127.0.0.1:2019 endpoint; the second to start would fail.
-	admin unix//var/minecraftai/caddy/admin.sock
+	admin unix//var/minecraft/caddy/admin.sock
 
 	servers {
 		# This one IS behind a proxy, so the forwarded client address is
@@ -37,7 +37,7 @@
 #
 # Only the master can reach this, so accepting any Host here is safe.
 :8801 {
-	bind {$MINECRAFTAI_BIND:127.0.0.1}
+	bind {$MINECRAFT_BIND:127.0.0.1}
 
 	encode zstd gzip
 
@@ -67,7 +67,7 @@
 
 		handle /api/* {
 			header Cache-Control "no-store, max-age=0"
-			reverse_proxy {$MINECRAFTAI_API:127.0.0.1:8787} {
+			reverse_proxy {$MINECRAFT_API:127.0.0.1:8787} {
 				transport http {
 					dial_timeout 5s
 					response_header_timeout 30s
@@ -76,7 +76,7 @@
 		}
 
 		handle {
-			root * {$MINECRAFTAI_SITE_ROOT:/var/minecraftai/web}
+			root * {$MINECRAFT_SITE_ROOT:/var/minecraft/web}
 			try_files {path} {path}/ /index.html
 			file_server
 			# Revalidate every time, so a browser never keeps serving the
@@ -86,7 +86,7 @@
 	}
 
 	log {
-		output file {$CADDY_LOG_DIR:/var/log/caddy}/minecraftai-site.log {
+		output file {$CADDY_LOG_DIR:/var/log/caddy}/minecraft-site.log {
 			roll_size 20MiB
 			roll_keep 5
 		}
