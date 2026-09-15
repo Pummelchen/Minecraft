@@ -1,5 +1,15 @@
 # Minecraft
 
+<!-- agent-harnesses:begin -->
+> **One instruction file.** This is it. Codex, DeepSeek Harness, OpenCode, Qwen Code, Qoder and Zed read `AGENTS.md` directly, and
+> Claude Code reads it through the committed `CLAUDE.md`, which contains nothing
+> but `@AGENTS.md`. **Edit only this file** — do not add a second set of
+> instructions anywhere.
+>
+> Do **not** add `.rules`, `.cursorrules`, `.windsurfrules`, `.clinerules`, `.github/copilot-instructions.md` or `AGENT.md`. Zed takes the *first match* from that list, **ahead of
+> `AGENTS.md`**, so any one of them silently replaces this file for every Zed user.
+<!-- agent-harnesses:end -->
+
 A mod release and conflict-validation system for three NeoForge servers, **of which
 only the Caddy edge is built**. Design complete, implementation not started:
 `README.md` says so outright and `PLAN.md` fixes "Phase 0 is live. Phases 1–8 are
