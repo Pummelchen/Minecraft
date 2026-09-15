@@ -189,6 +189,8 @@ Leave previous releases' notes and performance tables alone.
 ## Minecraft — Shell, no release yet
 
 - **Identity** semantic version, not yet established.
-- **No compiled artifact**; the same source-archive shape as AISessionServer.
+- **No compiled artifact.** A release here would be a source archive of `caddy/`
+  plus its digest — there is nothing to build, and Part 1's macOS packaging sections
+  do not apply.
 - Nine stale code-scanning alerts point at deleted `Server App/…` paths and want
   dismissing as no-longer-present rather than fixing.
