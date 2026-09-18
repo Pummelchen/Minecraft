@@ -86,7 +86,8 @@ The reasoning behind the design lives in the [wiki](https://github.com/Pummelche
 - [Website](https://github.com/Pummelchen/Minecraft/wiki/Website) — pages, API, and what latency can honestly be measured
 - [Deployment and Rollback](https://github.com/Pummelchen/Minecraft/wiki/Deployment-and-Rollback) — the live gate
 - [Build Order](https://github.com/Pummelchen/Minecraft/wiki/Build-Order) — why the phases run in this order, and what never to build
-- [Open Decisions](https://github.com/Pummelchen/Minecraft/wiki/Open-Decisions) — what is still undecided
+- [Decision Record](https://github.com/Pummelchen/Minecraft/wiki/Decision-Record) — settled decisions
+- [Project Tracker](https://github.com/Pummelchen/Minecraft/wiki/Project-Tracker) — open work
 
 ## The retired v1 system
 
