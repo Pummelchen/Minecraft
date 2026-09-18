@@ -127,6 +127,26 @@ surface, and **nothing runs them on push**.
   migrations run from scratch in the test suite on every run. **The planner must stay
   pure** — no network, no side effects, no clock reads.
 
+## Task tracker
+
+Open work lives in exactly one place: the wiki's **[Project Tracker](https://github.com/Pummelchen/Minecraft/wiki/Project-Tracker)**.
+It is a single table under `## Tasks`, and it is the only backlog — no Open/Blocked/
+Parked sections, no second list, status is a column rather than a heading.
+
+The rules that govern the table — the columns, the four types, the three statuses, the
+S/M/L sizes, ownership, and the ordering that *is* the priority — are defined once in
+[`docs/task-table-standard.md`](docs/task-table-standard.md). Read it before adding,
+changing or closing a row.
+
+- **An epic is a project, not a row.** Split it until each row is one independently
+  closable outcome.
+- **IDs are stable and never reused.** Closing deletes the row; the gap is correct.
+- **Every row has a next step.** If you cannot name one, split it, block it or park it.
+- **History does not live in the table.** What was tried, measured or rejected goes to
+  `CHANGELOG.md` and the closing commit; the open row links to the evidence.
+- **Update a row the moment its state changes**, and read the table top to bottom
+  before starting work — the top Open row is the default next task.
+
 ## Releasing
 
 **Read [`RELEASE.md`](RELEASE.md) before cutting a release.** It is this repository's
